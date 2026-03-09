@@ -1,0 +1,9 @@
+-m32
+-ffreestanding
+-fno-pie
+-fno-stack-protector
+-std=gnu11
+-Wall
+-Wextra
+-Ikernel/include
+-Ilib/wkernel/include
