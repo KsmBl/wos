@@ -33,9 +33,11 @@ CFLAGS := -m32 -std=gnu11 -ffreestanding -O2 -g \
 ASFLAGS := -m32 -g -Ikernel/include
 LDFLAGS := -m elf_i386 -nostdlib -no-pie -z noexecstack
 
+# Assembly objects get a .asm.o suffix so that a foo.c and a foo.S in the same
+# directory cannot silently compile over each other's object file.
 KSRC_C := $(shell find kernel -name '*.c' | sort)
 KSRC_S := $(shell find kernel -name '*.S' | sort)
-KOBJ   := $(patsubst %.c,$(BUILD)/%.o,$(KSRC_C)) $(patsubst %.S,$(BUILD)/%.o,$(KSRC_S))
+KOBJ   := $(patsubst %.c,$(BUILD)/%.o,$(KSRC_C)) $(patsubst %.S,$(BUILD)/%.asm.o,$(KSRC_S))
 KDEP   := $(KOBJ:.o=.d)
 
 .PHONY: all kernel iso disk run run-nox log debug clean
@@ -48,7 +50,7 @@ $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD)/%.o: %.S
+$(BUILD)/%.asm.o: %.S
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -MMD -MP -c $< -o $@
 

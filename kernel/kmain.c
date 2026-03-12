@@ -10,6 +10,11 @@
 #include "kprintf.h"
 #include "vga.h"
 #include "serial.h"
+#include "gdt.h"
+#include "isr.h"
+#include "pic.h"
+#include "pit.h"
+#include "keyboard.h"
 #include "io.h"
 
 extern uint8_t __kernel_start[];
@@ -70,6 +75,26 @@ static uint32_t print_memory_map(const struct multiboot_info *mbi)
     return usable;
 }
 
+/* Prove the interrupt plumbing works before anything depends on it. */
+static void selftest_interrupts(void)
+{
+    kputs("\n-- interrupt self-test --\n");
+
+    kputs("raising a breakpoint (int $3); execution should continue after it\n");
+    __asm__ volatile("int $3");
+
+    uint32_t before = pit_ticks();
+    pit_sleep(500);
+    uint32_t after = pit_ticks();
+    kprintf("timer: %u ticks in ~500 ms (expected about %u)\n",
+            after - before, PIT_HZ / 2);
+
+    if (after == before)
+        panic("timer interrupts are not arriving");
+
+    kputs("-- self-test passed --\n\n");
+}
+
 void kmain(uint32_t magic, struct multiboot_info *mbi)
 {
     serial_init();
@@ -97,8 +122,32 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     uint32_t usable = print_memory_map(mbi);
     kprintf("usable : %s\n", fmt_bytes(usable));
 
-    kputs("\nboot complete; nothing left to do yet.\n");
+    /* Descriptor tables first: nothing else can fault safely until the IDT
+     * is live, and the PIC must be remapped before interrupts are enabled. */
+    gdt_init();
+    kputs("gdt    : flat segments + TSS loaded\n");
 
-    for (;;)
-        hlt();
+    idt_init();
+    traps_init();
+    kputs("idt    : 48 vectors + syscall gate installed\n");
+
+    pic_mask_all();
+    pic_remap(IRQ_BASE, IRQ_BASE + 8);
+    kputs("pic    : IRQs remapped to vectors 32-47\n");
+
+    pit_init(PIT_HZ);
+    keyboard_init();
+    kprintf("pit    : %u Hz\nkbd    : ready\n", PIT_HZ);
+
+    sti();
+
+    selftest_interrupts();
+
+    kputs("type a line and press Enter; the kernel will echo it back.\n\n");
+    for (;;) {
+        char    buf[256];
+        size_t  n = keyboard_read(buf, sizeof(buf) - 1);
+        buf[n] = '\0';
+        kprintf("you typed: %s", buf);
+    }
 }
