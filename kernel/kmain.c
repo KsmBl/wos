@@ -15,6 +15,10 @@
 #include "pic.h"
 #include "pit.h"
 #include "keyboard.h"
+#include "pmm.h"
+#include "kheap.h"
+#include "paging.h"
+#include "selftest.h"
 #include "io.h"
 
 extern uint8_t __kernel_start[];
@@ -75,26 +79,6 @@ static uint32_t print_memory_map(const struct multiboot_info *mbi)
     return usable;
 }
 
-/* Prove the interrupt plumbing works before anything depends on it. */
-static void selftest_interrupts(void)
-{
-    kputs("\n-- interrupt self-test --\n");
-
-    kputs("raising a breakpoint (int $3); execution should continue after it\n");
-    __asm__ volatile("int $3");
-
-    uint32_t before = pit_ticks();
-    pit_sleep(500);
-    uint32_t after = pit_ticks();
-    kprintf("timer: %u ticks in ~500 ms (expected about %u)\n",
-            after - before, PIT_HZ / 2);
-
-    if (after == before)
-        panic("timer interrupts are not arriving");
-
-    kputs("-- self-test passed --\n\n");
-}
-
 void kmain(uint32_t magic, struct multiboot_info *mbi)
 {
     serial_init();
@@ -141,9 +125,24 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
 
     sti();
 
-    selftest_interrupts();
+    /* Memory comes up after interrupts so a fault during initialisation is
+     * reported rather than silently rebooting the machine. */
+    pmm_init(mbi);
+    kprintf("pmm    : %s usable in %u frames\n",
+            fmt_bytes(pmm_total_bytes()), pmm_total_bytes() / PAGE_SIZE);
 
-    kputs("type a line and press Enter; the kernel will echo it back.\n\n");
+    kheap_init(pmm_heap_base(), KHEAP_SIZE);
+    kprintf("kheap  : %s arena at %p\n",
+            fmt_bytes(KHEAP_SIZE), (void *)pmm_heap_base());
+
+    paging_init();
+    kprintf("paging : enabled, low %s identity mapped\n",
+            fmt_bytes(LOW_MEMORY_LIMIT));
+
+    selftest_interrupts();
+    selftest_memory();
+
+    kputs("\ntype a line and press Enter; the kernel will echo it back.\n\n");
     for (;;) {
         char    buf[256];
         size_t  n = keyboard_read(buf, sizeof(buf) - 1);
