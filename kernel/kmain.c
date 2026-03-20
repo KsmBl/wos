@@ -18,6 +18,8 @@
 #include "pmm.h"
 #include "kheap.h"
 #include "paging.h"
+#include "ata.h"
+#include "wfs_kernel.h"
 #include "selftest.h"
 #include "io.h"
 
@@ -139,8 +141,24 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     kprintf("paging : enabled, low %s identity mapped\n",
             fmt_bytes(LOW_MEMORY_LIMIT));
 
+    if (ata_init()) {
+        uint32_t sectors = ata_sector_count();
+        kprintf("ata    : primary master, %u sectors (%s)\n",
+                sectors, fmt_bytes(sectors * 512u));
+    } else {
+        kputs("ata    : no drive on the primary bus\n");
+    }
+
+    if (wfs_mount()) {
+        wdiskinfo_t info;
+        wfs_statfs(&info);
+        kprintf("wfs    : mounted, %s of %s free\n",
+                fmt_bytes(info.free_bytes), fmt_bytes(info.total_bytes));
+    }
+
     selftest_interrupts();
     selftest_memory();
+    selftest_filesystem();
 
     kputs("\ntype a line and press Enter; the kernel will echo it back.\n\n");
     for (;;) {

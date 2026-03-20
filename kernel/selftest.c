@@ -6,6 +6,9 @@
 #include "pmm.h"
 #include "kheap.h"
 #include "paging.h"
+#include "ata.h"
+#include "wfs_kernel.h"
+#include "string.h"
 
 static uint32_t failures;
 
@@ -178,6 +181,204 @@ void selftest_memory(void)
     if (failures)
         panic("%u memory self-test failure(s)", failures);
     kputs("-- memory self-test passed --\n");
+}
+
+/* Read /home/boots.txt, bump the number in it and write it back.  If the disk
+ * is genuinely persistent this climbs by one on every boot. */
+static void test_boot_counter(void)
+{
+    const char *path = "/home/boots.txt";
+    char        buf[32];
+    uint32_t    count = 0;
+    uint32_t    ino;
+
+    int r = wfs_lookup(path, &ino);
+    if (r == 0) {
+        int n = wfs_read(ino, 0, buf, sizeof(buf) - 1);
+        if (n > 0) {
+            buf[n] = '\0';
+            for (int i = 0; buf[i] >= '0' && buf[i] <= '9'; i++)
+                count = count * 10 + (uint32_t)(buf[i] - '0');
+        }
+    } else if (r == -W_ENOENT) {
+        r = wfs_create(path, WFS_TYPE_FILE, &ino);
+        if (r < 0) {
+            check(false, "creating the boot counter file");
+            return;
+        }
+    } else {
+        check(false, "reading the boot counter file");
+        return;
+    }
+
+    count++;
+
+    /* Render the number by hand; the kernel has no sprintf. */
+    char     text[32];
+    uint32_t len = 0;
+    char     digits[11];
+    uint32_t d = 0;
+    uint32_t v = count;
+
+    if (v == 0)
+        digits[d++] = '0';
+    while (v) {
+        digits[d++] = (char)('0' + v % 10);
+        v /= 10;
+    }
+    while (d)
+        text[len++] = digits[--d];
+    text[len++] = '\n';
+
+    r = wfs_truncate(ino);
+    if (r == 0)
+        r = wfs_write(ino, 0, text, len);
+
+    check(r == (int)len, "the boot counter file can be rewritten");
+    kprintf("  this is boot number %u since the image was built\n", count);
+}
+
+static void test_filesystem_paths(void)
+{
+    uint32_t ino;
+
+    check(wfs_lookup("/", &ino) == 0 && ino == WFS_ROOT_INO,
+          "the root directory resolves to inode 1");
+
+    int r = wfs_lookup("/home/readme.txt", &ino);
+    check(r == 0, "a nested path resolves");
+
+    if (r == 0) {
+        struct wfs_inode in;
+        check(wfs_read_inode(ino, &in) == 0 && in.type == WFS_TYPE_FILE
+                  && in.size > 0,
+              "the file's inode reports a non-zero size");
+
+        char head[16];
+        int  n = wfs_read(ino, 0, head, sizeof(head) - 1);
+        if (n > 0)
+            head[n] = '\0';
+        check(n > 0 && strncmp(head, "Welcome to WOS.", 15) == 0,
+              "reading the file returns its contents");
+
+        /* Reading from an offset must not restart at the beginning. */
+        char mid[8];
+        n = wfs_read(ino, 8, mid, 4);
+        check(n == 4 && strncmp(mid, "to W", 4) == 0,
+              "reading from an offset returns the right bytes");
+    }
+
+    check(wfs_lookup("/nope", &ino) == -W_ENOENT,
+          "a missing path reports ENOENT");
+    check(wfs_lookup("/home/readme.txt/x", &ino) == -W_ENOTDIR,
+          "walking through a file reports ENOTDIR");
+}
+
+static void test_filesystem_write(void)
+{
+    const char *path = "/home/selftest.tmp";
+    wdiskinfo_t before, after;
+    uint32_t    ino;
+
+    wfs_statfs(&before);
+
+    /* A previous boot may have left this behind. */
+    wfs_unlink(path);
+
+    int r = wfs_create(path, WFS_TYPE_FILE, &ino);
+    check(r == 0, "a new file can be created");
+    if (r < 0)
+        return;
+
+    /* Deliberately larger than one block, so this covers the multi-block
+     * path and the indirect block rather than just the easy case. */
+    const uint32_t size = 40 * 1024;
+    uint8_t *data = kmalloc(size);
+    if (!data) {
+        check(false, "allocating the write buffer");
+        return;
+    }
+    for (uint32_t i = 0; i < size; i++)
+        data[i] = (uint8_t)(i * 7 + (i >> 8));
+
+    r = wfs_write(ino, 0, data, size);
+    check(r == (int)size, "a 40 KiB write spanning many blocks succeeds");
+
+    uint8_t *back = kmalloc(size);
+    if (back) {
+        memset(back, 0, size);
+        r = wfs_read(ino, 0, back, size);
+        check(r == (int)size && memcmp(data, back, size) == 0,
+              "reading it back returns exactly what was written");
+        kfree(back);
+    }
+
+    wfs_statfs(&after);
+    check(after.free_blocks < before.free_blocks,
+          "the free block count dropped after writing");
+
+    kfree(data);
+
+    r = wfs_unlink(path);
+    check(r == 0, "the file can be deleted");
+
+    wfs_statfs(&after);
+    check(after.free_blocks == before.free_blocks,
+          "deleting it returns every block to the free list");
+}
+
+static void test_filesystem_dirs(void)
+{
+    wdirent_t ent;
+    uint32_t  ino;
+    bool      found_home = false;
+
+    if (wfs_lookup("/", &ino) != 0)
+        return;
+
+    for (uint32_t i = 0; wfs_readdir(ino, i, &ent) == 1; i++)
+        if (strcmp(ent.name, "home") == 0 && ent.type == W_FT_DIR)
+            found_home = true;
+
+    check(found_home, "readdir lists /home as a directory");
+
+    check(wfs_create("/tmpdir", WFS_TYPE_DIR, &ino) == 0,
+          "a directory can be created");
+    check(wfs_lookup("/tmpdir/.", &ino) == 0,
+          "the new directory contains a working \".\" entry");
+    check(wfs_create("/tmpdir/inner.txt", WFS_TYPE_FILE, &ino) == 0,
+          "a file can be created inside it");
+    check(wfs_unlink("/tmpdir") == -W_ENOTEMPTY,
+          "a non-empty directory refuses to be removed");
+    check(wfs_unlink("/tmpdir/inner.txt") == 0 && wfs_unlink("/tmpdir") == 0,
+          "emptying it first lets it be removed");
+}
+
+void selftest_filesystem(void)
+{
+    kputs("\n-- filesystem self-test --\n");
+    failures = 0;
+
+    if (!wfs_mounted()) {
+        kputs("  no filesystem mounted; skipping\n");
+        return;
+    }
+
+    wdiskinfo_t info;
+    wfs_statfs(&info);
+    kprintf("  disk   : %s total, %s used, %s free (%u byte blocks)\n",
+            fmt_bytes(info.total_bytes), fmt_bytes(info.used_bytes),
+            fmt_bytes(info.free_bytes), info.block_size);
+    kprintf("  inodes : %u of %u free\n", info.free_inodes, info.total_inodes);
+
+    test_filesystem_paths();
+    test_filesystem_write();
+    test_filesystem_dirs();
+    test_boot_counter();
+
+    if (failures)
+        panic("%u filesystem self-test failure(s)", failures);
+    kputs("-- filesystem self-test passed --\n");
 }
 
 void selftest_page_fault(void)
