@@ -5,6 +5,7 @@
 #include "pic.h"
 #include "io.h"
 #include "kprintf.h"
+#include "sched.h"
 
 #define KBD_DATA   0x60
 #define KBD_STATUS 0x64
@@ -80,6 +81,9 @@ static void line_commit(void)
         ring_push(line[i]);
     ring_push('\n');
     line_len = 0;
+
+    /* Anything waiting on console input can now make progress. */
+    sched_wake(WAIT_INPUT);
 }
 
 static void handle_char(char c)
@@ -172,12 +176,11 @@ size_t keyboard_read(char *buf, size_t max)
     if (max == 0)
         return 0;
 
-    /* Wait for the IRQ handler to publish something. hlt parks the CPU until
-     * the next interrupt, so this costs nothing while idle. */
-    while (!keyboard_has_data()) {
-        sti();
-        __asm__ volatile("hlt");
-    }
+    /* Sleep until the IRQ handler publishes a line.  Before the scheduler
+     * exists sched_block() falls back to halting the CPU, so this works
+     * during early boot too. */
+    while (!keyboard_has_data())
+        sched_block(WAIT_INPUT);
 
     size_t n = 0;
     while (n < max && keyboard_has_data()) {

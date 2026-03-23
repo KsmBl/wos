@@ -55,6 +55,15 @@ void interrupt_dispatch(regs_t *regs)
 {
     interrupt_handler_t handler = handlers[regs->int_no & 0xFF];
 
+    /* Acknowledge the controller *before* running the handler.  The timer
+     * handler switches threads and does not return until this thread is
+     * scheduled again; sending the EOI afterwards would leave the PIC waiting
+     * on an interrupt that never completes, and no further IRQs would arrive.
+     * Re-entry is not a concern: this is an interrupt gate, so IF stays clear
+     * until the iret. */
+    if (regs->int_no >= IRQ_BASE && regs->int_no < IRQ_BASE + 16)
+        pic_send_eoi((uint8_t)(regs->int_no - IRQ_BASE));
+
     if (handler) {
         handler(regs);
     } else if (regs->int_no < 32) {
@@ -64,9 +73,6 @@ void interrupt_dispatch(regs_t *regs)
         dump_regs(regs);
         panic("unhandled CPU exception");
     }
-    /* Unhandled hardware IRQs are ignored; the EOI below still runs so the
-     * controller does not wedge. */
-
-    if (regs->int_no >= IRQ_BASE && regs->int_no < IRQ_BASE + 16)
-        pic_send_eoi((uint8_t)(regs->int_no - IRQ_BASE));
+    /* Unhandled hardware IRQs are simply ignored; they were acknowledged
+     * above, so the controller keeps working. */
 }

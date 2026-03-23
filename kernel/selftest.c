@@ -8,6 +8,8 @@
 #include "paging.h"
 #include "ata.h"
 #include "wfs_kernel.h"
+#include "proc.h"
+#include "sched.h"
 #include "string.h"
 
 static uint32_t failures;
@@ -379,6 +381,73 @@ void selftest_filesystem(void)
     if (failures)
         panic("%u filesystem self-test failure(s)", failures);
     kputs("-- filesystem self-test passed --\n");
+}
+
+void selftest_processes(void)
+{
+    kputs("\n-- process self-test --\n");
+    failures = 0;
+
+    const char *prog = "/app/hello/launch";
+    uint32_t    ino;
+
+    if (wfs_lookup(prog, &ino) != 0) {
+        kprintf("  %s is missing; skipping\n", prog);
+        return;
+    }
+
+    uint32_t free_before = pmm_free_bytes();
+
+    /* One process, with arguments, reaped for its exit status. */
+    {
+        char *argv[] = { "hello", "first", NULL };
+        int32_t pid = proc_spawn(prog, argv, NULL);
+        check(pid > 0, "a program can be spawned into ring 3");
+
+        if (pid > 0) {
+            int32_t status = 0;
+            int32_t reaped = proc_wait(pid, &status);
+            check(reaped == pid, "waiting for it returns its pid");
+            /* hello returns its own pid as the exit status. */
+            check(status == pid, "its exit status arrives intact");
+        }
+    }
+
+    /* Two at once, both spinning, to show they are actually interleaved. */
+    {
+        char *argv[] = { "hello", "spin", NULL };
+        int32_t a = proc_spawn(prog, argv, NULL);
+        int32_t b = proc_spawn(prog, argv, NULL);
+
+        check(a > 0 && b > 0 && a != b,
+              "two processes can run at the same time");
+
+        int32_t reaped = 0;
+        for (int i = 0; i < 2; i++)
+            if (proc_wait(-1, NULL) > 0)
+                reaped++;
+        check(reaped == 2, "both are reaped");
+    }
+
+    /* A process that faults must die on its own, without taking us with it. */
+    {
+        char *argv[] = { "hello", "fault", NULL };
+        int32_t pid = proc_spawn(prog, argv, NULL);
+        int32_t status = 0;
+
+        if (pid > 0)
+            proc_wait(pid, &status);
+
+        check(pid > 0 && status == -1,
+              "a process that touches a bad address is killed, not the kernel");
+    }
+
+    check(pmm_free_bytes() == free_before,
+          "every process freed all of its memory on exit");
+
+    if (failures)
+        panic("%u process self-test failure(s)", failures);
+    kputs("-- process self-test passed --\n");
 }
 
 void selftest_page_fault(void)

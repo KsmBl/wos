@@ -5,5 +5,7 @@
 -std=gnu11
 -Wall
 -Wextra
+-DWOS_KERNEL
 -Ikernel/include
+-Iinclude
 -Ilib/wkernel/include

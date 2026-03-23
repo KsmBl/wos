@@ -17,6 +17,11 @@ void selftest_memory(void);
  * climbing, which is the proof that writes really reach the disk. */
 void selftest_filesystem(void);
 
+/* Spawns the `hello` test program in ring 3: checks argument passing, exit
+ * status, preemption between two processes, and that a faulting process is
+ * killed without taking the system down. */
+void selftest_processes(void);
+
 /* Deliberately dereference a null pointer to show the page-fault handler
  * working.  Panics by design; only call it as the last thing in a boot. */
 void selftest_page_fault(void) __attribute__((noreturn));
