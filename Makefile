@@ -29,8 +29,8 @@ CFLAGS := -m32 -std=gnu11 -ffreestanding -O2 -g \
           -fno-pie -fno-pic -fno-stack-protector -fno-builtin \
           -fno-asynchronous-unwind-tables -fno-omit-frame-pointer \
           -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
-          -Ikernel/include
-ASFLAGS := -m32 -g -Ikernel/include
+          -DWOS_KERNEL -Ikernel/include -Iinclude
+ASFLAGS := -m32 -g -Ikernel/include -Iinclude
 LDFLAGS := -m elf_i386 -nostdlib -no-pie -z noexecstack
 
 # Assembly objects get a .asm.o suffix so that a foo.c and a foo.S in the same
@@ -70,14 +70,36 @@ $(ISO): $(KERNEL) grub/grub.cfg
 	grub-mkrescue -o $@ $(ISODIR) 2>/dev/null
 	@echo "  built $@"
 
-# The disk image is rebuilt from scratch by mkwfs once stage 4 lands; until
-# then an empty file is enough to give QEMU something to attach.
+# ---------------------------------------------------------------------------
+# Disk image
+#
+# mkwfs is a host tool sharing include/wfs.h with the kernel, so the format it
+# writes and the format the kernel reads cannot drift apart.  The image is
+# built from a staging tree assembled in $(ROOTFS): everything under rootfs/
+# verbatim, plus each application installed as /app/<name>/launch with its
+# source beside it in /app/<name>/sourcecode.
+#
+# Rebuilding the image discards anything WOS wrote to it, which is what you
+# want from a build -- but it means the persistence check must reboot without
+# running make in between.
+# ---------------------------------------------------------------------------
+
+MKWFS  := $(BUILD)/mkwfs
+ROOTFS := $(BUILD)/root
+
+$(MKWFS): tools/mkwfs.c include/wfs.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) -O2 -Wall -Wextra -Iinclude -o $@ $<
+
+ROOTFS_SRC := $(shell find rootfs -type f 2>/dev/null)
+
 disk: $(DISK)
 
-$(DISK):
-	@mkdir -p $(dir $@)
-	dd if=/dev/zero of=$@ bs=1M count=$(DISK_MB) status=none
-	@echo "  built $@ ($(DISK_MB) MiB)"
+$(DISK): $(MKWFS) $(ROOTFS_SRC)
+	@rm -rf $(ROOTFS)
+	@mkdir -p $(ROOTFS)
+	@cp -r rootfs/. $(ROOTFS)/
+	$(MKWFS) $@ $(DISK_MB) $(ROOTFS)
 
 QEMU := qemu-system-i386
 QEMU_FLAGS := -m 256M \

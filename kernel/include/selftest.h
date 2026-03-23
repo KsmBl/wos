@@ -12,6 +12,11 @@
 void selftest_interrupts(void);
 void selftest_memory(void);
 
+/* Exercises the disk and filesystem, and maintains /home/boots.txt as a
+ * boot counter -- rebooting without rebuilding the image should show it
+ * climbing, which is the proof that writes really reach the disk. */
+void selftest_filesystem(void);
+
 /* Deliberately dereference a null pointer to show the page-fault handler
  * working.  Panics by design; only call it as the last thing in a boot. */
 void selftest_page_fault(void) __attribute__((noreturn));
