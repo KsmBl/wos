@@ -1,12 +1,17 @@
 /* CPU exception handlers.
  *
- * With no user processes yet, any fault is a kernel bug, so most handlers dump
- * state and panic.  The page-fault handler decodes the error code because it
- * is by far the most common thing to go wrong once paging is enabled.
+ * A fault in ring 3 is the program's problem: it is reported and that process
+ * is killed, while the rest of the system carries on.  A fault in ring 0 is a
+ * kernel bug and there is nothing sensible to continue with, so it panics.
+ *
+ * The page-fault handler decodes the error code because it is by far the most
+ * common thing to go wrong once paging is enabled.
  */
 
 #include "isr.h"
 #include "kprintf.h"
+#include "proc.h"
+#include "sched.h"
 
 /* Page-fault error code bits. */
 #define PF_PRESENT  (1 << 0)   /* 0 = page not present, 1 = protection violation */
@@ -24,6 +29,23 @@ __attribute__((weak)) bool paging_handle_fault(uint32_t addr, uint32_t err)
     return false;
 }
 
+/* Kill the current process if the fault came from ring 3; otherwise panic.
+ * `what` names the exception for the message. */
+static void fault_in_process(regs_t *regs, const char *what)
+{
+    if (!(regs->cs & 3) || !sched_active()) {
+        dump_regs(regs);
+        panic("%s in the kernel", what);
+    }
+
+    process_t *p = proc_current();
+    kprintf("[kernel] killing %s (pid %d): %s\n",
+            p->name[0] ? p->name : "process", p->pid, what);
+    dump_regs(regs);
+
+    proc_exit(-1);
+}
+
 static void page_fault_handler(regs_t *regs)
 {
     uint32_t addr;
@@ -39,8 +61,27 @@ static void page_fault_handler(regs_t *regs)
                                           : "page not present",
             (regs->err_code & PF_USER) ? 3u : 0u,
             (regs->err_code & PF_RESERVED) ? " [reserved bit set]" : "");
-    dump_regs(regs);
-    panic("page fault");
+
+    fault_in_process(regs, "page fault");
+}
+
+static void gpf_handler(regs_t *regs)
+{
+    kprintf("\ngeneral protection fault (selector %04x)\n",
+            regs->err_code & 0xFFFF);
+    fault_in_process(regs, "general protection fault");
+}
+
+static void opcode_handler(regs_t *regs)
+{
+    kprintf("\ninvalid opcode at %p\n", (void *)regs->eip);
+    fault_in_process(regs, "invalid opcode");
+}
+
+static void divide_handler(regs_t *regs)
+{
+    kprintf("\ndivide by zero at %p\n", (void *)regs->eip);
+    fault_in_process(regs, "divide by zero");
 }
 
 /* Breakpoints are informational: print and carry on. This is what makes
@@ -53,7 +94,10 @@ static void breakpoint_handler(regs_t *regs)
 
 void traps_init(void)
 {
+    register_interrupt_handler(0, divide_handler);
     register_interrupt_handler(3, breakpoint_handler);
+    register_interrupt_handler(6, opcode_handler);
+    register_interrupt_handler(13, gpf_handler);
     register_interrupt_handler(14, page_fault_handler);
     /* Every other exception falls through to the default path in
      * interrupt_dispatch(), which dumps registers and panics. */

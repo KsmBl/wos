@@ -1,0 +1,63 @@
+/* The file descriptor layer.
+ *
+ * Sits between the syscalls and WFS: it owns per-process descriptor tables,
+ * resolves relative paths against the working directory, and routes
+ * descriptors 0, 1 and 2 to the console instead of the disk.
+ */
+#ifndef WOS_VFS_H
+#define WOS_VFS_H
+
+#include "types.h"
+#include "wabi.h"
+
+#define MAX_OPEN_FILES 32
+
+typedef enum {
+    FD_NONE = 0,
+    FD_FILE,
+    FD_DIR,
+    FD_CONSOLE
+} fd_type_t;
+
+typedef struct {
+    fd_type_t type;
+    uint32_t  ino;
+    uint32_t  offset;      /* byte offset for files, entry index for dirs */
+    uint32_t  flags;       /* the W_O_* flags it was opened with          */
+} file_t;
+
+struct process;
+
+/* Give a new process the standard three console descriptors. */
+void vfs_init_fds(struct process *p);
+
+/* Release every descriptor a process holds. */
+void vfs_close_all(struct process *p);
+
+/* Turn `path` into a normalised absolute path, resolving it against the
+ * process's working directory and collapsing "." and "..".
+ * Returns 0 or a negative W_E* code. */
+int vfs_resolve(struct process *p, const char *path, char *out, size_t out_size);
+
+/* The syscall implementations. All operate on the calling process and return
+ * either a count / descriptor, or a negative W_E* code. */
+int vfs_open(struct process *p, const char *path, uint32_t flags);
+int vfs_close(struct process *p, int fd);
+int vfs_read(struct process *p, int fd, void *buf, uint32_t len);
+int vfs_write(struct process *p, int fd, const void *buf, uint32_t len);
+int vfs_lseek(struct process *p, int fd, int32_t offset, int whence);
+int vfs_stat(struct process *p, const char *path, wstat_t *out);
+int vfs_unlink(struct process *p, const char *path);
+int vfs_mkdir(struct process *p, const char *path);
+int vfs_rmdir(struct process *p, const char *path);
+int vfs_opendir(struct process *p, const char *path);
+int vfs_readdir(struct process *p, int fd, wdirent_t *out);
+int vfs_chdir(struct process *p, const char *path);
+int vfs_getcwd(struct process *p, char *buf, uint32_t size);
+
+/* Read a whole file into a freshly kmalloc'd buffer.  The caller owns the
+ * buffer and must kfree it.  Used by the program loader. */
+int vfs_read_file(struct process *p, const char *path, void **data_out,
+                  uint32_t *size_out);
+
+#endif /* WOS_VFS_H */

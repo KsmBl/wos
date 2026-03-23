@@ -20,6 +20,8 @@
 #include "paging.h"
 #include "ata.h"
 #include "wfs_kernel.h"
+#include "proc.h"
+#include "sched.h"
 #include "selftest.h"
 #include "io.h"
 
@@ -156,9 +158,14 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
                 fmt_bytes(info.free_bytes), fmt_bytes(info.total_bytes));
     }
 
+    proc_init();
+    syscall_init();
+    kputs("proc   : scheduler running, syscall gate open\n");
+
     selftest_interrupts();
     selftest_memory();
     selftest_filesystem();
+    selftest_processes();
 
     kputs("\ntype a line and press Enter; the kernel will echo it back.\n\n");
     for (;;) {

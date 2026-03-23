@@ -40,7 +40,7 @@ KSRC_S := $(shell find kernel -name '*.S' | sort)
 KOBJ   := $(patsubst %.c,$(BUILD)/%.o,$(KSRC_C)) $(patsubst %.S,$(BUILD)/%.asm.o,$(KSRC_S))
 KDEP   := $(KOBJ:.o=.d)
 
-.PHONY: all kernel iso disk run run-nox log debug clean
+.PHONY: all kernel apps iso disk run run-nox log debug clean
 
 all: iso disk
 
@@ -84,6 +84,52 @@ $(ISO): $(KERNEL) grub/grub.cfg
 # running make in between.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Applications
+#
+# Each app/<name>/sourcecode/*.c builds into $(BUILD)/app/<name>/launch, which
+# the image installs at /app/<name>/launch alongside a copy of its source.
+# ---------------------------------------------------------------------------
+
+UCFLAGS := -m32 -std=gnu11 -ffreestanding -O2 -g \
+           -Wall -Wextra -Wno-unused-parameter \
+           -fno-pie -fno-pic -fno-stack-protector -fno-builtin \
+           -fno-asynchronous-unwind-tables \
+           -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
+           -Ilib/wkernel/include -Iinclude
+ULDFLAGS := -m elf_i386 -nostdlib -no-pie -z noexecstack
+
+# Set once lib/wkernel exists; applications link against it.
+LIBW :=
+
+# Only directories that actually contain sources; an empty app/<name>/ would
+# otherwise produce a link with no input files.
+APPS     := $(sort $(foreach f,$(wildcard app/*/sourcecode/*.c),\
+                     $(word 2,$(subst /, ,$(f)))))
+APP_BINS :=
+APP_DEPS :=
+
+define APP_RULES
+APP_$(1)_SRC := $$(wildcard app/$(1)/sourcecode/*.c)
+APP_$(1)_OBJ := $$(patsubst app/$(1)/sourcecode/%.c,$$(BUILD)/app/$(1)/%.o,$$(APP_$(1)_SRC))
+
+$$(BUILD)/app/$(1)/%.o: app/$(1)/sourcecode/%.c
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$(UCFLAGS) -MMD -MP -c $$< -o $$@
+
+$$(BUILD)/app/$(1)/launch: $$(APP_$(1)_OBJ) $$(LIBW) lib/wkernel/user.ld
+	@mkdir -p $$(dir $$@)
+	$$(LD) $$(ULDFLAGS) -T lib/wkernel/user.ld -o $$@ $$(APP_$(1)_OBJ) $$(LIBW)
+	@echo "  built $$@"
+
+APP_BINS += $$(BUILD)/app/$(1)/launch
+APP_DEPS += $$(APP_$(1)_OBJ:.o=.d)
+endef
+
+$(foreach a,$(APPS),$(eval $(call APP_RULES,$(a))))
+
+apps: $(APP_BINS)
+
 MKWFS  := $(BUILD)/mkwfs
 ROOTFS := $(BUILD)/root
 
@@ -92,13 +138,19 @@ $(MKWFS): tools/mkwfs.c include/wfs.h
 	$(HOSTCC) -O2 -Wall -Wextra -Iinclude -o $@ $<
 
 ROOTFS_SRC := $(shell find rootfs -type f 2>/dev/null)
+APP_SRC    := $(shell find app -type f 2>/dev/null)
 
 disk: $(DISK)
 
-$(DISK): $(MKWFS) $(ROOTFS_SRC)
+$(DISK): $(MKWFS) $(APP_BINS) $(ROOTFS_SRC) $(APP_SRC)
 	@rm -rf $(ROOTFS)
 	@mkdir -p $(ROOTFS)
 	@cp -r rootfs/. $(ROOTFS)/
+	@for a in $(APPS); do \
+	    mkdir -p $(ROOTFS)/app/$$a/sourcecode; \
+	    cp $(BUILD)/app/$$a/launch $(ROOTFS)/app/$$a/launch; \
+	    cp app/$$a/sourcecode/* $(ROOTFS)/app/$$a/sourcecode/; \
+	done
 	$(MKWFS) $@ $(DISK_MB) $(ROOTFS)
 
 QEMU := qemu-system-i386
@@ -131,3 +183,4 @@ clean:
 	rm -rf $(BUILD)
 
 -include $(KDEP)
+-include $(APP_DEPS)
