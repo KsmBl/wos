@@ -1,164 +1,161 @@
-/* hello -- a self-contained ring 3 test program.
+/* hello -- a demonstration program and the API's smoke test.
  *
- * This one deliberately uses no library at all: it provides its own _start and
- * talks to the kernel through raw `int $0x80`, so it proves the ring 3 entry
- * path, the syscall gate and argument passing work before any of lib/wkernel
- * exists to hide them.
+ * It exercises most of wkernel: printing, memory and disk statistics, file
+ * I/O, directory listing and the heap.  Because it is also what the kernel's
+ * boot-time process self-test runs, breaking the API breaks the boot loudly
+ * rather than quietly.
  *
- * Run it with an argument of "spin" to make it burn CPU for a while, which is
- * how preemption between two processes gets demonstrated, or "fault" to make
- * it touch a bad address and get killed.
+ * Arguments it understands:
+ *   spin    burn CPU for a while, so preemption between two copies is visible
+ *   fault   write through a bad pointer, to show the process being killed
+ *   files   create, write, read back and delete a file
  */
 
-#include "wabi.h"
+#include <wkernel.h>
 
-/* Raw syscall wrappers. The kernel takes the call number in eax and the
- * arguments in ebx, ecx and edx, returning the result in eax. */
-static int syscall1(int n, int a)
+static void show_identity(int argc, char **argv)
 {
-    int r;
-    __asm__ volatile("int $0x80" : "=a"(r) : "a"(n), "b"(a) : "memory");
-    return r;
+    wprintf("hello: pid %d, argc %d", wgetpid(), argc);
+    for (int i = 0; i < argc; i++)
+        wprintf(" argv[%d]=%s", i, argv[i]);
+    wprintf("\n");
 }
 
-static int syscall2(int n, int a, int b)
+static void show_memory(void)
 {
-    int r;
-    __asm__ volatile("int $0x80" : "=a"(r) : "a"(n), "b"(a), "c"(b) : "memory");
-    return r;
+    wmeminfo_t mem;
+    if (wmeminfo(&mem) == 0)
+        wprintf("hello: RAM %s free of %s (kernel holds %s)\n",
+                whuman(mem.free_bytes), whuman(mem.total_bytes),
+                whuman(mem.kernel_bytes));
+
+    wprocmem_t me;
+    if (wprocmem(0, &me) == 0)
+        wprintf("hello: I am resident in %s (code %s, data %s, stack %s)\n",
+                whuman(me.resident_bytes), whuman(me.code_bytes),
+                whuman(me.data_bytes), whuman(me.stack_bytes));
+
+    wthreadmem_t th;
+    if (wthreadmem(0, &th) == 0)
+        wprintf("hello: thread %d has run for %u ticks\n",
+                th.tid, th.cpu_ticks);
+
+    wdiskinfo_t disk;
+    if (wdiskinfo(&disk) == 0)
+        wprintf("hello: disk %s used of %s\n",
+                whuman(disk.used_bytes), whuman(disk.total_bytes));
 }
 
-static int syscall3(int n, int a, int b, int c)
+static void show_heap(void)
 {
-    int r;
-    __asm__ volatile("int $0x80"
-                     : "=a"(r)
-                     : "a"(n), "b"(a), "c"(b), "d"(c)
-                     : "memory");
-    return r;
-}
-
-static unsigned slen(const char *s)
-{
-    unsigned n = 0;
-    while (s[n])
-        n++;
-    return n;
-}
-
-static void put(const char *s)
-{
-    syscall3(WSYS_WRITE, W_STDOUT, (int)s, (int)slen(s));
-}
-
-static void put_uint(unsigned v)
-{
-    char buf[12];
-    int  n = 0;
-
-    if (v == 0)
-        buf[n++] = '0';
-    while (v) {
-        buf[n++] = (char)('0' + v % 10);
-        v /= 10;
+    /* Large enough to force wsbrk to extend the heap more than once. */
+    char *big = malloc(20000);
+    if (!big) {
+        wprintf("hello: malloc failed\n");
+        return;
     }
 
-    char out[12];
-    int  m = 0;
-    while (n)
-        out[m++] = buf[--n];
+    memset(big, 'x', 20000);
+    big[19999] = '\0';
 
-    syscall3(WSYS_WRITE, W_STDOUT, (int)out, m);
+    wprocmem_t me;
+    wprocmem(0, &me);
+    wprintf("hello: after a 20000 byte malloc my heap is %s\n",
+            whuman(me.heap_bytes));
+
+    free(big);
 }
 
-static int streq(const char *a, const char *b)
+static void test_files(void)
 {
-    while (*a && *a == *b) {
-        a++;
-        b++;
+    const char *path = "/home/hello.tmp";
+    const char *text = "written by hello through the wkernel API\n";
+
+    int fd = wopen(path, W_O_WRONLY | W_O_CREAT | W_O_TRUNC);
+    if (fd < 0) {
+        wprintf("hello: cannot create %s: %s\n", path, wstrerror(-fd));
+        return;
     }
-    return *a == *b;
+
+    int n = wwrite(fd, text, strlen(text));
+    wclose(fd);
+    wprintf("hello: wrote %d bytes to %s\n", n, path);
+
+    char buf[128];
+    fd = wopen(path, W_O_RDONLY);
+    if (fd >= 0) {
+        n = wread(fd, buf, sizeof(buf) - 1);
+        if (n >= 0) {
+            buf[n] = '\0';
+            wprintf("hello: read it back: %s", buf);
+        }
+        wclose(fd);
+    }
+
+    wstat_t st;
+    if (wstat(path, &st) == 0)
+        wprintf("hello: it is %u bytes in %u block(s)\n", st.size, st.blocks);
+
+    int d = wopendir("/home");
+    if (d >= 0) {
+        wprintf("hello: /home contains");
+        wdirent_t e;
+        while (wreaddir(d, &e) == 1) {
+            if (strcmp(e.name, ".") == 0 || strcmp(e.name, "..") == 0)
+                continue;
+            wprintf(" %s%s", e.name, e.type == W_FT_DIR ? "/" : "");
+        }
+        wprintf("\n");
+        wclosedir(d);
+    }
+
+    if (wunlink(path) == 0)
+        wprintf("hello: removed %s\n", path);
+}
+
+static void spin(void)
+{
+    unsigned start  = wticks();
+    unsigned last   = start;
+    unsigned slices = 0;
+
+    while (wticks() - start < 30) {
+        unsigned now = wticks();
+        if (now != last) {
+            last = now;
+            slices++;
+        }
+    }
+
+    wprintf("hello: pid %d spun across %u ticks\n", wgetpid(), slices);
 }
 
 int main(int argc, char **argv)
 {
-    int pid = syscall1(WSYS_GETPID, 0);
+    show_identity(argc, argv);
 
-    put("hello: running as pid ");
-    put_uint((unsigned)pid);
-    put(", argc=");
-    put_uint((unsigned)argc);
-
-    for (int i = 0; i < argc; i++) {
-        put(" argv[");
-        put_uint((unsigned)i);
-        put("]=");
-        put(argv[i]);
-    }
-    put("\n");
-
-    /* Show that the memory syscalls work from ring 3. */
-    wmeminfo_t mem;
-    if (syscall1(WSYS_MEMINFO, (int)&mem) == 0) {
-        put("hello: system RAM free ");
-        put_uint(mem.free_bytes / 1024);
-        put(" KiB of ");
-        put_uint(mem.total_bytes / 1024);
-        put(" KiB\n");
-    }
-
-    wprocmem_t me;
-    if (syscall2(WSYS_PROCMEM, 0, (int)&me) == 0) {
-        put("hello: my resident memory is ");
-        put_uint(me.resident_bytes / 1024);
-        put(" KiB\n");
-    }
+    int did_something = 0;
 
     for (int i = 1; i < argc; i++) {
-        if (streq(argv[i], "fault")) {
-            put("hello: about to write through a bad pointer\n");
+        if (strcmp(argv[i], "spin") == 0) {
+            spin();
+            did_something = 1;
+        } else if (strcmp(argv[i], "files") == 0) {
+            test_files();
+            did_something = 1;
+        } else if (strcmp(argv[i], "fault") == 0) {
+            wprintf("hello: about to write through a bad pointer\n");
             *(volatile int *)0xDEAD0000 = 1;
-            put("hello: still alive, which should not happen\n");
-        }
-
-        if (streq(argv[i], "spin")) {
-            /* Burn several timeslices so the scheduler has to preempt us. */
-            unsigned start = (unsigned)syscall1(WSYS_TICKS, 0);
-            unsigned last  = start;
-            int      slices = 0;
-
-            while ((unsigned)syscall1(WSYS_TICKS, 0) - start < 30) {
-                unsigned now = (unsigned)syscall1(WSYS_TICKS, 0);
-                if (now != last) {
-                    last = now;
-                    slices++;
-                }
-            }
-
-            put("hello: pid ");
-            put_uint((unsigned)pid);
-            put(" spun across ");
-            put_uint((unsigned)slices);
-            put(" ticks\n");
+            wprintf("hello: still alive, which should not happen\n");
+            did_something = 1;
         }
     }
 
-    return pid;
-}
+    if (!did_something) {
+        show_memory();
+        show_heap();
+    }
 
-/* The entry point. The kernel starts us with the stack holding
- * [argc][argv[0]]..[NULL], which is exactly what main wants. */
-__attribute__((section(".text.start"), naked)) void _start(void)
-{
-    __asm__ volatile(
-        "movl (%esp), %eax\n\t"     /* argc            */
-        "leal 4(%esp), %edx\n\t"    /* argv            */
-        "pushl %edx\n\t"
-        "pushl %eax\n\t"
-        "call main\n\t"
-        "addl $8, %esp\n\t"
-        "movl %eax, %ebx\n\t"       /* exit status     */
-        "movl $0, %eax\n\t"         /* WSYS_EXIT       */
-        "int $0x80\n\t"
-        "hlt");
+    /* The exit status the parent sees; the self-test checks for it. */
+    return wgetpid();
 }

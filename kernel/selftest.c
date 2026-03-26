@@ -429,6 +429,19 @@ void selftest_processes(void)
         check(reaped == 2, "both are reaped");
     }
 
+    /* File and directory calls exercised from ring 3 through wkernel. */
+    {
+        char *argv[] = { "hello", "files", NULL };
+        int32_t pid = proc_spawn(prog, argv, NULL);
+        int32_t status = 0;
+
+        if (pid > 0)
+            proc_wait(pid, &status);
+
+        check(pid > 0 && status == pid,
+              "a process can create, read and delete files through wkernel");
+    }
+
     /* A process that faults must die on its own, without taking us with it. */
     {
         char *argv[] = { "hello", "fault", NULL };

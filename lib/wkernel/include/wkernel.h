@@ -1,0 +1,557 @@
+/**
+ * @file wkernel.h
+ * @brief The WOS application interface.
+ *
+ * This is the only header a WOS application needs to include:
+ *
+ * @code
+ *     #include <wkernel.h>
+ *
+ *     int main(int argc, char **argv)
+ *     {
+ *         wprintf("hello from pid %d\n", wgetpid());
+ *         return 0;
+ *     }
+ * @endcode
+ *
+ * Every function below is documented with what it does, what each parameter
+ * means, and exactly what it returns.  The conventions are uniform:
+ *
+ * - Functions that can fail return a negative error code, one of the `W_E*`
+ *   constants negated.  So `if (r < 0)` detects failure and `-r` names the
+ *   reason.  Functions returning a count or a descriptor return it directly
+ *   when they succeed.
+ * - Pointers passed to the kernel are validated; passing a bad one fails with
+ *   `-W_EFAULT` rather than corrupting anything.
+ * - Paths may be absolute or relative to the working directory, and "." and
+ *   ".." are resolved before the filesystem sees them.
+ *
+ * The full reference, with worked examples, is in docs/wkernel-api.md.
+ */
+#ifndef WKERNEL_H
+#define WKERNEL_H
+
+#include "wabi.h"
+
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
+
+typedef unsigned int wsize_t;
+
+/* ==================================================================== *
+ *  Files
+ * ==================================================================== */
+
+/**
+ * Open a file, optionally creating it.
+ *
+ * @param path  File to open. Absolute, or relative to the working directory.
+ * @param flags Exactly one access mode -- #W_O_RDONLY, #W_O_WRONLY or
+ *              #W_O_RDWR -- optionally ORed with #W_O_CREAT (create it if it
+ *              does not exist), #W_O_TRUNC (discard existing contents) and
+ *              #W_O_APPEND (every write goes to the end of the file).
+ *
+ * @return A file descriptor (always >= 3) on success, or a negative error:
+ *         `-W_ENOENT` if the file does not exist and #W_O_CREAT was not given,
+ *         `-W_ENOTDIR` if a component of the path is not a directory,
+ *         `-W_EISDIR` if the path names a directory and write access was
+ *         requested, `-W_EMFILE` if this process has no free descriptors,
+ *         `-W_ENOSPC` if the file had to be created and the disk is full.
+ *
+ * @note Descriptors 0, 1 and 2 are already open on the console.
+ *
+ * @code
+ *     int fd = wopen("/home/notes.txt", W_O_WRONLY | W_O_CREAT | W_O_TRUNC);
+ *     if (fd < 0) {
+ *         wprintf("cannot open: %s\n", wstrerror(-fd));
+ *         return 1;
+ *     }
+ * @endcode
+ */
+int wopen(const char *path, int flags);
+
+/**
+ * Close a file descriptor.
+ *
+ * @param fd Descriptor from wopen() or wopendir().
+ * @return 0 on success, or `-W_EBADF` if the descriptor is not open.
+ */
+int wclose(int fd);
+
+/**
+ * Read bytes from a file or from the console.
+ *
+ * On descriptor 0 this reads from the keyboard and blocks until the user
+ * presses Enter, then returns the whole line including its trailing newline.
+ *
+ * @param fd    Descriptor to read from.
+ * @param buf   Buffer to fill. Must be writable and at least @p count bytes.
+ * @param count Maximum number of bytes to read.
+ *
+ * @return The number of bytes actually read, which may be less than @p count
+ *         near the end of a file; 0 means end of file.  On failure:
+ *         `-W_EBADF` for a bad descriptor, `-W_EISDIR` if @p fd is a
+ *         directory (use wreaddir()), `-W_EACCES` if it was opened write-only,
+ *         `-W_EFAULT` if @p buf is not valid writable memory.
+ */
+int wread(int fd, void *buf, wsize_t count);
+
+/**
+ * Write bytes to a file or to the console.
+ *
+ * @param fd    Descriptor to write to. 1 is stdout, 2 is stderr.
+ * @param buf   Data to write.
+ * @param count Number of bytes to write.
+ *
+ * @return The number of bytes written -- short only if the disk filled up --
+ *         or a negative error: `-W_EBADF`, `-W_EISDIR`, `-W_EACCES` if the
+ *         file was opened read-only, `-W_EFAULT` for an unreadable buffer,
+ *         `-W_ENOSPC` if nothing could be written because the disk is full,
+ *         `-W_EFBIG` if the write would push the file past its maximum size.
+ */
+int wwrite(int fd, const void *buf, wsize_t count);
+
+/**
+ * Move the read/write position of an open file.
+ *
+ * @param fd     Descriptor to reposition.
+ * @param offset Byte offset, interpreted according to @p whence. May be
+ *               negative for #W_SEEK_CUR and #W_SEEK_END.
+ * @param whence #W_SEEK_SET (from the start), #W_SEEK_CUR (from the current
+ *               position) or #W_SEEK_END (from the end of the file).
+ *
+ * @return The new absolute position, or a negative error: `-W_EBADF`,
+ *         `-W_EINVAL` if @p whence is not valid or the result would be
+ *         negative, `-W_ESPIPE` if @p fd is the console, which cannot seek.
+ *
+ * @note Seeking past the end is allowed; writing there leaves a hole that
+ *       reads back as zeroes.
+ */
+int wlseek(int fd, int offset, int whence);
+
+/**
+ * Look up a file's metadata by path, without opening it.
+ *
+ * @param path Path to inspect.
+ * @param out  Filled in with the inode number, size in bytes, number of disk
+ *             blocks used, and type (#W_FT_FILE or #W_FT_DIR).
+ *
+ * @return 0 on success, or `-W_ENOENT`, `-W_ENOTDIR` or `-W_EFAULT`.
+ */
+int wstat(const char *path, wstat_t *out);
+
+/**
+ * Delete a file.
+ *
+ * @param path File to remove. Use wrmdir() for directories.
+ * @return 0 on success, `-W_ENOENT` if it does not exist, `-W_EISDIR` if it
+ *         is a directory.
+ */
+int wunlink(const char *path);
+
+/* ==================================================================== *
+ *  Directories
+ * ==================================================================== */
+
+/**
+ * Open a directory for reading with wreaddir().
+ *
+ * @param path Directory to open.
+ * @return A descriptor on success, or `-W_ENOENT` if it does not exist,
+ *         `-W_ENOTDIR` if @p path is not a directory, `-W_EMFILE` if this
+ *         process has no free descriptors.
+ */
+int wopendir(const char *path);
+
+/**
+ * Read the next entry from a directory opened by wopendir().
+ *
+ * Entries come back one per call, including "." and "..".  The position
+ * advances only when an entry is actually produced.
+ *
+ * @param fd  Descriptor from wopendir().
+ * @param out Filled in with the entry's inode number, type and name.
+ *
+ * @return 1 when an entry was written to @p out, 0 when the end of the
+ *         directory has been reached, or a negative error: `-W_EBADF`,
+ *         `-W_ENOTDIR` if @p fd is not a directory, `-W_EFAULT`.
+ *
+ * @code
+ *     int d = wopendir("/app");
+ *     wdirent_t e;
+ *     while (wreaddir(d, &e) == 1)
+ *         wprintf("%s%s\n", e.name, e.type == W_FT_DIR ? "/" : "");
+ *     wclosedir(d);
+ * @endcode
+ */
+int wreaddir(int fd, wdirent_t *out);
+
+/**
+ * Close a directory descriptor. Identical to wclose(); it exists so that
+ * directory code reads symmetrically.
+ *
+ * @param fd Descriptor from wopendir().
+ * @return 0 on success, `-W_EBADF` otherwise.
+ */
+int wclosedir(int fd);
+
+/**
+ * Create a directory.
+ *
+ * @param path Directory to create. Its parent must already exist.
+ * @return 0 on success, `-W_EEXIST` if the name is taken, `-W_ENOENT` if the
+ *         parent does not exist, `-W_ENOSPC` if the disk is full.
+ */
+int wmkdir(const char *path);
+
+/**
+ * Remove an empty directory.
+ *
+ * @param path Directory to remove.
+ * @return 0 on success, `-W_ENOTDIR` if it is not a directory,
+ *         `-W_ENOTEMPTY` if it still contains entries, `-W_ENOENT` if it does
+ *         not exist.
+ */
+int wrmdir(const char *path);
+
+/**
+ * Change the working directory of this process.
+ *
+ * @param path Directory to move to.
+ * @return 0 on success, `-W_ENOENT` or `-W_ENOTDIR` on failure.
+ */
+int wchdir(const char *path);
+
+/**
+ * Get the working directory as an absolute, normalised path.
+ *
+ * @param buf  Buffer to fill.
+ * @param size Size of @p buf. #W_PATH_MAX + 1 is always enough.
+ * @return The length of the path written (not counting the NUL), or
+ *         `-W_ERANGE` if @p buf is too small, or `-W_EFAULT`.
+ */
+int wgetcwd(char *buf, wsize_t size);
+
+/* ==================================================================== *
+ *  Memory statistics
+ * ==================================================================== */
+
+/**
+ * Report system-wide memory use.
+ *
+ * The numbers come from the kernel's physical frame allocator, so they are
+ * measured rather than estimated: `used_bytes` is exactly the number of 4 KiB
+ * frames currently allocated, and `used + free == total`.
+ *
+ * @param out Filled in with total, used and free bytes of usable RAM, the
+ *            bytes held by the kernel itself (its image, heap arena and page
+ *            tables), and the page size.
+ * @return 0 on success, or `-W_EFAULT` if @p out is not writable.
+ *
+ * @code
+ *     wmeminfo_t m;
+ *     wmeminfo(&m);
+ *     wprintf("%u KiB free of %u KiB\n", m.free_bytes / 1024,
+ *             m.total_bytes / 1024);
+ * @endcode
+ */
+int wmeminfo(wmeminfo_t *out);
+
+/**
+ * Report the memory use of one process.
+ *
+ * `resident_bytes` is the number of frames actually mapped into that
+ * process's address space, counted from its page tables -- what the process
+ * genuinely occupies, not a reservation.
+ *
+ * @param pid Process to inspect, or 0 for the calling process.
+ * @param out Filled in with the pid, name, resident bytes, and the code,
+ *            data, heap and stack breakdown, plus the thread count.
+ * @return 0 on success, `-W_ESRCH` if there is no such process, `-W_EFAULT`
+ *         if @p out is not writable.
+ */
+int wprocmem(int pid, wprocmem_t *out);
+
+/**
+ * Report the memory use of one thread.
+ *
+ * @param tid Thread to inspect, or 0 for the calling thread.
+ * @param out Filled in with the thread and process ids, its kernel and user
+ *            stack sizes, and how many timer ticks it has run for.
+ * @return 0 on success, `-W_ESRCH` if there is no such thread, `-W_EFAULT`
+ *         if @p out is not writable.
+ *
+ * @note Every process currently has exactly one thread, so only the calling
+ *       thread is addressable.
+ */
+int wthreadmem(int tid, wthreadmem_t *out);
+
+/**
+ * List every running process and its memory use.
+ *
+ * @param out Array to fill, of at least @p max entries.
+ * @param max Maximum number of entries to write.
+ * @return The number of processes written, or `-W_EFAULT`.
+ *
+ * @code
+ *     wprocmem_t procs[16];
+ *     int n = wproclist(procs, 16);
+ *     for (int i = 0; i < n; i++)
+ *         wprintf("%-12s %u KiB\n", procs[i].name,
+ *                 procs[i].resident_bytes / 1024);
+ * @endcode
+ */
+int wproclist(wprocmem_t *out, int max);
+
+/* ==================================================================== *
+ *  Disk statistics
+ * ==================================================================== */
+
+/**
+ * Report disk space use.
+ *
+ * The figures come from the filesystem's block bitmap, so `used_bytes` counts
+ * blocks that are genuinely allocated, including the metadata the filesystem
+ * needs for itself.
+ *
+ * @param out Filled in with total, used and free bytes, the block size, the
+ *            total and free block counts, and the total and free inode counts.
+ * @return 0 on success, or `-W_EFAULT`.
+ *
+ * @note If no disk is mounted every field is zero.
+ */
+int wdiskinfo(wdiskinfo_t *out);
+
+/* ==================================================================== *
+ *  Processes
+ * ==================================================================== */
+
+/**
+ * Load and run a program as a child process.
+ *
+ * The child gets a copy of the caller's working directory and its own console
+ * descriptors.  It runs concurrently: use wwait() to block until it finishes.
+ *
+ * @param path Executable to run, e.g. "/app/whell/launch".
+ * @param argv NULL-terminated argument array; `argv[0]` should be the program
+ *             name.  May be NULL for no arguments.
+ *
+ * @return The child's process id (always > 0), or a negative error:
+ *         `-W_ENOENT` if the file does not exist, `-W_ENOEXEC` if it is not a
+ *         valid 32-bit x86 executable, `-W_ENOMEM` if memory or the process
+ *         table is exhausted, `-W_EFAULT` for a bad pointer.
+ *
+ * @code
+ *     char *argv[] = { "ls", "-l", NULL };
+ *     int pid = wspawn("/app/ls/launch", argv);
+ *     int status;
+ *     if (pid > 0)
+ *         wwait(pid, &status);
+ * @endcode
+ */
+int wspawn(const char *path, char *const argv[]);
+
+/**
+ * Wait for a child process to exit and clean it up.
+ *
+ * Blocks until a matching child has exited.  Until a child is waited for, its
+ * process slot is not released.
+ *
+ * @param pid    Child to wait for, or -1 for any child.
+ * @param status If not NULL, receives the child's exit status. A process
+ *               killed by a fault reports -1.
+ *
+ * @return The pid of the child that was reaped, or `-W_ECHILD` if there is no
+ *         such child, or `-W_EFAULT` if @p status is not writable.
+ */
+int wwait(int pid, int *status);
+
+/**
+ * Terminate the calling process immediately. Does not return.
+ *
+ * Open descriptors are closed and the address space is released; the parent
+ * sees @p status from wwait().  Returning from main() has the same effect,
+ * with main's return value as the status.
+ *
+ * @param status Exit status to report to the parent.
+ */
+void wexit(int status) __attribute__((noreturn));
+
+/**
+ * @return The calling process's id. Never fails.
+ */
+int wgetpid(void);
+
+/**
+ * Grow or shrink the process heap.
+ *
+ * This is the primitive malloc() is built on; most programs should use
+ * malloc() instead.
+ *
+ * @param increment Bytes to add to the heap; may be negative to give memory
+ *                  back, or 0 to query the current break.
+ * @return The address of the *previous* end of the heap, so
+ *         `wsbrk(n)` returns a pointer to @p n newly usable bytes.
+ *         Returns `(void *)-1` if the request cannot be satisfied.
+ *
+ * @note New pages are zero-filled.
+ */
+void *wsbrk(int increment);
+
+/**
+ * @return Timer ticks since boot. The timer runs at 100 Hz, so one tick is
+ *         10 ms. Never fails.
+ */
+unsigned int wticks(void);
+
+/**
+ * @return Milliseconds since boot. Never fails.
+ */
+unsigned int wuptime_ms(void);
+
+/**
+ * Give up the rest of this timeslice to another runnable process.
+ * Purely an optimisation; the scheduler preempts anyway.
+ */
+void wyield(void);
+
+/* ==================================================================== *
+ *  POSIX-style aliases
+ *
+ *  The same calls under their familiar names, for code that reads more
+ *  naturally that way.  They are plain inline forwards, so there is no
+ *  cost to using either spelling.
+ * ==================================================================== */
+
+static inline int open(const char *path, int flags) { return wopen(path, flags); }
+static inline int close(int fd)                     { return wclose(fd); }
+static inline int read(int fd, void *buf, wsize_t n)         { return wread(fd, buf, n); }
+static inline int write(int fd, const void *buf, wsize_t n)  { return wwrite(fd, buf, n); }
+static inline int lseek(int fd, int off, int whence) { return wlseek(fd, off, whence); }
+
+/* ==================================================================== *
+ *  Convenience layer
+ *
+ *  Implemented on top of the calls above; no extra kernel support.
+ * ==================================================================== */
+
+/**
+ * Print formatted text to stdout.
+ *
+ * Supports `%d` `%i` (signed), `%u` (unsigned), `%x` `%X` (hex), `%c`, `%s`,
+ * `%p` and `%%`.  A width and the flags `-` (left align) and `0` (zero pad)
+ * are honoured, so `%-12s` and `%6u` line columns up.
+ *
+ * @param fmt Format string, followed by its arguments.
+ * @return The number of characters written.
+ *
+ * @note There is no floating point support; WOS never enables the FPU.
+ */
+int wprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
+/**
+ * Print formatted text to a file descriptor.
+ * @param fd  Descriptor to write to.
+ * @param fmt Format string, as for wprintf().
+ * @return The number of characters written.
+ */
+int wfprintf(int fd, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+
+/**
+ * Format text into a buffer.
+ * @param buf  Destination, always NUL-terminated.
+ * @param size Size of @p buf.
+ * @param fmt  Format string, as for wprintf().
+ * @return The number of characters written, not counting the NUL.
+ */
+int wsnprintf(char *buf, wsize_t size, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+
+/**
+ * Write a string to stdout, with no newline added.
+ * @param s String to write.
+ * @return The number of characters written.
+ */
+int wputs(const char *s);
+
+/**
+ * Read one line from the console.
+ *
+ * Blocks until Enter is pressed. The trailing newline is removed.
+ *
+ * @param buf  Buffer to fill.
+ * @param size Size of @p buf.
+ * @return The length of the line, or a negative error from wread().
+ */
+int wgetline(char *buf, wsize_t size);
+
+/**
+ * Format a byte count for people, e.g. 268435456 becomes "256.0M".
+ *
+ * @param bytes Value to format.
+ * @return A pointer into a small rotating set of static buffers, so up to
+ *         four results can be live in one wprintf() call. Not reentrant.
+ */
+const char *whuman(unsigned int bytes);
+
+/**
+ * Turn an error code into a readable message.
+ * @param err A positive `W_E*` code -- negate what a failing call returned.
+ * @return A short description, e.g. "no such file or directory".
+ */
+const char *wstrerror(int err);
+
+/* --- memory ------------------------------------------------------- */
+
+/**
+ * Allocate @p size bytes.
+ * @param size Bytes required. Allocating 0 bytes returns NULL.
+ * @return A pointer to the block, or NULL if the heap cannot grow.
+ */
+void *malloc(wsize_t size);
+
+/** Allocate and zero @p count * @p size bytes. @return As malloc(). */
+void *calloc(wsize_t count, wsize_t size);
+
+/**
+ * Resize a block, preserving its contents up to the smaller of the two sizes.
+ * @param ptr  Block from malloc(), or NULL to allocate afresh.
+ * @param size New size; 0 frees the block and returns NULL.
+ * @return The new pointer, or NULL if it could not be resized (the original
+ *         block is then still valid).
+ */
+void *realloc(void *ptr, wsize_t size);
+
+/** Release a block. Passing NULL does nothing. @param ptr Block to free. */
+void free(void *ptr);
+
+/* --- strings ------------------------------------------------------ */
+
+wsize_t strlen(const char *s);
+int     strcmp(const char *a, const char *b);
+int     strncmp(const char *a, const char *b, wsize_t n);
+char   *strcpy(char *dst, const char *src);
+char   *strcat(char *dst, const char *src);
+char   *strchr(const char *s, int c);
+char   *strrchr(const char *s, int c);
+
+/**
+ * Copy a string, always NUL-terminating and never overrunning.
+ * @param dst  Destination buffer.
+ * @param src  String to copy.
+ * @param size Size of @p dst.
+ * @return The length of @p src, so a result >= @p size means it was truncated.
+ */
+wsize_t strlcpy(char *dst, const char *src, wsize_t size);
+
+void *memcpy(void *dst, const void *src, wsize_t n);
+void *memmove(void *dst, const void *src, wsize_t n);
+void *memset(void *dst, int c, wsize_t n);
+int   memcmp(const void *a, const void *b, wsize_t n);
+
+/** Parse a decimal integer, skipping leading spaces and honouring a sign.
+ *  @param s Text to parse. @return The value, or 0 if there are no digits. */
+int atoi(const char *s);
+
+#endif /* WKERNEL_H */

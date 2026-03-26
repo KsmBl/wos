@@ -40,7 +40,7 @@ KSRC_S := $(shell find kernel -name '*.S' | sort)
 KOBJ   := $(patsubst %.c,$(BUILD)/%.o,$(KSRC_C)) $(patsubst %.S,$(BUILD)/%.asm.o,$(KSRC_S))
 KDEP   := $(KOBJ:.o=.d)
 
-.PHONY: all kernel apps iso disk run run-nox log debug clean
+.PHONY: all kernel lib apps iso disk run run-nox log debug clean
 
 all: iso disk
 
@@ -99,8 +99,31 @@ UCFLAGS := -m32 -std=gnu11 -ffreestanding -O2 -g \
            -Ilib/wkernel/include -Iinclude
 ULDFLAGS := -m elf_i386 -nostdlib -no-pie -z noexecstack
 
-# Set once lib/wkernel exists; applications link against it.
-LIBW :=
+# ---------------------------------------------------------------------------
+# lib/wkernel -- the application API every program links against
+# ---------------------------------------------------------------------------
+
+LIBW     := $(BUILD)/lib/libwkernel.a
+LIBW_C   := $(wildcard lib/wkernel/src/*.c)
+LIBW_S   := $(wildcard lib/wkernel/src/*.S)
+LIBW_OBJ := $(patsubst lib/wkernel/src/%.c,$(BUILD)/lib/%.o,$(LIBW_C)) \
+            $(patsubst lib/wkernel/src/%.S,$(BUILD)/lib/%.asm.o,$(LIBW_S))
+LIBW_DEP := $(LIBW_OBJ:.o=.d)
+
+$(BUILD)/lib/%.o: lib/wkernel/src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS) -Ilib/wkernel/src -MMD -MP -c $< -o $@
+
+$(BUILD)/lib/%.asm.o: lib/wkernel/src/%.S
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -g -Ilib/wkernel/include -Iinclude -MMD -MP -c $< -o $@
+
+$(LIBW): $(LIBW_OBJ)
+	@mkdir -p $(dir $@)
+	ar rcs $@ $(LIBW_OBJ)
+	@echo "  built $@"
+
+lib: $(LIBW)
 
 # Only directories that actually contain sources; an empty app/<name>/ would
 # otherwise produce a link with no input files.
@@ -183,4 +206,5 @@ clean:
 	rm -rf $(BUILD)
 
 -include $(KDEP)
+-include $(LIBW_DEP)
 -include $(APP_DEPS)
