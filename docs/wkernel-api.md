@@ -498,8 +498,9 @@ if (wgetline(line, sizeof(line)) >= 0)
 
 Format a byte count for people: `268435456` becomes `256.0M`.
 
-**Returns** a pointer into a small rotating set of static buffers, so up to
-four results can be live in one `wprintf()` call. Not reentrant.
+**Returns** a pointer into a rotating set of eight static buffers, so up to
+eight results can be live in a single `wprintf()` call. Past that the earliest
+buffer is reused and that argument prints the wrong value. Not reentrant.
 
 ### `const char *wstrerror(int err)`
 

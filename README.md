@@ -42,13 +42,57 @@ Every application owns a directory under `/app`:
 A bare command name in `whell` resolves to `/app/<name>/launch` — that rule
 *is* the search path, so there is no `PATH` variable to maintain.
 
+## What it does
+
+```
+wos:/home$ ls
+boots.txt   notes.txt   readme.txt
+wos:/home$ free -h
+          total        used        free
+Mem:     255.8M        5.2M      250.6M
+Swap:        0B          0B          0B
+wos:/home$ hello
+hello: pid 7, argc 1 argv[0]=hello
+hello: RAM 250.5M free of 255.8M (kernel holds 5.1M)
+hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
+```
+
+- A 32-bit x86 kernel: paging with a per-process address space, a preemptive
+  round-robin scheduler, ring-3 processes loaded from ELF binaries, and
+  `int 0x80` syscalls with every user pointer validated.
+- **WFS**, a filesystem on a real disk image — reads and writes persist across
+  reboots, and the disk figures come from its block bitmap.
+- **wkernel**, the documented application API: file and directory I/O, memory
+  and disk statistics, process control, `printf`, `malloc`.
+- **whell**, a shell with `ls`, `free`, `cd` and `pwd` behaving as they do on
+  Linux, plus `df`, `ps`, `cat` and `help`.
+
 ## Documentation
 
-- [`docs/wkernel-api.md`](docs/wkernel-api.md) — every application-facing function
+- [`docs/wkernel-api.md`](docs/wkernel-api.md) — every application-facing function,
+  with parameters, return values, errors and examples
 - [`docs/whell.md`](docs/whell.md) — the shell and its builtins
 - [`docs/architecture.md`](docs/architecture.md) — how the kernel fits together
+- [`docs/building.md`](docs/building.md) — building, running, debugging, and
+  adding an application
+
+## Testing
+
+The kernel runs self-tests on every boot — frame accounting, heap
+split/coalesce, address-space teardown, filesystem read/write/delete, and
+spawning ring-3 processes — because an OS has no test runner to fall back on.
+`/home/boots.txt` counts boots, which is the standing proof that writes reach
+the disk.
+
+Interactive behaviour is tested with `tools/keytest.sh`, which types into QEMU
+through the monitor:
+
+```sh
+./tools/keytest.sh 'pwd' 'ls -l' 'free -h'
+```
 
 ## Status
 
-Built in stages, each on its own branch and merged into `master` only once it
-boots and passes its checks. See `git log --graph` and the `stage*` tags.
+Built in seven stages, each on its own branch and merged into `master` only
+once it booted and passed its checks. See `git log --graph` and the `stage*`
+tags.

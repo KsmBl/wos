@@ -490,8 +490,10 @@ int wgetline(char *buf, wsize_t size);
  * Format a byte count for people, e.g. 268435456 becomes "256.0M".
  *
  * @param bytes Value to format.
- * @return A pointer into a small rotating set of static buffers, so up to
- *         four results can be live in one wprintf() call. Not reentrant.
+ * @return A pointer into a rotating set of eight static buffers, so up to
+ *         eight results can be live in one wprintf() call.  Beyond that the
+ *         earliest one is overwritten and prints the wrong value.
+ *         Not reentrant.
  */
 const char *whuman(unsigned int bytes);
 
