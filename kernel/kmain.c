@@ -28,6 +28,8 @@
 extern uint8_t __kernel_start[];
 extern uint8_t __kernel_end[];
 
+static void run_shell(void) __attribute__((noreturn));
+
 static const char *mmap_type_name(uint32_t type)
 {
     switch (type) {
@@ -167,11 +169,46 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     selftest_filesystem();
     selftest_processes();
 
-    kputs("\ntype a line and press Enter; the kernel will echo it back.\n\n");
+    run_shell();
+}
+
+/* Launch the shell and keep it running.
+ *
+ * This runs on the boot context, which the scheduler has adopted as the idle
+ * thread, so it must never block: if it did, and every other thread were
+ * waiting too, there would be nothing left to switch to.  Hence the poll and
+ * halt rather than a blocking wait. */
+static void run_shell(void)
+{
+    const char *shell = "/app/whell/launch";
+    char       *argv[] = { "whell", NULL };
+    uint32_t    ino;
+
+    if (wfs_lookup(shell, &ino) != 0) {
+        kprintf("\n[kernel] %s is missing; nothing to run.\n", shell);
+        for (;;)
+            hlt();
+    }
+
+    int32_t pid = proc_spawn(shell, argv, NULL);
+    if (pid < 0) {
+        panic("cannot start the shell (error %d)", -pid);
+    }
+
     for (;;) {
-        char    buf[256];
-        size_t  n = keyboard_read(buf, sizeof(buf) - 1);
-        buf[n] = '\0';
-        kprintf("you typed: %s", buf);
+        process_t *p = proc_by_pid(pid);
+
+        if (p && p->exited) {
+            int32_t status = 0;
+            proc_wait(pid, &status);     /* already exited, so returns at once */
+            kprintf("\n[kernel] whell exited with status %d; restarting it\n",
+                    status);
+            pid = proc_spawn(shell, argv, NULL);
+            if (pid < 0)
+                panic("cannot restart the shell (error %d)", -pid);
+        }
+
+        sti();
+        hlt();
     }
 }

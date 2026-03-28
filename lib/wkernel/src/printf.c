@@ -257,14 +257,19 @@ int wgetline(char *buf, wsize_t size)
     return n;
 }
 
+/* Number of results that can be live at once. Eight, because `ps` prints five
+ * figures in a single wprintf and a caller has no way to notice the buffers
+ * wrapping -- it just silently prints the wrong number. */
+#define WHUMAN_SLOTS 8
+
 const char *whuman(unsigned int bytes)
 {
     static const char units[] = { 'B', 'K', 'M', 'G' };
-    static char slots[4][16];
+    static char slots[WHUMAN_SLOTS][16];
     static int  next;
 
     char *buf = slots[next];
-    next = (next + 1) % 4;
+    next = (next + 1) % WHUMAN_SLOTS;
 
     unsigned int whole = bytes;
     unsigned int frac  = 0;
