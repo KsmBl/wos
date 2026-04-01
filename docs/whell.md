@@ -206,6 +206,37 @@ open, reporting each failure.
 
 **Exit status:** 0, or 1 if any file could not be read.
 
+## `shutdown` — power the machine off
+
+```
+shutdown
+```
+
+Powers the machine off. Nothing needs flushing first: WFS writes its
+superblock, block bitmap and inodes straight through on every change, so the
+disk is consistent at every moment.
+
+```
+wos:/home$ shutdown
+shutting down
+
+[kernel] shutting down
+```
+
+Under QEMU, VirtualBox or Bochs the VM exits. On real hardware the kernel has
+no ACPI parser to find the platform's soft-off registers, so it reports that
+and halts the CPU instead:
+
+```
+[kernel] no ACPI soft-off available on this machine
+[kernel] it is now safe to turn off the power
+```
+
+There is no user or permission model in WOS, so any process can do this.
+
+**Exit status:** does not return on success; 1 if the machine could not be
+powered off.
+
 ## `help` — list the builtins
 
 ```

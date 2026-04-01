@@ -411,6 +411,26 @@ be met. A negative `increment` returns memory to the system.
 Give up the rest of this timeslice. Purely an optimisation — the scheduler
 preempts anyway.
 
+## `int wshutdown(void)`
+
+Power the machine off. **Does not return on success.**
+
+Nothing needs flushing first — the filesystem writes its metadata straight
+through, so the disk is consistent at every moment.
+
+**Returns** only on failure. `-W_ENOSYS` means the machine offers no soft-off
+this kernel knows how to drive; in that case the kernel says so on the console
+and halts the CPU rather than returning here, so in practice this call never
+comes back.
+
+There is no user or permission model in WOS, so any process may call it. On a
+system with several users this would need a privilege check in the kernel.
+
+```c
+wprintf("goodbye\n");
+wshutdown();
+```
+
 ---
 
 # POSIX-style aliases
