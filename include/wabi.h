@@ -163,6 +163,7 @@ typedef struct {
 #define WSYS_SBRK       22
 #define WSYS_TICKS      23
 #define WSYS_YIELD      24
-#define WSYS_MAX        25
+#define WSYS_SHUTDOWN   25
+#define WSYS_MAX        26
 
 #endif /* WOS_WABI_H */

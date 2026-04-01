@@ -30,5 +30,6 @@ int cmd_df(int argc, char **argv);
 int cmd_ps(int argc, char **argv);
 int cmd_cat(int argc, char **argv);
 int cmd_help(int argc, char **argv);
+int cmd_shutdown(int argc, char **argv);
 
 #endif /* WHELL_H */

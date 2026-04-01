@@ -103,6 +103,7 @@ int cmd_help(int argc, char **argv)
     wprintf("  df [-b|-k|-m|-h]         show disk use\n");
     wprintf("  ps                       show processes and their memory\n");
     wprintf("  cat file...              print files\n");
+    wprintf("  shutdown                 power the machine off\n");
     wprintf("  help                     this text\n");
     wprintf("  exit [status]            leave the shell\n\n");
     wprintf("Anything else is looked up as /app/<name>/launch, so typing\n");

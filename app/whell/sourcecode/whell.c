@@ -28,6 +28,7 @@ static const struct builtin builtins[] = {
     { "ps",   cmd_ps   },
     { "cat",  cmd_cat  },
     { "help", cmd_help },
+    { "shutdown", cmd_shutdown },
 };
 
 static int should_exit;

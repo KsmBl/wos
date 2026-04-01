@@ -19,6 +19,7 @@
 #include "kheap.h"
 #include "isr.h"
 #include "pit.h"
+#include "power.h"
 #include "string.h"
 #include "kprintf.h"
 #include "wabi.h"
@@ -327,6 +328,14 @@ static int32_t sys_yield(void)
     return 0;
 }
 
+static int32_t sys_shutdown(void)
+{
+    /* There is no user or permission model in WOS, so any process may do
+     * this. On a system with several users that would need a check here. */
+    power_off();
+    return 0;   /* not reached */
+}
+
 /* ------------------------------------------------------------------ *
  *  Dispatch
  * ------------------------------------------------------------------ */
@@ -362,6 +371,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_SBRK:      r = sys_sbrk(regs->ebx); break;
     case WSYS_TICKS:     r = sys_ticks(); break;
     case WSYS_YIELD:     r = sys_yield(); break;
+    case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }
 

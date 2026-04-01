@@ -73,3 +73,11 @@ void wyield(void)
 {
     wsyscall0(WSYS_YIELD);
 }
+
+int wshutdown(void)
+{
+    /* Only comes back if the kernel could not power the machine off, and even
+     * then the kernel halts rather than returning, so this is effectively
+     * unreachable. */
+    return wsyscall0(WSYS_SHUTDOWN);
+}

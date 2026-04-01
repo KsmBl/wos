@@ -416,6 +416,23 @@ unsigned int wuptime_ms(void);
  */
 void wyield(void);
 
+/**
+ * Shut the machine down.
+ *
+ * Does not return when it succeeds -- the machine powers off. Nothing needs
+ * to be flushed first: the filesystem writes its metadata straight through,
+ * so the disk is consistent at every moment.
+ *
+ * @return Only on failure, with a negative error code. `-W_ENOSYS` means the
+ *         machine offers no soft-off this kernel knows how to drive, in which
+ *         case the kernel halts the CPU and says so on the console rather
+ *         than returning here.
+ *
+ * @note There is no user or permission model in WOS, so any process may call
+ *       this.
+ */
+int wshutdown(void);
+
 /* ==================================================================== *
  *  POSIX-style aliases
  *
