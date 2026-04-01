@@ -206,6 +206,66 @@ open, reporting each failure.
 
 **Exit status:** 0, or 1 if any file could not be read.
 
+## `touch` — create files
+
+```
+touch file...
+```
+
+Creates each file if it does not exist, and leaves the contents of one that
+does alone.
+
+WFS stores no timestamps, so unlike Linux there is nothing to update on a file
+that already exists — `touch` on it simply succeeds.
+
+**Exit status:** 0, or 1 if any file could not be created.
+
+## `mkdir` — create directories
+
+```
+mkdir dir...
+```
+
+Creates each directory. The parent must already exist, so making a nested path
+takes one `mkdir` per level.
+
+**Exit status:** 0, or 1 if any directory could not be created — `already
+exists` if the name is taken, `no such file or directory` if the parent is
+missing.
+
+## `rm` — remove files and directories
+
+```
+rm [-r] [-f] file...
+```
+
+| Option | Effect |
+|---|---|
+| `-r`, `-R` | remove directories and everything inside them |
+| `-f` | ignore files that do not exist, and say nothing about them |
+
+Without `-r`, naming a directory is an error:
+
+```
+wos:/home$ rm tree
+rm: tree: is a directory
+wos:/home$ rm -r tree
+```
+
+`rm` refuses to remove `.` or `..`, as Linux does — `rm -r .` would delete the
+working directory out from under the shell:
+
+```
+wos:/home$ rm -r .
+rm: refusing to remove '.' or '..': skipping .
+```
+
+Removal continues past a file it cannot delete, reporting each failure, so one
+bad operand does not stop the rest.
+
+**Exit status:** 0, or 1 if anything could not be removed. With `-f`, a
+missing file is not a failure.
+
 ## `shutdown` — power the machine off
 
 ```
@@ -275,6 +335,8 @@ whell lives in `app/whell/sourcecode/`, and the same source is on the disk at
 | `cmd_ls.c` | `ls` |
 | `cmd_mem.c` | `free`, `df`, `ps` |
 | `cmd_nav.c` | `cd`, `pwd`, `cat`, `help` |
+| `cmd_file.c` | `rm`, `mkdir`, `touch` |
+| `cmd_power.c` | `shutdown` |
 | `whell.h` | shared declarations |
 
 Every builtin has the same shape as `main()` — it takes `argc`/`argv` with the
