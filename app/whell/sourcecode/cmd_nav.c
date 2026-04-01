@@ -103,6 +103,9 @@ int cmd_help(int argc, char **argv)
     wprintf("  df [-b|-k|-m|-h]         show disk use\n");
     wprintf("  ps                       show processes and their memory\n");
     wprintf("  cat file...              print files\n");
+    wprintf("  touch file...            create empty files\n");
+    wprintf("  mkdir dir...             create directories\n");
+    wprintf("  rm [-r] [-f] file...     remove files, -r for directories\n");
     wprintf("  shutdown                 power the machine off\n");
     wprintf("  help                     this text\n");
     wprintf("  exit [status]            leave the shell\n\n");

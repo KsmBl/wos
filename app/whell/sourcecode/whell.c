@@ -27,6 +27,9 @@ static const struct builtin builtins[] = {
     { "df",   cmd_df   },
     { "ps",   cmd_ps   },
     { "cat",  cmd_cat  },
+    { "rm",   cmd_rm   },
+    { "mkdir", cmd_mkdir },
+    { "touch", cmd_touch },
     { "help", cmd_help },
     { "shutdown", cmd_shutdown },
 };
