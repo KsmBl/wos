@@ -29,7 +29,13 @@ static int ansi_background(int c)
     if (c == W_DEFAULT)
         return 49;
 
-    return base[c & 7];
+    /* Bright backgrounds are the 100s. Note that VGA text mode uses the top
+     * attribute bit for blink unless that is turned off, so a bright
+     * background may blink on the console even though it is correct here. */
+    int bright = (c & W_BRIGHT) != 0;
+    int index  = c & 7;
+
+    return bright ? base[index] + 60 : base[index];
 }
 
 void wcls(void)
