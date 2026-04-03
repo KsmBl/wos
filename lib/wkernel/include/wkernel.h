@@ -523,6 +523,45 @@ int wsnprintf(char *buf, wsize_t size, const char *fmt, ...)
  */
 int wputs(const char *s);
 
+/* --- full-screen output ------------------------------------------- *
+ *
+ * These emit ANSI escape sequences, which the VGA console understands and
+ * which also drive a real terminal attached to the serial port, so the same
+ * program looks right on both.
+ */
+
+/** Clear the screen and put the cursor at the top left. */
+void wcls(void);
+
+/**
+ * Move the cursor.
+ * @param row Row, 1 at the top, up to #W_CONSOLE_HEIGHT.
+ * @param col Column, 1 at the left, up to #W_CONSOLE_WIDTH.
+ */
+void wgotoxy(int row, int col);
+
+/**
+ * Set the drawing colours for text printed from now on.
+ * @param fg Foreground: one of the `W_*` colours, optionally + #W_BRIGHT,
+ *           or #W_DEFAULT.
+ * @param bg Background: one of the `W_*` colours, or #W_DEFAULT.
+ */
+void wcolor(int fg, int bg);
+
+/** Restore the default colours. */
+void wcolor_reset(void);
+
+/** Erase from the cursor to the end of the line. */
+void wclear_line(void);
+
+/**
+ * Show or hide the hardware cursor.
+ * @param visible Non-zero to show it.
+ * @note A program that repaints the whole screen should hide it first, or the
+ *       cursor flickers across the screen during every repaint.
+ */
+void wcursor(int visible);
+
 /**
  * Read one line from the console.
  *

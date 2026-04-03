@@ -52,6 +52,7 @@ int cmd_cat(int argc, char **argv);
 int cmd_rm(int argc, char **argv);
 int cmd_mkdir(int argc, char **argv);
 int cmd_touch(int argc, char **argv);
+int cmd_clear(int argc, char **argv);
 int cmd_help(int argc, char **argv);
 int cmd_shutdown(int argc, char **argv);
 

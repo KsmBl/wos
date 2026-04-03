@@ -91,6 +91,12 @@ int cmd_cat(int argc, char **argv)
     return status;
 }
 
+int cmd_clear(int argc, char **argv)
+{
+    wcls();
+    return 0;
+}
+
 int cmd_help(int argc, char **argv)
 {
     wprintf("whell -- the WOS shell\n\n");
@@ -106,6 +112,7 @@ int cmd_help(int argc, char **argv)
     wprintf("  touch file...            create empty files\n");
     wprintf("  mkdir dir...             create directories\n");
     wprintf("  rm [-r] [-f] file...     remove files, -r for directories\n");
+    wprintf("  clear                    clear the screen\n");
     wprintf("  shutdown                 power the machine off\n");
     wprintf("  help                     this text\n");
     wprintf("  exit [status]            leave the shell\n\n");
