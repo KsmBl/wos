@@ -43,18 +43,26 @@ emit_char() {
         '_')  echo "sendkey shift-minus" ;;
         '*')  echo "sendkey shift-8" ;;
         '~')  echo "sendkey shift-grave_accent" ;;
+        "$(printf '\t')") echo "sendkey tab" ;;
+        "$(printf '\b')") echo "sendkey backspace" ;;
         *)    echo "# unmapped character: $c" >&2 ;;
     esac
 }
 
 emit_script() {
     sleep "$DELAY"
-    for line in "$@"; do
-        # Split the line into characters without relying on bash-isms.
-        # The trailing newline matters: without it `read` sees the final
-        # character as an unterminated line, sets the variable and *then*
-        # returns non-zero, so the while loop drops the last keystroke.
-        printf '%s\n' "$line" | fold -w1 | while IFS= read -r ch; do
+    for raw in "$@"; do
+        # Interpret backslash escapes so a test can ask for a Tab keypress
+        # by writing \t, which is otherwise painful to pass through argv.
+        line=$(printf '%b' "$raw")
+        # Walk the characters with parameter expansion rather than `fold`.
+        # fold treats a backspace as column-decrementing and does not split
+        # on it, so "\b\b" arrived as one unmapped two-character token and
+        # only one of the two keystrokes was ever sent.
+        rest=$line
+        while [ -n "$rest" ]; do
+            ch=${rest%"${rest#?}"}
+            rest=${rest#?}
             emit_char "$ch"
             sleep 0.03
         done

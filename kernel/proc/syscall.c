@@ -20,6 +20,7 @@
 #include "isr.h"
 #include "pit.h"
 #include "power.h"
+#include "keyboard.h"
 #include "string.h"
 #include "kprintf.h"
 #include "wabi.h"
@@ -328,6 +329,17 @@ static int32_t sys_yield(void)
     return 0;
 }
 
+static int32_t sys_console(uint32_t mode)
+{
+    if (mode != W_CONSOLE_CANONICAL && mode != W_CONSOLE_RAW)
+        return -W_EINVAL;
+
+    bool was_raw = keyboard_raw();
+    keyboard_set_raw(mode == W_CONSOLE_RAW);
+
+    return was_raw ? W_CONSOLE_RAW : W_CONSOLE_CANONICAL;
+}
+
 static int32_t sys_shutdown(void)
 {
     /* There is no user or permission model in WOS, so any process may do
@@ -371,6 +383,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_SBRK:      r = sys_sbrk(regs->ebx); break;
     case WSYS_TICKS:     r = sys_ticks(); break;
     case WSYS_YIELD:     r = sys_yield(); break;
+    case WSYS_CONSOLE:   r = sys_console(regs->ebx); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

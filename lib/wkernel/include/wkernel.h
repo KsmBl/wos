@@ -417,6 +417,37 @@ unsigned int wuptime_ms(void);
 void wyield(void);
 
 /**
+ * Switch the console between line-buffered and raw input.
+ *
+ * In the default canonical mode the kernel echoes as you type, handles
+ * backspace, and a wread() on descriptor 0 returns one whole line once Enter
+ * is pressed.
+ *
+ * In raw mode every keystroke is readable immediately and nothing is echoed,
+ * so a program that wants to react to individual keys -- Tab, arrow keys, a
+ * pager waiting for a single letter -- can do so.  In exchange it must echo
+ * what it wants seen and implement its own editing.  Ctrl+letter arrives as
+ * the corresponding control code, so Ctrl+C is 0x03.
+ *
+ * Switching modes discards anything typed but not yet submitted.
+ *
+ * @param mode #W_CONSOLE_CANONICAL or #W_CONSOLE_RAW.
+ * @return The mode that was in effect before, or `-W_EINVAL`.
+ *
+ * @note The mode is a property of the console, not of the process, so a
+ *       program that switches to raw should switch back before it exits or
+ *       spawns a child that reads input.
+ *
+ * @code
+ *     wconsole_raw(W_CONSOLE_RAW);
+ *     char c;
+ *     wread(W_STDIN, &c, 1);        // returns as soon as a key is pressed
+ *     wconsole_raw(W_CONSOLE_CANONICAL);
+ * @endcode
+ */
+int wconsole_raw(int mode);
+
+/**
  * Shut the machine down.
  *
  * Does not return when it succeeds -- the machine powers off. Nothing needs

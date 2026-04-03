@@ -19,6 +19,8 @@ struct builtin {
     int (*run)(int argc, char **argv);
 };
 
+static int cmd_exit(int argc, char **argv);
+
 static const struct builtin builtins[] = {
     { "ls",   cmd_ls   },
     { "cd",   cmd_cd   },
@@ -32,12 +34,13 @@ static const struct builtin builtins[] = {
     { "touch", cmd_touch },
     { "help", cmd_help },
     { "shutdown", cmd_shutdown },
+    { "exit", cmd_exit },
 };
 
 static int should_exit;
 static int exit_status;
 
-static void print_prompt(void)
+void whell_print_prompt(void)
 {
     char cwd[W_PATH_MAX + 1];
 
@@ -45,6 +48,127 @@ static void print_prompt(void)
         strlcpy(cwd, "?", sizeof(cwd));
 
     wprintf("wos:%s$ ", cwd);
+}
+
+const char *whell_builtin_name(int index)
+{
+    if (index < 0 || index >= (int)(sizeof(builtins) / sizeof(builtins[0])))
+        return NULL;
+    return builtins[index].name;
+}
+
+/* Append `text` to the line and echo it. */
+static void insert_text(char *buf, int *len, int size, const char *text)
+{
+    for (const char *p = text; *p && *len + 1 < size; p++)
+        buf[(*len)++] = *p;
+
+    buf[*len] = '\0';
+    wputs(text);
+}
+
+/* Tab: extend the line as far as the matches allow, and if that adds nothing
+ * because several candidates diverge, show them the way a shell does. */
+static void complete_line(char *buf, int *len, int size)
+{
+    char add[W_PATH_MAX + 2];
+    int  matches = whell_complete(buf, *len, add, sizeof(add));
+
+    if (add[0]) {
+        insert_text(buf, len, size, add);
+        return;
+    }
+
+    if (matches < 2)
+        return;                 /* nothing matched, or nothing left to add */
+
+    wputs("\n");
+
+    int column = 0;
+    for (int i = 0; i < matches; i++) {
+        const char *name = whell_completion_name(i);
+        int width = (int)strlen(name) + (whell_completion_is_dir(i) ? 1 : 0);
+
+        if (column + width + 2 > WHELL_COLUMNS) {
+            wputs("\n");
+            column = 0;
+        }
+
+        wprintf("%s%s  ", name, whell_completion_is_dir(i) ? "/" : "");
+        column += width + 2;
+    }
+
+    wputs("\n");
+    whell_print_prompt();
+    wputs(buf);
+}
+
+/* Read one line, echoing and editing it ourselves.
+ *
+ * This needs the console in raw mode so that Tab arrives as a keystroke
+ * instead of being buffered into a line by the kernel.  Raw mode is entered
+ * and left around each line rather than held for the shell's lifetime: the
+ * mode belongs to the console, not to the process, so leaving it set would
+ * change how a child program's own reads behave.
+ *
+ * Returns the line length, or a negative error. */
+static int read_line(char *buf, int size)
+{
+    int len = 0;
+
+    buf[0] = '\0';
+    wconsole_raw(W_CONSOLE_RAW);
+
+    for (;;) {
+        char c;
+        int  n = wread(W_STDIN, &c, 1);
+
+        if (n < 0) {
+            wconsole_raw(W_CONSOLE_CANONICAL);
+            return n;
+        }
+        if (n == 0)
+            continue;           /* no key yet; wread blocks, so this is rare */
+
+        if (c == '\n' || c == '\r') {
+            wputs("\n");
+            break;
+        }
+
+        if (c == '\b' || c == 0x7F) {
+            if (len > 0) {
+                buf[--len] = '\0';
+                /* Back up, blank the character, back up again: correct both
+                 * on the VGA console and over a serial terminal. */
+                wputs("\b \b");
+            }
+            continue;
+        }
+
+        if (c == 0x03) {        /* Ctrl+C: abandon this line */
+            wputs("^C\n");
+            len = 0;
+            break;
+        }
+
+        if (c == '\t') {
+            complete_line(buf, &len, size);
+            continue;
+        }
+
+        if ((unsigned char)c < 32)
+            continue;           /* ignore the other control codes */
+
+        if (len + 1 < size) {
+            buf[len++] = c;
+            buf[len] = '\0';
+            wwrite(W_STDOUT, &c, 1);
+        }
+    }
+
+    wconsole_raw(W_CONSOLE_CANONICAL);
+    buf[len] = '\0';
+    return len;
 }
 
 /* Run an external program and wait for it.  Returns its exit status, or 127
@@ -81,14 +205,15 @@ static int run_program(int argc, char **argv)
     return status;
 }
 
+static int cmd_exit(int argc, char **argv)
+{
+    should_exit = 1;
+    exit_status = (argc > 1) ? atoi(argv[1]) : 0;
+    return exit_status;
+}
+
 static int run_command(int argc, char **argv)
 {
-    if (strcmp(argv[0], "exit") == 0) {
-        should_exit = 1;
-        exit_status = (argc > 1) ? atoi(argv[1]) : 0;
-        return exit_status;
-    }
-
     for (unsigned i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++)
         if (strcmp(argv[0], builtins[i].name) == 0)
             return builtins[i].run(argc, argv);
@@ -101,15 +226,16 @@ int main(int argc, char **argv)
     char  line[WHELL_LINE_MAX];
     char *args[WHELL_MAX_ARGS + 1];
 
-    wprintf("\nwhell -- the WOS shell. Type `help` for the builtins.\n\n");
+    wprintf("\nwhell -- the WOS shell. Type `help` for the builtins.\n");
+    wprintf("Tab completes commands and paths.\n\n");
 
     /* Start where the user's files are, not at the root. */
     wchdir("/home");
 
     while (!should_exit) {
-        print_prompt();
+        whell_print_prompt();
 
-        int len = wgetline(line, sizeof(line));
+        int len = read_line(line, sizeof(line));
         if (len < 0) {
             /* The console cannot really reach end of file, so this is a real
              * error; reporting and stopping beats spinning on it. */

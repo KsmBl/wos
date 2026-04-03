@@ -50,6 +50,7 @@ static const char keymap_shift[128] = {
 static bool shift_down;
 static bool ctrl_down;
 static bool caps_lock;
+static bool raw_mode;
 
 /* The line currently being typed; not visible to readers until Enter. */
 static char   line[LINE_MAX];
@@ -88,6 +89,14 @@ static void line_commit(void)
 
 static void handle_char(char c)
 {
+    /* Raw mode: publish the keystroke as it is and let the reader decide what
+     * it means.  No echo, no line buffer, no editing. */
+    if (raw_mode) {
+        ring_push(c);
+        sched_wake(WAIT_INPUT);
+        return;
+    }
+
     switch (c) {
     case '\n':
         kputc('\n');
@@ -157,9 +166,18 @@ static void keyboard_irq(regs_t *regs)
             c = (char)(c - 'A' + 'a');
     }
 
-    /* Ctrl+letter produces the corresponding control code; Ctrl+C discards
-     * the line being typed, like a terminal would. */
     if (ctrl_down) {
+        /* Raw readers get the control code and decide for themselves; in
+         * canonical mode the driver acts on Ctrl+C by discarding the line
+         * being typed, the way a terminal would. */
+        if (raw_mode) {
+            if (c >= 'a' && c <= 'z')
+                handle_char((char)(c - 'a' + 1));
+            else if (c >= 'A' && c <= 'Z')
+                handle_char((char)(c - 'A' + 1));
+            return;
+        }
+
         if (c == 'c' || c == 'C') {
             kputs("^C\n");
             line_len = 0;
@@ -169,6 +187,24 @@ static void keyboard_irq(regs_t *regs)
     }
 
     handle_char(c);
+}
+
+void keyboard_set_raw(bool raw)
+{
+    if (raw == raw_mode)
+        return;
+
+    /* Drop anything half-typed. Handing a partial line to a reader working
+     * under the other discipline's rules would only confuse it. */
+    line_len  = 0;
+    ring_head = ring_tail;
+
+    raw_mode = raw;
+}
+
+bool keyboard_raw(void)
+{
+    return raw_mode;
 }
 
 size_t keyboard_read(char *buf, size_t max)

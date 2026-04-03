@@ -411,6 +411,36 @@ be met. A negative `increment` returns memory to the system.
 Give up the rest of this timeslice. Purely an optimisation — the scheduler
 preempts anyway.
 
+## `int wconsole_raw(int mode)`
+
+Switch the console between line-buffered and raw input.
+
+| `mode` | Behaviour |
+|---|---|
+| `W_CONSOLE_CANONICAL` | the default: the kernel echoes as you type, handles backspace, and a `wread()` on descriptor 0 returns one whole line once Enter is pressed |
+| `W_CONSOLE_RAW` | every keystroke is readable immediately and nothing is echoed |
+
+Raw mode is what a program needs to react to individual keys — Tab, a pager
+waiting for a single letter, a full-screen editor. In exchange it must echo
+whatever it wants seen and do its own editing. Ctrl+letter arrives as the
+corresponding control code, so Ctrl+C is `0x03`.
+
+Switching modes discards anything typed but not yet submitted, so a change
+never delivers half a line under the other discipline's rules.
+
+**Returns** the mode that was in effect before, or `-W_EINVAL`.
+
+The mode belongs to the console, not to the process, so a program that
+switches to raw should switch back before it exits or before it spawns a child
+that reads input.
+
+```c
+wconsole_raw(W_CONSOLE_RAW);
+char c;
+wread(W_STDIN, &c, 1);            /* returns as soon as a key is pressed */
+wconsole_raw(W_CONSOLE_CANONICAL);
+```
+
 ## `int wshutdown(void)`
 
 Power the machine off. **Does not return on success.**
