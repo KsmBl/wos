@@ -171,4 +171,21 @@ typedef struct {
 #define W_CONSOLE_CANONICAL 0
 #define W_CONSOLE_RAW       1
 
+/* Console geometry. The VGA text console is a fixed 80x25 and there is no
+ * way to ask it, so these are simply what it is. */
+#define W_CONSOLE_WIDTH  80
+#define W_CONSOLE_HEIGHT 25
+
+/* Colours for wcolor(). Add W_BRIGHT to a foreground for the bright variant. */
+#define W_BLACK   0
+#define W_RED     1
+#define W_GREEN   2
+#define W_YELLOW  3
+#define W_BLUE    4
+#define W_MAGENTA 5
+#define W_CYAN    6
+#define W_WHITE   7
+#define W_BRIGHT  8
+#define W_DEFAULT (-1)
+
 #endif /* WOS_WABI_H */

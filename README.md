@@ -72,6 +72,8 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 - [`docs/wkernel-api.md`](docs/wkernel-api.md) — every application-facing function,
   with parameters, return values, errors and examples
 - [`docs/whell.md`](docs/whell.md) — the shell and its builtins
+- [`docs/console.md`](docs/console.md) — raw input mode and the ANSI escape
+  sequences full-screen programs use
 - [`docs/architecture.md`](docs/architecture.md) — how the kernel fits together
 - [`docs/building.md`](docs/building.md) — building, running, debugging, and
   adding an application

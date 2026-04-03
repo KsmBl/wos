@@ -5,22 +5,30 @@
 # tested by translating ASCII into QEMU `sendkey` commands and feeding them to
 # the monitor.  Serial output is captured to build/serial.log and printed.
 #
-#   usage: tools/keytest.sh [-d SECONDS] [-t SECONDS] 'line one' 'line two' ...
+#   usage: tools/keytest.sh [-d SECONDS] [-t SECONDS] [-s FILE.png]
+#                           'line one' 'line two' ...
 #
 #     -d  seconds to wait before typing (default 6), so the kernel is ready
 #     -t  overall QEMU timeout (default 40)
+#     -s  capture the VGA screen to a PNG once the typing is done
 #
-# Each argument is typed and followed by Enter.
+# Each argument is typed and followed by Enter.  Backslash escapes are
+# interpreted, so \t sends Tab and \b sends Backspace.
+#
+# -s exists because the serial log only shows the byte stream; it cannot show
+# what a full-screen program actually painted on the VGA console.
 
 set -e
 cd "$(dirname "$0")/.."
 
 DELAY=6
 LIMIT=40
+SHOT=
 while [ $# -gt 0 ]; do
     case "$1" in
         -d) DELAY=$2; shift 2 ;;
         -t) LIMIT=$2; shift 2 ;;
+        -s) SHOT=$2; shift 2 ;;
         *)  break ;;
     esac
 done
@@ -70,14 +78,31 @@ emit_script() {
         sleep 0.6
     done
     sleep 1
+
+    if [ -n "$SHOT" ]; then
+        echo "screendump $PPM"
+        sleep 1
+    fi
+
     echo "quit"
 }
 
-rm -f "$LOG"
+PPM=$(pwd)/build/screen.ppm
+
+rm -f "$LOG" "$PPM"
 emit_script "$@" | timeout "$LIMIT" qemu-system-i386 -m 256M \
     -cdrom build/wos.iso \
     -drive file=build/wos.img,format=raw,if=ide,index=0,media=disk \
     -boot d -no-reboot \
     -serial "file:$LOG" -display none -monitor stdio >/dev/null 2>&1 || true
+
+if [ -n "$SHOT" ]; then
+    if [ -f "$PPM" ]; then
+        convert "$PPM" "$SHOT"
+        echo "screenshot: $SHOT"
+    else
+        echo "screenshot: QEMU produced no screen dump" >&2
+    fi
+fi
 
 cat "$LOG"

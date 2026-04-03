@@ -32,6 +32,7 @@ static const struct builtin builtins[] = {
     { "rm",   cmd_rm   },
     { "mkdir", cmd_mkdir },
     { "touch", cmd_touch },
+    { "clear", cmd_clear },
     { "help", cmd_help },
     { "shutdown", cmd_shutdown },
     { "exit", cmd_exit },
