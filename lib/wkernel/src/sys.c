@@ -74,6 +74,11 @@ void wyield(void)
     wsyscall0(WSYS_YIELD);
 }
 
+int wconsole_raw(int mode)
+{
+    return wsyscall1(WSYS_CONSOLE, mode);
+}
+
 int wshutdown(void)
 {
     /* Only comes back if the kernel could not power the machine off, and even

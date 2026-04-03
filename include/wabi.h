@@ -164,6 +164,11 @@ typedef struct {
 #define WSYS_TICKS      23
 #define WSYS_YIELD      24
 #define WSYS_SHUTDOWN   25
-#define WSYS_MAX        26
+#define WSYS_CONSOLE    26
+#define WSYS_MAX        27
+
+/* Console modes for wconsole_raw() / WSYS_CONSOLE. */
+#define W_CONSOLE_CANONICAL 0
+#define W_CONSOLE_RAW       1
 
 #endif /* WOS_WABI_H */

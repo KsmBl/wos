@@ -43,18 +43,65 @@ started.
 
 ## Line editing
 
-Editing is handled by the kernel's console, which is line buffered exactly like
-a Linux terminal:
+whell puts the console into raw mode while reading a line, so it sees every
+keystroke and does its own echoing and editing:
 
 | Key | Effect |
 |---|---|
 | Backspace | delete the character before the cursor |
-| Ctrl+C | discard the line being typed |
+| Tab | complete the word being typed |
+| Ctrl+C | abandon the line and start a fresh one |
 | Enter | submit the line |
+
+Raw mode is entered and left around each line rather than held for the shell's
+lifetime. The mode belongs to the console rather than to a process, so leaving
+it set would change how a program whell launches reads its own input.
 
 Arguments are separated by spaces or tabs. `"double quotes"` and
 `'single quotes'` group text containing spaces into one argument, and the
 quotes themselves are removed.
+
+## Tab completion
+
+Tab completes the word at the end of the line. What it completes against
+depends on the position:
+
+- **The first word** is a command, so it is matched against the builtins and
+  against `/app`. A directory under `/app` only counts if it really holds a
+  `launch` binary — completing to one that does not would just produce
+  `command not found`.
+- **Any later word** is a path, matched against the directory it names.
+
+A word containing a `/` is always treated as a path, even in first position.
+
+The behaviour follows bash. One match completes fully and adds a trailing
+space, or a `/` if it is a directory and you are likely to keep typing:
+
+```
+wos:/home$ hell<Tab>
+wos:/home$ hello
+wos:/home$ ls /ap<Tab>
+wos:/home$ ls /app/
+```
+
+Several matches extend as far as they agree, and stop there:
+
+```
+wos:/home$ he<Tab>
+wos:/home$ hel            (help and hello both start with "hel")
+```
+
+Pressing Tab again when there is nothing left to add lists the candidates and
+redraws the line:
+
+```
+wos:/home$ hel<Tab>
+help  hello
+wos:/home$ hel
+```
+
+Hidden entries are only offered once you have typed the leading dot, which is
+how shells keep dotfiles from burying the useful names.
 
 ---
 
@@ -337,6 +384,7 @@ whell lives in `app/whell/sourcecode/`, and the same source is on the disk at
 | `cmd_nav.c` | `cd`, `pwd`, `cat`, `help` |
 | `cmd_file.c` | `rm`, `mkdir`, `touch` |
 | `cmd_power.c` | `shutdown` |
+| `complete.c` | tab completion |
 | `whell.h` | shared declarations |
 
 Every builtin has the same shape as `main()` — it takes `argc`/`argv` with the
