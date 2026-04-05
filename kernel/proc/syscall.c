@@ -340,6 +340,16 @@ static int32_t sys_console(uint32_t mode)
     return was_raw ? W_CONSOLE_RAW : W_CONSOLE_CANONICAL;
 }
 
+static int32_t sys_pollin(uint32_t fd)
+{
+    /* Only the console can ever make a reader wait; a file read always has
+     * something to return, even if that something is end of file. */
+    if (fd == W_STDIN)
+        return keyboard_has_data() ? 1 : 0;
+
+    return 1;
+}
+
 static int32_t sys_shutdown(void)
 {
     /* There is no user or permission model in WOS, so any process may do
@@ -384,6 +394,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_TICKS:     r = sys_ticks(); break;
     case WSYS_YIELD:     r = sys_yield(); break;
     case WSYS_CONSOLE:   r = sys_console(regs->ebx); break;
+    case WSYS_POLLIN:    r = sys_pollin(regs->ebx); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

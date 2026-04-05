@@ -60,6 +60,21 @@ emit_char() {
 emit_script() {
     sleep "$DELAY"
     for raw in "$@"; do
+        # An argument starting with '@' is a list of QEMU key names sent as
+        # they are, with no trailing Enter.  Full-screen programs read single
+        # keystrokes, so they cannot be driven by typed lines.
+        #   e.g. '@down down q'  presses Down twice and then q
+        case "$raw" in
+            @*)
+                for k in ${raw#@}; do
+                    echo "sendkey $k"
+                    sleep 0.25
+                done
+                sleep 0.5
+                continue
+                ;;
+        esac
+
         # Interpret backslash escapes so a test can ask for a Tab keypress
         # by writing \t, which is otherwise painful to pass through argv.
         line=$(printf '%b' "$raw")

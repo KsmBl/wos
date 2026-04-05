@@ -72,3 +72,62 @@ void wcursor(int visible)
 {
     wputs(visible ? "\033[?25h" : "\033[?25l");
 }
+
+int wgetkey(void)
+{
+    char c;
+
+    if (wread(W_STDIN, &c, 1) != 1)
+        return -1;
+
+    if (c != 0x1B)
+        return (unsigned char)c;
+
+    /* Escape starts a sequence, but it is also a key. Nothing waiting behind
+     * it means the user pressed Escape itself -- the same guess any terminal
+     * program has to make. */
+    if (!wpollin(W_STDIN))
+        return W_KEY_ESCAPE;
+
+    if (wread(W_STDIN, &c, 1) != 1)
+        return W_KEY_ESCAPE;
+    if (c != '[')
+        return W_KEY_ESCAPE;
+
+    if (wread(W_STDIN, &c, 1) != 1)
+        return W_KEY_ESCAPE;
+
+    switch (c) {
+    case 'A': return W_KEY_UP;
+    case 'B': return W_KEY_DOWN;
+    case 'C': return W_KEY_RIGHT;
+    case 'D': return W_KEY_LEFT;
+    case 'H': return W_KEY_HOME;
+    case 'F': return W_KEY_END;
+    default:  break;
+    }
+
+    /* The numeric forms end with '~', e.g. ESC[3~ for Delete. */
+    if (c >= '0' && c <= '9') {
+        int value = c - '0';
+        for (;;) {
+            if (wread(W_STDIN, &c, 1) != 1)
+                break;
+            if (c == '~')
+                break;
+            if (c >= '0' && c <= '9')
+                value = value * 10 + (c - '0');
+            else
+                break;
+        }
+
+        switch (value) {
+        case 3: return W_KEY_DELETE;
+        case 5: return W_KEY_PGUP;
+        case 6: return W_KEY_PGDN;
+        default: break;
+        }
+    }
+
+    return W_KEY_ESCAPE;
+}

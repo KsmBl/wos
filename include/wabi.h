@@ -165,7 +165,8 @@ typedef struct {
 #define WSYS_YIELD      24
 #define WSYS_SHUTDOWN   25
 #define WSYS_CONSOLE    26
-#define WSYS_MAX        27
+#define WSYS_POLLIN     27
+#define WSYS_MAX        28
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0
@@ -175,6 +176,19 @@ typedef struct {
  * way to ask it, so these are simply what it is. */
 #define W_CONSOLE_WIDTH  80
 #define W_CONSOLE_HEIGHT 25
+
+/* Special keys returned by wgetkey().  They start above 0xFF so they cannot
+ * collide with an ordinary character. */
+#define W_KEY_UP     0x100
+#define W_KEY_DOWN   0x101
+#define W_KEY_RIGHT  0x102
+#define W_KEY_LEFT   0x103
+#define W_KEY_HOME   0x104
+#define W_KEY_END    0x105
+#define W_KEY_PGUP   0x106
+#define W_KEY_PGDN   0x107
+#define W_KEY_DELETE 0x108
+#define W_KEY_ESCAPE 0x1B
 
 /* Colours for wcolor(). Add W_BRIGHT to a foreground for the bright variant. */
 #define W_BLACK   0
