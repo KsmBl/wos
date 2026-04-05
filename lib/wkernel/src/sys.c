@@ -79,6 +79,11 @@ int wconsole_raw(int mode)
     return wsyscall1(WSYS_CONSOLE, mode);
 }
 
+int wpollin(int fd)
+{
+    return wsyscall1(WSYS_POLLIN, fd);
+}
+
 int wshutdown(void)
 {
     /* Only comes back if the kernel could not power the machine off, and even

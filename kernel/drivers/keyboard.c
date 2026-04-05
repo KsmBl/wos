@@ -70,6 +70,12 @@ static void ring_push(char c)
     ring_head = next;
 }
 
+static void ring_push_string(const char *s)
+{
+    while (*s)
+        ring_push(*s++);
+}
+
 bool keyboard_has_data(void)
 {
     return ring_head != ring_tail;
@@ -123,9 +129,8 @@ static void keyboard_irq(regs_t *regs)
 
     uint8_t sc = inb(KBD_DATA);
 
-    /* 0xE0 introduces a two-byte code (arrows, right ctrl, ...). We consume
-     * the prefix and ignore the pair rather than mis-decoding the second byte
-     * as a single-byte scancode. */
+    /* 0xE0 introduces a two-byte code: the arrows, Home, End, Delete and the
+     * right-hand modifiers. */
     static bool extended;
     if (sc == 0xE0) {
         extended = true;
@@ -133,6 +138,30 @@ static void keyboard_irq(regs_t *regs)
     }
     if (extended) {
         extended = false;
+
+        /* Only presses matter, and only a raw reader has any use for these;
+         * in canonical mode the driver is assembling a line and an arrow key
+         * has no meaning within it. */
+        if ((sc & SC_RELEASE) || !raw_mode)
+            return;
+
+        /* Deliver them as the escape sequences a terminal would send, so a
+         * program decodes special keys the same way whether it is reading
+         * from this console or from a serial terminal. */
+        switch (sc) {
+        case 0x48: ring_push_string("\033[A");  break;   /* up     */
+        case 0x50: ring_push_string("\033[B");  break;   /* down   */
+        case 0x4D: ring_push_string("\033[C");  break;   /* right  */
+        case 0x4B: ring_push_string("\033[D");  break;   /* left   */
+        case 0x47: ring_push_string("\033[H");  break;   /* home   */
+        case 0x4F: ring_push_string("\033[F");  break;   /* end    */
+        case 0x49: ring_push_string("\033[5~"); break;   /* pg up  */
+        case 0x51: ring_push_string("\033[6~"); break;   /* pg dn  */
+        case 0x53: ring_push_string("\033[3~"); break;   /* delete */
+        default:   return;                               /* not interesting */
+        }
+
+        sched_wake(WAIT_INPUT);
         return;
     }
 

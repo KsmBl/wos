@@ -448,6 +448,30 @@ void wyield(void);
 int wconsole_raw(int mode);
 
 /**
+ * Ask whether a read would return immediately.
+ *
+ * This is what lets a program stay responsive while doing something else:
+ * a display that refreshes on a timer can check for a keypress between
+ * repaints instead of blocking in wread() and freezing until one arrives.
+ *
+ * @param fd Descriptor to test.
+ * @return 1 if a wread() on @p fd would not block, 0 if it would.
+ *         Only the console can ever block, so any file reports 1.
+ *
+ * @code
+ *     while (running) {
+ *         redraw();
+ *         unsigned until = wticks() + 100;      // 1 second
+ *         while (wticks() < until) {
+ *             if (wpollin(W_STDIN)) { handle_key(); break; }
+ *             wyield();
+ *         }
+ *     }
+ * @endcode
+ */
+int wpollin(int fd);
+
+/**
  * Shut the machine down.
  *
  * Does not return when it succeeds -- the machine powers off. Nothing needs
@@ -561,6 +585,21 @@ void wclear_line(void);
  *       cursor flickers across the screen during every repaint.
  */
 void wcursor(int visible);
+
+/**
+ * Read one keystroke, decoding the escape sequences that special keys send.
+ *
+ * Requires raw mode (see wconsole_raw()).  Blocks until a key is pressed.
+ *
+ * @return An ordinary character as itself, or one of the `W_KEY_*` codes for
+ *         an arrow, Home, End, Page Up/Down or Delete.  A bare Escape returns
+ *         #W_KEY_ESCAPE.
+ *
+ * @note Escape both introduces sequences and is a key in its own right, so
+ *       this distinguishes them by checking whether anything follows it
+ *       immediately -- the same guess a terminal program makes.
+ */
+int wgetkey(void);
 
 /**
  * Read one line from the console.

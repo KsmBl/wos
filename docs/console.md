@@ -21,6 +21,28 @@ The mode belongs to the console, not to a process, so a program that switches
 to raw must switch back before it exits or spawns something that reads input.
 `whell` does this around each line it reads.
 
+## Special keys
+
+In raw mode the driver sends the escape sequences a terminal would, so a
+program decodes arrows and friends the same way whether it is reading from
+this console or from a serial terminal:
+
+| Key | Sent as |
+|---|---|
+| Up / Down / Right / Left | `ESC[A` / `ESC[B` / `ESC[C` / `ESC[D` |
+| Home / End | `ESC[H` / `ESC[F` |
+| Page Up / Page Down | `ESC[5~` / `ESC[6~` |
+| Delete | `ESC[3~` |
+
+[`wgetkey()`](wkernel-api.md) decodes these into `W_KEY_*` constants, so a
+program does not have to parse them. Special keys are only delivered in raw
+mode — in canonical mode the driver is assembling a line, and an arrow key has
+no meaning within one.
+
+Escape both introduces these sequences and is a key in its own right.
+`wgetkey()` tells them apart by checking whether anything follows immediately,
+which is the same guess any terminal program has to make.
+
 ## Escape sequences
 
 The VGA driver parses these. Anything it does not recognise is dropped rather

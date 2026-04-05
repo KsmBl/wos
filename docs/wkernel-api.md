@@ -607,3 +607,52 @@ makes truncation detectable, unlike `strncpy`.
 
 A complete example lives in `app/hello/sourcecode/hello.c`; it exercises most
 of this API and is what the kernel's boot-time self-test runs.
+
+## `int wpollin(int fd)`
+
+Ask whether a read would return immediately.
+
+This is what lets a program stay responsive while doing something else: a
+display that refreshes on a timer can check for a keypress between repaints
+instead of blocking in `wread()` and freezing until one arrives.
+
+**Returns** 1 if a `wread()` on `fd` would not block, 0 if it would. Only the
+console can ever block, so any file reports 1.
+
+```c
+while (running) {
+    redraw();
+    unsigned until = wticks() + 100;          /* one second */
+    while (wticks() < until) {
+        if (wpollin(W_STDIN)) { handle_key(); break; }
+        wyield();
+    }
+}
+```
+
+## `int wgetkey(void)`
+
+Read one keystroke, decoding the escape sequences that special keys send.
+Requires raw mode, and blocks until a key is pressed.
+
+**Returns** an ordinary character as itself, or one of these for a special key:
+
+| Constant | Key |
+|---|---|
+| `W_KEY_UP` `W_KEY_DOWN` `W_KEY_LEFT` `W_KEY_RIGHT` | the arrows |
+| `W_KEY_HOME` `W_KEY_END` | Home, End |
+| `W_KEY_PGUP` `W_KEY_PGDN` | Page Up, Page Down |
+| `W_KEY_DELETE` | Delete |
+| `W_KEY_ESCAPE` | a bare Escape |
+
+Escape both introduces sequences and is a key in its own right; they are told
+apart by whether anything follows immediately, which is the same guess a
+terminal program makes.
+
+```c
+wconsole_raw(W_CONSOLE_RAW);
+int key = wgetkey();
+if (key == W_KEY_UP)
+    move_up();
+wconsole_raw(W_CONSOLE_CANONICAL);
+```
