@@ -40,6 +40,15 @@ static int             ansi_param_count;
 static bool            ansi_private;    /* the '?' in sequences like ESC[?25l */
 static size_t          saved_row, saved_col;
 
+/* Deferred wrap.
+ *
+ * Filling the last column does not move the cursor off the line; the wrap
+ * happens only when another character actually arrives.  Terminals behave
+ * this way, and it matters: a status bar drawn across the full width of the
+ * bottom row would otherwise scroll the whole screen every time it was
+ * painted. */
+static bool wrap_pending;
+
 static inline uint16_t vga_entry(char c, uint8_t attr)
 {
     return (uint16_t)(uint8_t)c | ((uint16_t)attr << 8);
@@ -67,6 +76,7 @@ void vga_clear(void)
         VGA_MEMORY[i] = vga_entry(' ', color);
     cursor_row = 0;
     cursor_col = 0;
+    wrap_pending = false;
     vga_update_cursor();
 }
 
@@ -178,6 +188,9 @@ static void ansi_execute(char final)
     int p0 = (ansi_param_count > 0) ? ansi_params[0] : 0;
     int p1 = (ansi_param_count > 1) ? ansi_params[1] : 0;
     size_t pos = cursor_row * VGA_WIDTH + cursor_col;
+
+    /* Any explicit cursor movement or erase settles an owed wrap. */
+    wrap_pending = false;
 
     switch (final) {
     case 'H':                               /* cursor position, 1-based */
@@ -313,9 +326,11 @@ void vga_putc(char c)
 
     switch (c) {
     case '\n':
+        wrap_pending = false;
         vga_newline();
         break;
     case '\r':
+        wrap_pending = false;
         cursor_col = 0;
         break;
     case '\t':
@@ -325,6 +340,7 @@ void vga_putc(char c)
         } while (cursor_col % 8 != 0);
         return;                       /* vga_putc already moved the cursor */
     case '\b':
+        wrap_pending = false;
         if (cursor_col > 0) {
             cursor_col--;
         } else if (cursor_row > 0) {
@@ -334,9 +350,18 @@ void vga_putc(char c)
         VGA_MEMORY[cursor_row * VGA_WIDTH + cursor_col] = vga_entry(' ', color);
         break;
     default:
-        VGA_MEMORY[cursor_row * VGA_WIDTH + cursor_col] = vga_entry(c, color);
-        if (++cursor_col >= VGA_WIDTH)
+        /* A character owed a wrap from last time takes it now. */
+        if (wrap_pending) {
+            wrap_pending = false;
             vga_newline();
+        }
+
+        VGA_MEMORY[cursor_row * VGA_WIDTH + cursor_col] = vga_entry(c, color);
+
+        if (cursor_col + 1 >= VGA_WIDTH)
+            wrap_pending = true;      /* sit on the last column for now */
+        else
+            cursor_col++;
         break;
     }
     vga_update_cursor();

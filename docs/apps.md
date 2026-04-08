@@ -114,3 +114,78 @@ The display stays responsive because it never blocks: it polls with
 freeze the clock until someone pressed a key.
 
 **Exit status:** 0.
+
+---
+
+# vim
+
+```
+vim [file]
+```
+
+A modal editor. Opening a file that does not exist starts a new buffer under
+that name, as vim does.
+
+```
+Welcome to WOS.
+
+This file lives on a real disk image in the WFS filesystem, not in RAM.
+Anything you write here survives a reboot.
+~
+~
+ NORMAL  /home/readme.txt [+]                        4,4   17 lines
+```
+
+The status bar shows the mode, the file, `[+]` when there are unsaved changes,
+the cursor position and the line count. Lines past the end of the buffer are
+marked with a `~` column.
+
+## Normal mode
+
+| Key | Effect |
+|---|---|
+| `h` `j` `k` `l`, arrows | move by character and line |
+| `0`, Home | start of line |
+| `^` | first non-blank character |
+| `$`, End | end of line |
+| `w` / `b` | forward / back one word |
+| `gg` / `G` | first / last line |
+| Ctrl+D / Ctrl+U | down / up half a screen |
+| Page Down / Page Up | down / up a full screen |
+| `i` `a` | insert before / after the cursor |
+| `I` `A` | insert at the start / end of the line |
+| `o` `O` | open a line below / above and insert |
+| `x`, Delete | delete the character under the cursor |
+| `dd` | delete the line |
+| `:` | enter a command |
+
+## Insert mode
+
+Typing inserts. Enter splits the line, Backspace deletes back and joins onto
+the previous line at column 0, and Escape returns to normal mode — stepping
+one character left, as vim does.
+
+Tab inserts four spaces. A literal tab would need the console to expand it
+identically on the VGA screen and over serial, and it does not.
+
+## Commands
+
+| Command | Effect |
+|---|---|
+| `:w` | write the file |
+| `:w name` | write to `name` and adopt it as the file name |
+| `:q` | quit, refusing if there are unsaved changes |
+| `:q!` | quit, discarding changes |
+| `:wq`, `:x` | write and quit |
+| `:w!` | write regardless |
+
+Errors use vim's own numbering where there is an equivalent, so `:q` with
+unsaved changes gives `E37: No write since last change (add ! to override)`.
+
+## What is missing
+
+No counts (`3dd`), no registers or yank/put, no undo, no visual mode, no
+search or `:%s///`, and no syntax highlighting. Undo and search are the two
+worth adding next; the rest is a long way down from what the editor is for.
+
+**Exit status:** 0.
