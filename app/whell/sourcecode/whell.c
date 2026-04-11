@@ -227,6 +227,18 @@ int main(int argc, char **argv)
     char  line[WHELL_LINE_MAX];
     char *args[WHELL_MAX_ARGS + 1];
 
+    /* `whell -c "command"` runs one command and exits, which is how another
+     * program borrows the builtins instead of reimplementing them. */
+    if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
+        strlcpy(line, argv[2], sizeof(line));
+
+        int count = whell_parse(line, args, WHELL_MAX_ARGS + 1);
+        if (count == 0)
+            return 0;
+
+        return run_command(count, args);
+    }
+
     wprintf("\nwhell -- the WOS shell. Type `help` for the builtins.\n");
     wprintf("Tab completes commands and paths.\n\n");
 
