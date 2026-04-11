@@ -65,13 +65,20 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 - **wkernel**, the documented application API: file and directory I/O, memory
   and disk statistics, process control, `printf`, `malloc`.
 - **whell**, a shell with `ls`, `free`, `cd` and `pwd` behaving as they do on
-  Linux, plus `df`, `ps`, `cat` and `help`.
+  Linux, plus `df`, `ps`, `cat`, `rm`, `mkdir`, `touch`, `clear`, `shutdown`
+  and tab completion.
+- **Applications**: `fish` (a shell that colours commands as you type and
+  suggests from history), `vim` (a modal editor), `htop` (a live process
+  monitor) and `fastfetch` (system information). These are WOS-native programs
+  in the spirit of the originals — see [`docs/apps.md`](docs/apps.md) for what
+  the upstream versions would need that WOS does not have.
 
 ## Documentation
 
 - [`docs/wkernel-api.md`](docs/wkernel-api.md) — every application-facing function,
   with parameters, return values, errors and examples
 - [`docs/whell.md`](docs/whell.md) — the shell and its builtins
+- [`docs/apps.md`](docs/apps.md) — fish, vim, htop and fastfetch
 - [`docs/console.md`](docs/console.md) — raw input mode and the ANSI escape
   sequences full-screen programs use
 - [`docs/architecture.md`](docs/architecture.md) — how the kernel fits together
