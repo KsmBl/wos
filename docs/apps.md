@@ -189,3 +189,58 @@ search or `:%s///`, and no syntax highlighting. Undo and search are the two
 worth adding next; the rest is a long way down from what the editor is for.
 
 **Exit status:** 0.
+
+---
+
+# fish
+
+```
+fish
+```
+
+A friendly interactive shell. What it adds over `whell` is all in the typing:
+
+```
+Welcome to fish, the friendly interactive shell
+Type help for instructions on how to use fish
+
+wos /home> ls -l          <- "ls" green: it exists
+wos /home> xyzzy abc      <- "xyzzy" red: it does not
+wos /home> ls -l          <- " -l" grey: suggested from history
+```
+
+| While typing | Effect |
+|---|---|
+| the first word turns **green** | that command can actually be run |
+| the first word turns **red** | it cannot — the typo is visible before Enter |
+| **grey** text ahead of the cursor | the rest of the most recent matching command |
+| Right arrow, End, Ctrl+E, Ctrl+F | accept the suggestion |
+| Up / Down | walk the history |
+| Tab | complete commands and paths |
+| Left / Right, Home / End, Ctrl+A | move within the line |
+| Ctrl+U / Ctrl+K | clear the line / to end of line |
+| Ctrl+C | abandon the line |
+| Ctrl+D on an empty line | exit |
+
+Completion inserts at the cursor rather than appending, so completing in the
+middle of a line does not scramble the rest of it.
+
+## Builtins, and how it borrows the rest
+
+fish implements `cd`, `pwd`, `history`, `clear`, `help` and `exit` itself —
+`cd` has to be a builtin because a child process cannot change its parent's
+working directory.
+
+Anything else is looked for at `/app/<name>/launch`, and failing that is
+handed to `whell -c "<line>"`. That is where `ls`, `free`, `df`, `ps`, `cat`,
+`rm`, `mkdir`, `touch` and `shutdown` live, so the two shells share one set of
+builtins instead of each keeping its own copy.
+
+## What is missing
+
+No functions, no abbreviations, no `$variables`, no pipes or redirection, no
+job control, and no universal variables. Pipes are the significant one — they
+need the kernel to support more than one console-attached descriptor per
+process.
+
+**Exit status:** the status of the last command, or whatever `exit` was given.
