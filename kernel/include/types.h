@@ -1,8 +1,9 @@
 /* Fixed-width integer types and basic definitions for the WOS kernel.
  *
- * The kernel is freestanding, so it cannot use the host's <stdint.h> contents
- * wholesale; GCC does provide the freestanding headers, but we keep our own
- * short aliases because they read better in kernel code.
+ * WOS is an x86-64 kernel, so this is an LP64 target: int is 32 bits, long and
+ * pointers are 64.  Sizes and addresses are 64-bit throughout; only the
+ * on-disk filesystem format pins itself to fixed widths, because that has to
+ * match what the host tool writes.
  */
 #ifndef WOS_TYPES_H
 #define WOS_TYPES_H
@@ -13,12 +14,12 @@ typedef unsigned short     uint16_t;
 typedef signed short       int16_t;
 typedef unsigned int       uint32_t;
 typedef signed int         int32_t;
-typedef unsigned long long uint64_t;
-typedef signed long long   int64_t;
+typedef unsigned long      uint64_t;
+typedef signed long        int64_t;
 
-typedef uint32_t           size_t;
-typedef int32_t            ssize_t;
-typedef uint32_t           uintptr_t;
+typedef uint64_t           size_t;
+typedef int64_t            ssize_t;
+typedef uint64_t           uintptr_t;
 
 #define NULL ((void *)0)
 
@@ -27,9 +28,9 @@ typedef uint32_t           uintptr_t;
 #include <stdbool.h>
 
 /* Round x up / down to the next multiple of a (a must be a power of two). */
-#define ALIGN_UP(x, a)   (((x) + ((a) - 1)) & ~((a) - 1))
-#define ALIGN_DOWN(x, a) ((x) & ~((a) - 1))
+#define ALIGN_UP(x, a)   (((x) + ((a) - 1)) & ~((uint64_t)(a) - 1))
+#define ALIGN_DOWN(x, a) ((x) & ~((uint64_t)(a) - 1))
 
-#define PAGE_SIZE 4096u
+#define PAGE_SIZE 4096UL
 
 #endif /* WOS_TYPES_H */

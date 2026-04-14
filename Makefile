@@ -6,8 +6,8 @@
 #   make debug    boot stopped, waiting for gdb on :1234
 #   make clean    remove build/
 #
-# No cross-compiler is required: the host gcc builds 32-bit freestanding code
-# with -m32, and GAS handles the assembly, so there is no dependency on nasm.
+# No cross-compiler is required: the host gcc builds 64-bit freestanding code
+# with -m64, and GAS handles the assembly, so there is no dependency on nasm.
 
 BUILD    := build
 ISODIR   := $(BUILD)/isodir
@@ -20,18 +20,25 @@ CC      := gcc
 LD      := ld
 HOSTCC  := gcc
 
+# WOS is an x86-64 kernel. GRUB enters it in 32-bit protected mode, since that
+# is all Multiboot 1 can do, and boot.S makes the jump to long mode.
+#
 # -fno-pie/-fno-pic matter: this host's gcc defaults to PIE, and a position
 # independent kernel triple-faults immediately at 1 MiB.
-# The -mno-* flags keep gcc from emitting x87/SSE instructions, which would
-# fault because the kernel never enables those units.
-CFLAGS := -m32 -std=gnu11 -ffreestanding -O2 -g \
+# -mcmodel=small holds because the whole kernel sits inside the identity-mapped
+# first 1 GiB, so every symbol address fits in 32 bits.
+# -mno-red-zone is not optional in a kernel: an interrupt would otherwise land
+# on top of the 128 bytes below rsp that a leaf function assumes are its own.
+# The remaining -mno-* flags keep gcc from emitting x87/SSE instructions, which
+# would fault because the kernel never enables those units.
+CFLAGS := -m64 -std=gnu11 -ffreestanding -O2 -g \
           -Wall -Wextra -Wno-unused-parameter \
           -fno-pie -fno-pic -fno-stack-protector -fno-builtin \
           -fno-asynchronous-unwind-tables -fno-omit-frame-pointer \
-          -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
+          -mcmodel=small -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
           -DWOS_KERNEL -Ikernel/include -Iinclude
-ASFLAGS := -m32 -g -Ikernel/include -Iinclude
-LDFLAGS := -m elf_i386 -nostdlib -no-pie -z noexecstack
+ASFLAGS := -m64 -g -Ikernel/include -Iinclude
+LDFLAGS := -m elf_x86_64 -nostdlib -no-pie -z noexecstack -n
 
 # Assembly objects get a .asm.o suffix so that a foo.c and a foo.S in the same
 # directory cannot silently compile over each other's object file.
@@ -91,13 +98,16 @@ $(ISO): $(KERNEL) grub/grub.cfg
 # the image installs at /app/<name>/launch alongside a copy of its source.
 # ---------------------------------------------------------------------------
 
-UCFLAGS := -m32 -std=gnu11 -ffreestanding -O2 -g \
+UCFLAGS := -m64 -std=gnu11 -ffreestanding -O2 -g \
            -Wall -Wextra -Wno-unused-parameter \
            -fno-pie -fno-pic -fno-stack-protector -fno-builtin \
            -fno-asynchronous-unwind-tables \
-           -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
+           -mcmodel=small -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
            -Ilib/wkernel/include -Iinclude
-ULDFLAGS := -m elf_i386 -nostdlib -no-pie -z noexecstack
+# No -n here, unlike the kernel: letting the linker page-align the segments
+# keeps text and data in separate LOAD headers, so the loader can account for
+# them separately instead of seeing one merged RWX blob.
+ULDFLAGS := -m elf_x86_64 -nostdlib -no-pie -z noexecstack -z max-page-size=4096
 
 # ---------------------------------------------------------------------------
 # lib/wkernel -- the application API every program links against
@@ -116,7 +126,7 @@ $(BUILD)/lib/%.o: lib/wkernel/src/%.c
 
 $(BUILD)/lib/%.asm.o: lib/wkernel/src/%.S
 	@mkdir -p $(dir $@)
-	$(CC) -m32 -g -Ilib/wkernel/include -Iinclude -MMD -MP -c $< -o $@
+	$(CC) -m64 -g -Ilib/wkernel/include -Iinclude -MMD -MP -c $< -o $@
 
 $(LIBW): $(LIBW_OBJ)
 	@mkdir -p $(dir $@)
@@ -176,7 +186,7 @@ $(DISK): $(MKWFS) $(APP_BINS) $(ROOTFS_SRC) $(APP_SRC)
 	done
 	$(MKWFS) $@ $(DISK_MB) $(ROOTFS)
 
-QEMU := qemu-system-i386
+QEMU := qemu-system-x86_64
 QEMU_FLAGS := -m 256M \
               -cdrom $(ISO) \
               -drive file=$(DISK),format=raw,if=ide,index=0,media=disk \

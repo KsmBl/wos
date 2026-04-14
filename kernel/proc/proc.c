@@ -10,7 +10,7 @@
 #include "kprintf.h"
 #include "gdt.h"
 
-extern void enter_user_mode(uint32_t entry, uint32_t user_stack)
+extern void enter_user_mode(uint64_t entry, uint64_t user_stack)
     __attribute__((noreturn));
 
 static process_t processes[MAX_PROCESSES];
@@ -82,17 +82,24 @@ static void user_thread_start(void)
  * The layout mirrors exactly what switch_context pushes. */
 static void thread_prime_stack(thread_t *t, void (*entry)(void))
 {
-    uint32_t *sp = (uint32_t *)(t->kernel_stack + t->kernel_stack_size);
+    uint64_t *sp = (uint64_t *)(t->kernel_stack + t->kernel_stack_size);
 
-    *--sp = (uint32_t)entry;   /* return address for switch_context's `ret` */
-    *--sp = 0;                 /* ebp    */
-    *--sp = 0;                 /* ebx    */
-    *--sp = 0;                 /* esi    */
-    *--sp = 0;                 /* edi    */
-    *--sp = 0x00000002;        /* eflags: reserved bit set, interrupts off
-                                * until iret loads the user flags           */
+    /* One pad word so that after switch_context's `ret` pops the entry
+     * address, rsp is 8 modulo 16 -- what System V promises a function on
+     * entry. */
+    *--sp = 0;
 
-    t->esp = (uint32_t)sp;
+    *--sp = (uint64_t)entry;   /* return address for switch_context's `ret` */
+    *--sp = 0;                 /* rbp    */
+    *--sp = 0;                 /* rbx    */
+    *--sp = 0;                 /* r12    */
+    *--sp = 0;                 /* r13    */
+    *--sp = 0;                 /* r14    */
+    *--sp = 0;                 /* r15    */
+    *--sp = 0x0000000000000002;/* rflags: reserved bit set, interrupts off
+                                * until iretq loads the user flags          */
+
+    t->rsp = (uint64_t)sp;
 }
 
 void proc_init(void)
@@ -117,7 +124,7 @@ void proc_init(void)
 
     extern uint8_t __boot_stack_top[];
     idle->proc              = &kernel_proc;
-    idle->kernel_stack      = (uint32_t)__boot_stack_top - 16384;
+    idle->kernel_stack      = (uint64_t)__boot_stack_top - 16384;
     idle->kernel_stack_size = 16384;
     idle->state             = THREAD_RUNNING;
 
@@ -133,32 +140,32 @@ void proc_init(void)
  * The layout is the usual one, so crt0 can find its arguments the standard
  * way:   [argc][argv[0]]...[argv[n-1]][NULL][string data]
  */
-static uint32_t setup_user_stack(char *const argv[], uint32_t stack_top)
+static uint64_t setup_user_stack(char *const argv[], uint64_t stack_top)
 {
     int argc = 0;
     while (argv && argv[argc] && argc < MAX_ARGS)
         argc++;
 
-    uint32_t ptrs[MAX_ARGS];
-    uint32_t sp = stack_top;
+    uint64_t ptrs[MAX_ARGS];
+    uint64_t sp = stack_top;
 
     /* The strings go at the very top, growing downwards. */
     for (int i = argc - 1; i >= 0; i--) {
-        uint32_t len = (uint32_t)strlen(argv[i]) + 1;
+        uint64_t len = (uint64_t)strlen(argv[i]) + 1;
         sp -= len;
         memcpy((void *)sp, argv[i], len);
         ptrs[i] = sp;
     }
 
-    sp &= ~3u;                      /* the pointer array must be aligned */
+    sp &= ~15UL;                    /* keep the array 16-byte aligned */
 
-    uint32_t *stack = (uint32_t *)sp;
+    uint64_t *stack = (uint64_t *)sp;
     *--stack = 0;                   /* argv[argc] == NULL */
     for (int i = argc - 1; i >= 0; i--)
         *--stack = ptrs[i];
-    *--stack = (uint32_t)argc;
+    *--stack = (uint64_t)argc;
 
-    return (uint32_t)stack;
+    return (uint64_t)stack;
 }
 
 int32_t proc_spawn(const char *path, char *const argv[], process_t *parent)
@@ -168,7 +175,7 @@ int32_t proc_spawn(const char *path, char *const argv[], process_t *parent)
 
     /* Read the executable while still in the parent's address space. */
     void    *image;
-    uint32_t image_size;
+    uint64_t image_size;
     int r = vfs_read_file(parent, path, &image, &image_size);
     if (r < 0)
         return r;
@@ -220,7 +227,7 @@ int32_t proc_spawn(const char *path, char *const argv[], process_t *parent)
 
     t->proc              = p;
     t->kernel_stack_size = KERNEL_STACK_SIZE;
-    t->kernel_stack      = (uint32_t)kmalloc(KERNEL_STACK_SIZE);
+    t->kernel_stack      = (uint64_t)kmalloc(KERNEL_STACK_SIZE);
     if (!t->kernel_stack) {
         paging_free_addrspace(p->space);
         p->used = false;
@@ -236,13 +243,13 @@ int32_t proc_spawn(const char *path, char *const argv[], process_t *parent)
     addrspace_t *previous = paging_current();
     paging_switch(p->space);
 
-    uint32_t entry = 0;
+    uint64_t entry = 0;
     r = elf_load(p, image, image_size, &entry);
 
     if (r == 0) {
         /* Map the user stack just below USER_STACK_TOP. */
-        for (uint32_t off = 0; off < USER_STACK_SIZE; off += PAGE_SIZE) {
-            uint32_t page = USER_STACK_TOP - USER_STACK_SIZE + off;
+        for (uint64_t off = 0; off < USER_STACK_SIZE; off += PAGE_SIZE) {
+            uint64_t page = USER_STACK_TOP - USER_STACK_SIZE + off;
             if (!paging_map_alloc(p->space, page, PTE_WRITE | PTE_USER, true)) {
                 r = -W_ENOMEM;
                 break;
@@ -251,9 +258,9 @@ int32_t proc_spawn(const char *path, char *const argv[], process_t *parent)
         p->stack_bytes = USER_STACK_SIZE;
     }
 
-    uint32_t user_esp = 0;
+    uint64_t user_rsp = 0;
     if (r == 0)
-        user_esp = setup_user_stack(argv, USER_STACK_TOP);
+        user_rsp = setup_user_stack(argv, USER_STACK_TOP);
 
     paging_switch(previous);
     kfree(image);
@@ -267,14 +274,14 @@ int32_t proc_spawn(const char *path, char *const argv[], process_t *parent)
     }
 
     t->user_entry = entry;
-    t->user_stack = user_esp;
+    t->user_stack = user_rsp;
 
     /* Queueing the thread has to be atomic against the timer IRQ, which walks
      * the same run queue from schedule(). */
     bool interrupts_were_on;
     {
-        uint32_t flags;
-        __asm__ volatile("pushfl; popl %0" : "=r"(flags));
+        uint64_t flags;
+        __asm__ volatile("pushfq; popq %0" : "=r"(flags));
         interrupts_were_on = (flags & 0x200) != 0;
     }
     __asm__ volatile("cli");
@@ -362,36 +369,36 @@ int32_t proc_wait(int32_t pid, int32_t *status)
     }
 }
 
-uint32_t proc_sbrk(int32_t increment)
+uint64_t proc_sbrk(int64_t increment)
 {
     process_t *p = proc_current();
-    uint32_t   old = p->heap_break;
+    uint64_t   old = p->heap_break;
 
     if (increment == 0)
         return old;
 
     if (increment > 0) {
-        uint32_t new_break = old + (uint32_t)increment;
+        uint64_t new_break = old + (uint64_t)increment;
 
         /* Do not let the heap grow into the stack. */
         if (new_break > USER_STACK_TOP - USER_STACK_SIZE)
-            return (uint32_t)-1;
+            return (uint64_t)-1;
 
-        for (uint32_t page = ALIGN_UP(old, PAGE_SIZE);
+        for (uint64_t page = ALIGN_UP(old, PAGE_SIZE);
              page < ALIGN_UP(new_break, PAGE_SIZE); page += PAGE_SIZE) {
             if (paging_translate(p->space, page))
                 continue;
             if (!paging_map_alloc(p->space, page, PTE_WRITE | PTE_USER, true))
-                return (uint32_t)-1;
+                return (uint64_t)-1;
         }
         p->heap_break = new_break;
     } else {
-        uint32_t shrink = (uint32_t)(-increment);
+        uint64_t shrink = (uint64_t)(-increment);
         if (shrink > old - p->heap_start)
-            return (uint32_t)-1;
+            return (uint64_t)-1;
 
-        uint32_t new_break = old - shrink;
-        for (uint32_t page = ALIGN_UP(new_break, PAGE_SIZE);
+        uint64_t new_break = old - shrink;
+        for (uint64_t page = ALIGN_UP(new_break, PAGE_SIZE);
              page < ALIGN_UP(old, PAGE_SIZE); page += PAGE_SIZE)
             paging_unmap(p->space, page);
 

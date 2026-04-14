@@ -1,8 +1,8 @@
-/* Interrupt stubs.
+/* Interrupt stubs, x86-64.
  *
- * The CPU pushes a different amount of state depending on the vector and on
- * whether a privilege change happened.  These stubs normalise that: after the
- * common tail runs, the stack always holds a complete `regs_t`.
+ * The CPU pushes a different amount of state depending on the vector.  These
+ * stubs normalise that: after the common tail runs, the stack always holds a
+ * complete `regs_t`.
  *
  * For vectors that push an error code the CPU has already done it; for the
  * rest we push a zero so the layout matches.
@@ -13,8 +13,8 @@
 .global isr\n
 .type isr\n, @function
 isr\n:
-    pushl $0
-    pushl $\n
+    pushq $0
+    pushq $\n
     jmp   int_common
 .endm
 
@@ -23,7 +23,7 @@ isr\n:
 .global isr\n
 .type isr\n, @function
 isr\n:
-    pushl $\n
+    pushq $\n
     jmp   int_common
 .endm
 
@@ -46,39 +46,59 @@ isr\n:
 ISR_NOERR 128
 
 int_common:
-    pusha                        /* eax ecx edx ebx esp ebp esi edi */
-    movl  %ds, %eax
-    pushl %eax                   /* save the caller's data segment  */
+    /* No pusha in long mode: push the fifteen registers by hand, in the
+     * order regs_t expects to find them. */
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
 
-    movw  $0x10, %ax             /* SEL_KDATA: kernel data segments */
-    movw  %ax, %ds
-    movw  %ax, %es
-    movw  %ax, %fs
-    movw  %ax, %gs
+    /* Segment registers are vestigial in long mode and the CPU has already
+     * loaded the kernel's on entry, so there is nothing to switch here. */
 
-    pushl %esp                   /* regs_t * argument               */
-    call  interrupt_dispatch
-    addl  $4, %esp
+    movq %rsp, %rdi                  /* regs_t * as the first argument */
+    call interrupt_dispatch
 
-    popl  %eax                   /* restore the caller's segments   */
-    movw  %ax, %ds
-    movw  %ax, %es
-    movw  %ax, %fs
-    movw  %ax, %gs
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rbp
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
+    popq %rbx
+    popq %rax
 
-    popa
-    addl  $8, %esp               /* discard int_no and err_code     */
-    iret
+    addq $16, %rsp                   /* discard int_no and err_code */
+    iretq
 
 /* A table of every stub, indexed by vector, so idt_init() can install them
  * in a loop instead of naming 49 externs. Index 48 is the syscall stub. */
 .section .rodata
+.align 8
 .global isr_stub_table
 isr_stub_table:
 .irp n, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
-    .long isr\n
+    .quad isr\n
 .endr
 .irp n, 32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47
-    .long isr\n
+    .quad isr\n
 .endr
-    .long isr128
+    .quad isr128

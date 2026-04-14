@@ -48,7 +48,7 @@ static void sink_pad(struct sink *s, int count, char pad)
 
 /* Render an unsigned value into `buf` (written backwards) and return its
  * length; the caller emits it with whatever padding applies. */
-static int render_uint(char *buf, unsigned int value, unsigned int base,
+static int render_uint(char *buf, unsigned long value, unsigned long base,
                        int upper)
 {
     static const char lower_digits[] = "0123456789abcdef";
@@ -93,7 +93,7 @@ static void emit_number(struct sink *s, const char *rev, int len,
 
 static void format(struct sink *s, const char *fmt, va_list ap)
 {
-    char rev[32];
+    char rev[72];
 
     while (*fmt) {
         if (*fmt != '%') {
@@ -112,6 +112,8 @@ static void format(struct sink *s, const char *fmt, va_list ap)
             else                  break;
         }
 
+        int is_long = 0;
+
         if (*fmt == '*') {
             width = va_arg(ap, int);
             if (width < 0) {
@@ -124,34 +126,39 @@ static void format(struct sink *s, const char *fmt, va_list ap)
                 width = width * 10 + (*fmt++ - '0');
         }
 
+        /* Length modifiers. 'z' is here because wsize_t is 64-bit. */
+        while (*fmt == 'l' || *fmt == 'z') {
+            is_long = 1;
+            fmt++;
+        }
+
         switch (*fmt++) {
         case 'd':
         case 'i': {
-            int v = va_arg(ap, int);
-            unsigned int mag = (v < 0) ? (unsigned int)(-(long long)v)
-                                       : (unsigned int)v;
+            long v = is_long ? va_arg(ap, long) : (long)va_arg(ap, int);
+            unsigned long mag = (v < 0) ? -(unsigned long)v : (unsigned long)v;
             int len = render_uint(rev, mag, 10, 0);
             emit_number(s, rev, len, (v < 0) ? "-" : NULL, width, left, pad);
             break;
         }
         case 'u': {
-            int len = render_uint(rev, va_arg(ap, unsigned int), 10, 0);
+            unsigned long v = is_long ? va_arg(ap, unsigned long)
+                                      : (unsigned long)va_arg(ap, unsigned int);
+            int len = render_uint(rev, v, 10, 0);
             emit_number(s, rev, len, NULL, width, left, pad);
             break;
         }
-        case 'x': {
-            int len = render_uint(rev, va_arg(ap, unsigned int), 16, 0);
-            emit_number(s, rev, len, NULL, width, left, pad);
-            break;
-        }
+        case 'x':
         case 'X': {
-            int len = render_uint(rev, va_arg(ap, unsigned int), 16, 1);
+            unsigned long v = is_long ? va_arg(ap, unsigned long)
+                                      : (unsigned long)va_arg(ap, unsigned int);
+            int len = render_uint(rev, v, 16, fmt[-1] == 'X');
             emit_number(s, rev, len, NULL, width, left, pad);
             break;
         }
         case 'p': {
-            int len = render_uint(rev, (unsigned int)va_arg(ap, void *), 16, 0);
-            while (len < 8)
+            int len = render_uint(rev, (unsigned long)va_arg(ap, void *), 16, 0);
+            while (len < 16)
                 rev[len++] = '0';
             emit_number(s, rev, len, "0x", width, left, ' ');
             break;
@@ -262,7 +269,7 @@ int wgetline(char *buf, wsize_t size)
  * wrapping -- it just silently prints the wrong number. */
 #define WHUMAN_SLOTS 8
 
-const char *whuman(unsigned int bytes)
+const char *whuman(unsigned long bytes)
 {
     static const char units[] = { 'B', 'K', 'M', 'G' };
     static char slots[WHUMAN_SLOTS][16];
@@ -271,8 +278,8 @@ const char *whuman(unsigned int bytes)
     char *buf = slots[next];
     next = (next + 1) % WHUMAN_SLOTS;
 
-    unsigned int whole = bytes;
-    unsigned int frac  = 0;
+    unsigned long whole = bytes;
+    unsigned long frac  = 0;
     int unit = 0;
 
     while (whole >= 1024 && unit < 3) {
@@ -282,9 +289,9 @@ const char *whuman(unsigned int bytes)
     }
 
     if (unit == 0)
-        wsnprintf(buf, sizeof(slots[0]), "%uB", whole);
+        wsnprintf(buf, sizeof(slots[0]), "%luB", whole);
     else
-        wsnprintf(buf, sizeof(slots[0]), "%u.%u%c", whole, frac, units[unit]);
+        wsnprintf(buf, sizeof(slots[0]), "%lu.%lu%c", whole, frac, units[unit]);
 
     return buf;
 }

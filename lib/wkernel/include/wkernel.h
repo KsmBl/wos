@@ -37,7 +37,8 @@
 #define NULL ((void *)0)
 #endif
 
-typedef unsigned int wsize_t;
+/* LP64: pointers and sizes are 64-bit. */
+typedef unsigned long wsize_t;
 
 /* ==================================================================== *
  *  Files
@@ -621,7 +622,7 @@ int wgetline(char *buf, wsize_t size);
  *         earliest one is overwritten and prints the wrong value.
  *         Not reentrant.
  */
-const char *whuman(unsigned int bytes);
+const char *whuman(unsigned long bytes);
 
 /**
  * Turn an error code into a readable message.

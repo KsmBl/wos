@@ -49,17 +49,17 @@ typedef struct thread {
     thread_state_t  state;
     wait_reason_t   wait_reason;
 
-    uint32_t        kernel_stack;      /* base of the allocation      */
-    uint32_t        kernel_stack_size;
-    uint32_t        esp;               /* saved kernel esp while off-CPU */
+    uint64_t        kernel_stack;      /* base of the allocation      */
+    uint64_t        kernel_stack_size;
+    uint64_t        rsp;               /* saved kernel rsp while off-CPU */
 
     /* Where this thread should start in ring 3.  Held per thread rather than
      * in a global, because the thread does not run until the scheduler picks
      * it and another spawn could happen in between. */
-    uint32_t        user_entry;
-    uint32_t        user_stack;
+    uint64_t        user_entry;
+    uint64_t        user_stack;
 
-    uint32_t        cpu_ticks;
+    uint64_t        cpu_ticks;
     struct thread  *next;              /* run queue link */
 } thread_t;
 
@@ -76,11 +76,11 @@ typedef struct process {
     file_t       fds[MAX_OPEN_FILES];
 
     /* Memory accounting, in bytes. */
-    uint32_t     code_bytes;
-    uint32_t     data_bytes;
-    uint32_t     stack_bytes;
-    uint32_t     heap_start;           /* page-aligned, just past the image */
-    uint32_t     heap_break;           /* current top of the heap           */
+    uint64_t     code_bytes;
+    uint64_t     data_bytes;
+    uint64_t     stack_bytes;
+    uint64_t     heap_start;           /* page-aligned, just past the image */
+    uint64_t     heap_break;           /* current top of the heap           */
 
     struct process *parent;
     bool         exited;
@@ -115,7 +115,7 @@ int32_t proc_wait(int32_t pid, int32_t *status);
 
 /* Grow or shrink the calling process's heap by `increment` bytes.
  * Returns the previous break, or (uint32_t)-1 on failure. */
-uint32_t proc_sbrk(int32_t increment);
+uint64_t proc_sbrk(int64_t increment);
 
 /* Fill in the memory statistics for a process / thread. */
 void proc_meminfo(const process_t *p, wprocmem_t *out);

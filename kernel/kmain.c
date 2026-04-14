@@ -42,17 +42,16 @@ static const char *mmap_type_name(uint32_t type)
     }
 }
 
-/* Dump the E820 memory map GRUB collected, and return the total usable bytes.
- * Regions above 4 GiB cannot be addressed by this 32-bit kernel and are
- * clamped away here rather than silently overflowing. */
-static uint32_t print_memory_map(const struct multiboot_info *mbi)
+/* Dump the E820 memory map GRUB collected, and return the total usable
+ * bytes. */
+static uint64_t print_memory_map(const struct multiboot_info *mbi)
 {
     if (!(mbi->flags & MB_FLAG_MMAP)) {
         kprintf("  (no memory map provided by the bootloader)\n");
         return 0;
     }
 
-    uint32_t usable = 0;
+    uint64_t usable = 0;
     uintptr_t cur = mbi->mmap_addr;
     uintptr_t end = mbi->mmap_addr + mbi->mmap_length;
 
@@ -60,24 +59,13 @@ static uint32_t print_memory_map(const struct multiboot_info *mbi)
         const struct multiboot_mmap_entry *e =
             (const struct multiboot_mmap_entry *)cur;
 
-        /* Anything starting at or above 4 GiB is unreachable for us. */
-        bool addressable = (e->addr >> 32) == 0;
-        uint32_t base = addressable ? (uint32_t)e->addr : 0xFFFFFFFFu;
-        uint32_t len;
-
-        if (!addressable) {
-            len = 0;
-        } else if ((e->len >> 32) != 0 || base + (uint32_t)e->len < base) {
-            len = 0xFFFFFFFFu - base;   /* clamp to the top of the address space */
-        } else {
-            len = (uint32_t)e->len;
-        }
-
-        kprintf("  %p - %p  %s\n", (void *)base, (void *)(base + len),
-                mmap_type_name(e->type));
+        /* A 64-bit kernel can address every region the firmware reports, so
+         * unlike the 32-bit version there is nothing to clamp away. */
+        kprintf("  %p - %p  %s\n", (void *)(uintptr_t)e->addr,
+                (void *)(uintptr_t)(e->addr + e->len), mmap_type_name(e->type));
 
         if (e->type == MB_MEMORY_AVAILABLE)
-            usable += len;
+            usable += e->len;
 
         cur += e->size + sizeof(uint32_t);   /* size excludes its own field */
     }
@@ -99,17 +87,17 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
         panic("bad multiboot magic %08x (expected %08x)",
               magic, MULTIBOOT_BOOTLOADER_MAGIC);
 
-    uint32_t ksize = (uint32_t)(__kernel_end - __kernel_start);
+    uint64_t ksize = (uint64_t)(__kernel_end - __kernel_start);
     kprintf("kernel : %p - %p (%s)\n",
             (void *)__kernel_start, (void *)__kernel_end, fmt_bytes(ksize));
 
     if (mbi->flags & MB_FLAG_MEM)
         kprintf("memory : %s low, %s high\n",
-                fmt_bytes(mbi->mem_lower * 1024u),
-                fmt_bytes(mbi->mem_upper * 1024u));
+                fmt_bytes((uint64_t)mbi->mem_lower * 1024),
+                fmt_bytes((uint64_t)mbi->mem_upper * 1024));
 
     kputs("memory map:\n");
-    uint32_t usable = print_memory_map(mbi);
+    uint64_t usable = print_memory_map(mbi);
     kprintf("usable : %s\n", fmt_bytes(usable));
 
     /* Descriptor tables first: nothing else can fault safely until the IDT
@@ -134,7 +122,7 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     /* Memory comes up after interrupts so a fault during initialisation is
      * reported rather than silently rebooting the machine. */
     pmm_init(mbi);
-    kprintf("pmm    : %s usable in %u frames\n",
+    kprintf("pmm    : %s usable in %lu frames\n",
             fmt_bytes(pmm_total_bytes()), pmm_total_bytes() / PAGE_SIZE);
 
     kheap_init(pmm_heap_base(), KHEAP_SIZE);
@@ -148,7 +136,7 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     if (ata_init()) {
         uint32_t sectors = ata_sector_count();
         kprintf("ata    : primary master, %u sectors (%s)\n",
-                sectors, fmt_bytes(sectors * 512u));
+                sectors, fmt_bytes((uint64_t)sectors * 512));
     } else {
         kputs("ata    : no drive on the primary bus\n");
     }

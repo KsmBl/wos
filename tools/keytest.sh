@@ -128,7 +128,7 @@ emit_script() {
 PPM=$(pwd)/build/screen.ppm
 
 rm -f "$LOG" "$PPM"
-emit_script "$@" | timeout "$LIMIT" qemu-system-i386 -m 256M \
+emit_script "$@" | timeout "$LIMIT" qemu-system-x86_64 -m 256M \
     -cdrom build/wos.iso \
     -drive file=build/wos.img,format=raw,if=ide,index=0,media=disk \
     -boot d -no-reboot \

@@ -12,17 +12,17 @@
 
 struct block {
     uint32_t      magic;
-    uint32_t      size;      /* payload bytes, excluding this header */
+    uint64_t      size;      /* payload bytes, excluding this header */
     bool          free;
     struct block *next;
     struct block *prev;
 };
 
 static struct block *heap_head;
-static uint32_t      heap_total;
-static uint32_t      heap_used;   /* payload bytes handed out */
+static uint64_t      heap_total;
+static uint64_t      heap_used;   /* payload bytes handed out */
 
-void kheap_init(uint32_t base, uint32_t size)
+void kheap_init(uint64_t base, uint64_t size)
 {
     heap_head  = (struct block *)base;
     heap_total = size;
@@ -77,7 +77,7 @@ void *kzalloc(size_t size)
     if (p) {
         /* The block header records the real (possibly rounded up) size. */
         struct block *b = (struct block *)p - 1;
-        for (uint32_t i = 0; i < b->size; i++)
+        for (uint64_t i = 0; i < b->size; i++)
             p[i] = 0;
     }
     return p;
@@ -117,6 +117,6 @@ void kfree(void *ptr)
         coalesce_with_next(b->prev);
 }
 
-uint32_t kheap_used_bytes(void)  { return heap_used; }
-uint32_t kheap_total_bytes(void) { return heap_total; }
-uint32_t kheap_free_bytes(void)  { return heap_total - heap_used; }
+uint64_t kheap_used_bytes(void)  { return heap_used; }
+uint64_t kheap_total_bytes(void) { return heap_total; }
+uint64_t kheap_free_bytes(void)  { return heap_total - heap_used; }

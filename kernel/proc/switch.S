@@ -1,65 +1,70 @@
-/* Context switching and the ring 3 entry gate. */
+/* Context switching and the ring 3 entry gate, x86-64. */
 
 .section .text
 
-/* void switch_context(uint32_t *save_esp, uint32_t new_esp);
+/* void switch_context(uint64_t *save_rsp, uint64_t new_rsp);
  *
  * Saves the callee-saved registers and the flags on the current kernel stack,
- * records the resulting esp through `save_esp`, then adopts `new_esp` and
+ * records the resulting rsp through `save_rsp`, then adopts `new_rsp` and
  * unwinds the mirror image of that state.  The `ret` at the end therefore
  * returns into whatever the *other* thread was doing when it switched out.
  *
+ * System V passes the arguments in rdi and rsi, so unlike the 32-bit version
+ * there is no stack arithmetic to get wrong.
+ *
  * A brand new thread has its stack primed by hand to look exactly like a
- * thread that had switched out, with the return address pointing at its
- * entry trampoline -- see thread_prime_stack() in proc.c.
+ * thread that had switched out, with the return address pointing at its entry
+ * trampoline -- see thread_prime_stack() in proc.c.
  */
 .global switch_context
 .type switch_context, @function
 switch_context:
-    pushl %ebp
-    pushl %ebx
-    pushl %esi
-    pushl %edi
-    pushfl
+    pushq %rbp
+    pushq %rbx
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    pushfq
 
-    /* Five dwords pushed, so the arguments sit 20 bytes further up than
-     * they did on entry. */
-    movl  24(%esp), %eax        /* save_esp */
-    movl  %esp, (%eax)
-    movl  28(%esp), %esp        /* new_esp  */
+    movq %rsp, (%rdi)           /* save_rsp */
+    movq %rsi, %rsp             /* new_rsp  */
 
-    popfl
-    popl  %edi
-    popl  %esi
-    popl  %ebx
-    popl  %ebp
+    popfq
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %rbx
+    popq %rbp
     ret
 .size switch_context, . - switch_context
 
-/* void enter_user_mode(uint32_t entry, uint32_t user_stack);
+/* void enter_user_mode(uint64_t entry, uint64_t user_stack);
  *
  * Drops to ring 3.  There is no instruction that just lowers the privilege
  * level, so we forge the stack frame an interrupt would have pushed on entry
- * from ring 3 and let iret consume it on the way back out.
+ * from ring 3 and let iretq consume it on the way back out.
  */
 .global enter_user_mode
 .type enter_user_mode, @function
 enter_user_mode:
-    movl  4(%esp), %ecx         /* entry point      */
-    movl  8(%esp), %edx         /* user stack top   */
+    movq %rdi, %rcx             /* entry point    */
+    movq %rsi, %rdx             /* user stack top */
 
-    /* Load the ring 3 data selector into every data segment. */
-    movw  $0x23, %ax
-    movw  %ax, %ds
-    movw  %ax, %es
-    movw  %ax, %fs
-    movw  %ax, %gs
+    /* Long mode ignores the data segment bases, but the selectors still have
+     * to name a ring 3 descriptor rather than whatever was loaded before. */
+    movw $0x1B, %ax             /* SEL_UDATA */
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
 
-    pushl $0x23                 /* ss     : user data, RPL 3            */
-    pushl %edx                  /* esp    : top of the user stack       */
-    pushl $0x202                /* eflags : reserved bit + IF, so the
+    pushq $0x1B                 /* ss     : user data, RPL 3            */
+    pushq %rdx                  /* rsp    : top of the user stack       */
+    pushq $0x202                /* rflags : reserved bit + IF, so the
                                  *          process can be preempted    */
-    pushl $0x1B                 /* cs     : user code, RPL 3            */
-    pushl %ecx                  /* eip    : the program's entry point   */
-    iret
+    pushq $0x23                 /* cs     : user code, RPL 3            */
+    pushq %rcx                  /* rip    : the program's entry point   */
+    iretq
 .size enter_user_mode, . - enter_user_mode

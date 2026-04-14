@@ -58,6 +58,6 @@ int vfs_getcwd(struct process *p, char *buf, uint32_t size);
 /* Read a whole file into a freshly kmalloc'd buffer.  The caller owns the
  * buffer and must kfree it.  Used by the program loader. */
 int vfs_read_file(struct process *p, const char *path, void **data_out,
-                  uint32_t *size_out);
+                  uint64_t *size_out);
 
 #endif /* WOS_VFS_H */

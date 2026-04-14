@@ -31,23 +31,25 @@ void register_interrupt_handler(uint8_t n, interrupt_handler_t handler)
 
 void dump_regs(const regs_t *regs)
 {
-    uint32_t cr2, cr3;
+    uint64_t cr2, cr3;
     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
 
-    kprintf("  eax=%08x ebx=%08x ecx=%08x edx=%08x\n",
-            regs->eax, regs->ebx, regs->ecx, regs->edx);
-    kprintf("  esi=%08x edi=%08x ebp=%08x  ds=%08x\n",
-            regs->esi, regs->edi, regs->ebp, regs->ds);
-    kprintf("  eip=%08x  cs=%08x efl=%08x err=%08x\n",
-            regs->eip, regs->cs, regs->eflags, regs->err_code);
-    kprintf("  cr2=%08x cr3=%08x\n", cr2, cr3);
-
-    /* useresp/ss are only pushed when the interrupt crossed a privilege
-     * boundary; CS's low two bits say whether that happened. */
-    if ((regs->cs & 3) != 0)
-        kprintf("  esp=%08x  ss=%08x (from ring %u)\n",
-                regs->useresp, regs->ss, regs->cs & 3);
+    kprintf("  rax=%016lx rbx=%016lx rcx=%016lx\n",
+            regs->rax, regs->rbx, regs->rcx);
+    kprintf("  rdx=%016lx rsi=%016lx rdi=%016lx\n",
+            regs->rdx, regs->rsi, regs->rdi);
+    kprintf("  rbp=%016lx  r8=%016lx  r9=%016lx\n",
+            regs->rbp, regs->r8, regs->r9);
+    kprintf("  r10=%016lx r11=%016lx r12=%016lx\n",
+            regs->r10, regs->r11, regs->r12);
+    kprintf("  r13=%016lx r14=%016lx r15=%016lx\n",
+            regs->r13, regs->r14, regs->r15);
+    kprintf("  rip=%016lx  cs=%04lx rflags=%016lx\n",
+            regs->rip, regs->cs, regs->rflags);
+    kprintf("  rsp=%016lx  ss=%04lx err=%lx (ring %lu)\n",
+            regs->rsp, regs->ss, regs->err_code, regs->cs & 3);
+    kprintf("  cr2=%016lx cr3=%016lx\n", cr2, cr3);
 }
 
 /* Called from int_common in isr.S with a pointer to the saved state. */
@@ -68,7 +70,7 @@ void interrupt_dispatch(regs_t *regs)
         handler(regs);
     } else if (regs->int_no < 32) {
         /* No handler for a CPU exception: nothing can sensibly continue. */
-        kprintf("\nunhandled exception %u: %s\n",
+        kprintf("\nunhandled exception %lu: %s\n",
                 regs->int_no, exception_name(regs->int_no));
         dump_regs(regs);
         panic("unhandled CPU exception");

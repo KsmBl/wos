@@ -2,9 +2,10 @@
 
 A small operating system written from scratch in C, bootable under QEMU.
 
-WOS is a 32-bit x86 kernel with paging, preemptive multitasking, ring-3
-processes, a persistent filesystem on a real disk, and a documented application
-API (`wkernel`). Its first application is a shell called **whell**.
+WOS is an x86-64 kernel that boots itself into long mode, with 4-level paging,
+preemptive multitasking, ring-3 processes, a persistent filesystem on a real
+disk, and a documented application API (`wkernel`). Its first application is a
+shell called **whell**.
 
 ## Quick start
 
@@ -15,10 +16,13 @@ make log      # boot headless for a few seconds and dump the serial log
 make clean
 ```
 
-Requirements: `gcc` with 32-bit multilib, `binutils`, `grub-mkrescue` with the
-`i386-pc` platform modules, `xorriso`, `mtools` and `qemu-system-i386`.
-**No cross-compiler and no nasm are needed** — the host `gcc -m32` builds the
+Requirements: `gcc`, `binutils`, `grub-mkrescue` with the `i386-pc` platform
+modules, `xorriso`, `mtools` and `qemu-system-x86_64`.
+**No cross-compiler and no nasm are needed** — the host `gcc -m64` builds the
 freestanding kernel and GAS assembles the `.S` files.
+
+The CPU must support long mode. One that does not gets a legible message rather
+than a triple fault; see [`docs/architecture.md`](docs/architecture.md).
 
 ## Layout
 
@@ -57,9 +61,10 @@ hello: RAM 250.5M free of 255.8M (kernel holds 5.1M)
 hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 ```
 
-- A 32-bit x86 kernel: paging with a per-process address space, a preemptive
-  round-robin scheduler, ring-3 processes loaded from ELF binaries, and
-  `int 0x80` syscalls with every user pointer validated.
+- An x86-64 kernel: a 32-bit Multiboot stub checks CPUID for long mode and
+  jumps into 64-bit, then four-level paging with a per-process address space, a
+  preemptive round-robin scheduler, ring-3 processes loaded from ELF64
+  binaries, and `int 0x80` syscalls with every user pointer validated.
 - **WFS**, a filesystem on a real disk image — reads and writes persist across
   reboots, and the disk figures come from its block bitmap.
 - **wkernel**, the documented application API: file and directory I/O, memory

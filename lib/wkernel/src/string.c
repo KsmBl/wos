@@ -89,7 +89,7 @@ void *memcpy(void *dst, const void *src, wsize_t n)
     unsigned char       *d = dst;
     const unsigned char *s = src;
 
-    if (((unsigned int)d % 4) == 0 && ((unsigned int)s % 4) == 0) {
+    if (((unsigned long)d % 4) == 0 && ((unsigned long)s % 4) == 0) {
         unsigned int       *d4 = (unsigned int *)d;
         const unsigned int *s4 = (const unsigned int *)s;
         while (n >= 4) {
@@ -132,7 +132,7 @@ void *memset(void *dst, int c, wsize_t n)
     unsigned char *d = dst;
     unsigned char  v = (unsigned char)c;
 
-    if (((unsigned int)d % 4) == 0) {
+    if (((unsigned long)d % 4) == 0) {
         unsigned int  word = (unsigned int)v * 0x01010101u;
         unsigned int *d4   = (unsigned int *)d;
         while (n >= 4) {

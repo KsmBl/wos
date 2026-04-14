@@ -10,7 +10,7 @@
 #include "isr.h"
 #include "kprintf.h"
 
-extern void switch_context(uint32_t *save_esp, uint32_t new_esp);
+extern void switch_context(uint64_t *save_rsp, uint64_t new_rsp);
 
 static thread_t *run_queue;       /* circular, may be NULL before init */
 static thread_t *current;
@@ -117,7 +117,7 @@ void schedule(void)
     if (next->proc && next->proc->space)
         paging_switch(next->proc->space);
 
-    switch_context(&prev->esp, next->esp);
+    switch_context(&prev->rsp, next->rsp);
 }
 
 void sched_yield(void)

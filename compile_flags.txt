@@ -1,7 +1,9 @@
--m32
+-m64
 -ffreestanding
 -fno-pie
 -fno-stack-protector
+-mcmodel=small
+-mno-red-zone
 -std=gnu11
 -Wall
 -Wextra
