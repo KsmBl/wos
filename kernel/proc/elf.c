@@ -9,51 +9,51 @@
 
 /* Reject anything we cannot actually run, with a specific reason: a silent
  * failure here looks identical to a broken scheduler from the outside. */
-static int elf_validate(const Elf32_Ehdr *eh, uint32_t size)
+static int elf_validate(const Elf64_Ehdr *eh, uint64_t size)
 {
-    if (size < sizeof(Elf32_Ehdr))
+    if (size < sizeof(Elf64_Ehdr))
         return -W_ENOEXEC;
 
     if (eh->e_ident[0] != 0x7F || eh->e_ident[1] != 'E' ||
         eh->e_ident[2] != 'L'  || eh->e_ident[3] != 'F')
         return -W_ENOEXEC;
 
-    if (eh->e_ident[EI_CLASS] != ELFCLASS32 ||
+    if (eh->e_ident[EI_CLASS] != ELFCLASS64 ||
         eh->e_ident[EI_DATA]  != ELFDATA2LSB)
         return -W_ENOEXEC;
 
-    if (eh->e_type != ET_EXEC || eh->e_machine != EM_386)
+    if (eh->e_type != ET_EXEC || eh->e_machine != EM_X86_64)
         return -W_ENOEXEC;
 
     if (eh->e_phoff == 0 || eh->e_phnum == 0 ||
-        eh->e_phentsize != sizeof(Elf32_Phdr))
+        eh->e_phentsize != sizeof(Elf64_Phdr))
         return -W_ENOEXEC;
 
-    if (eh->e_phoff + (uint32_t)eh->e_phnum * eh->e_phentsize > size)
+    if (eh->e_phoff + (uint64_t)eh->e_phnum * eh->e_phentsize > size)
         return -W_ENOEXEC;
 
     return 0;
 }
 
-int elf_load(struct process *proc, const void *image, uint32_t size,
-             uint32_t *entry_out)
+int elf_load(struct process *proc, const void *image, uint64_t size,
+             uint64_t *entry_out)
 {
-    const Elf32_Ehdr *eh = image;
+    const Elf64_Ehdr *eh = image;
 
     int r = elf_validate(eh, size);
     if (r < 0)
         return r;
 
-    const Elf32_Phdr *ph = (const Elf32_Phdr *)((const uint8_t *)image + eh->e_phoff);
-    uint32_t highest = 0;
+    const Elf64_Phdr *ph = (const Elf64_Phdr *)((const uint8_t *)image + eh->e_phoff);
+    uint64_t highest = 0;
 
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
         if (ph[i].p_type != PT_LOAD || ph[i].p_memsz == 0)
             continue;
 
-        uint32_t vaddr = ph[i].p_vaddr;
-        uint32_t memsz = ph[i].p_memsz;
-        uint32_t filesz = ph[i].p_filesz;
+        uint64_t vaddr = ph[i].p_vaddr;
+        uint64_t memsz = ph[i].p_memsz;
+        uint64_t filesz = ph[i].p_filesz;
 
         /* Keep the program out of kernel space and out of the stack region. */
         if (vaddr < USER_BASE || vaddr + memsz > USER_STACK_TOP - USER_STACK_SIZE)
@@ -61,10 +61,10 @@ int elf_load(struct process *proc, const void *image, uint32_t size,
         if (filesz > memsz || ph[i].p_offset + filesz > size)
             return -W_ENOEXEC;
 
-        uint32_t start = ALIGN_DOWN(vaddr, PAGE_SIZE);
-        uint32_t end   = ALIGN_UP(vaddr + memsz, PAGE_SIZE);
+        uint64_t start = ALIGN_DOWN(vaddr, PAGE_SIZE);
+        uint64_t end   = ALIGN_UP(vaddr + memsz, PAGE_SIZE);
 
-        for (uint32_t page = start; page < end; page += PAGE_SIZE) {
+        for (uint64_t page = start; page < end; page += PAGE_SIZE) {
             if (paging_translate(proc->space, page))
                 continue;      /* two segments sharing a page */
 

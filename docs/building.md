@@ -4,19 +4,22 @@
 
 | Tool | Why |
 |---|---|
-| `gcc` with 32-bit multilib | builds the kernel, the library and the applications |
-| `binutils` | `ld` must be able to emit `elf_i386`; `ar` builds the library |
+| `gcc` | builds the kernel, the library and the applications |
+| `binutils` | `ld` must be able to emit `elf_x86_64`; `ar` builds the library |
 | `grub-mkrescue` with the `i386-pc` platform | makes the bootable ISO |
 | `xorriso`, `mtools` | used by `grub-mkrescue` |
-| `qemu-system-i386` | runs it |
+| `qemu-system-x86_64` | runs it |
 
-**No cross-compiler and no nasm are needed.** The host `gcc -m32` builds
-freestanding 32-bit code and GAS assembles the `.S` files.
+**No cross-compiler and no nasm are needed.** The host `gcc -m64` builds
+freestanding 64-bit code and GAS assembles the `.S` files.
+
+The target CPU must support long mode. Every x86-64 processor does, and so does
+QEMU's default model.
 
 Check the toolchain with:
 
 ```sh
-echo 'int main(void){return 0;}' > /tmp/t.c && gcc -m32 -c /tmp/t.c -o /tmp/t.o
+echo 'int main(void){return 0;}' > /tmp/t.c && gcc -m64 -c /tmp/t.c -o /tmp/t.o
 ls /usr/lib/grub/i386-pc >/dev/null && echo "grub i386-pc present"
 ```
 
@@ -69,7 +72,7 @@ The kernel is built with `-g`, so symbols and source line numbers work.
 For a fault so early that nothing prints, ask QEMU what the CPU did:
 
 ```sh
-qemu-system-i386 -cdrom build/wos.iso -d int,cpu_reset -no-reboot -display none
+qemu-system-x86_64 -cdrom build/wos.iso -d int,cpu_reset -no-reboot -display none
 ```
 
 Otherwise the serial log is the first place to look: everything the kernel
@@ -84,6 +87,8 @@ hard to diagnose:
 | Flag | Why |
 |---|---|
 | `-fno-pie -fno-pic`, `ld -no-pie` | this host's gcc defaults to PIE, and a position-independent kernel triple-faults immediately at 1 MiB |
+| `-mno-red-zone` | not optional in a kernel: an interrupt would otherwise land on the 128 bytes below `rsp` that a leaf function assumes are its own |
+| `-mcmodel=small` | holds because the whole kernel sits inside the identity-mapped first 1 GiB, so every symbol address fits in 32 bits |
 | `-mno-sse -mno-sse2 -mno-mmx -mno-80387` | the kernel never enables those units, so any instruction gcc emits for them faults |
 | `-ffreestanding`, plus our own `memcpy`/`memset`/`memmove`/`memcmp` | gcc emits calls to those four for struct assignment even when freestanding, so they must exist under exactly those names |
 
@@ -118,7 +123,8 @@ make log        # "this is boot number 3"
    `int main(int argc, char **argv)`.
 3. `make`
 
-It is compiled, linked against `libwkernel.a` at `0x40000000`, and installed at
+It is compiled as an ELF64 binary, linked against `libwkernel.a` at
+`0x40000000`, and installed at
 `/app/<name>/launch`. In whell, type `<name>` to run it.
 
 `app/hello/sourcecode/hello.c` is a worked example that exercises most of the

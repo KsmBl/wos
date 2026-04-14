@@ -1,43 +1,57 @@
 /* Raw syscall entry, internal to lib/wkernel.
  *
- * The kernel takes the call number in eax and up to three arguments in ebx,
- * ecx and edx, and returns the result in eax.  "memory" clobbers keep the
- * compiler from caching anything the kernel may have written through a
- * pointer we passed it.
+ * The kernel takes the call number in rax and up to three arguments in the
+ * System V argument registers rdi, rsi and rdx, and returns the result in rax.
+ *
+ * rcx and r11 are listed as clobbered because that is what the syscall
+ * instruction would destroy; int 0x80 does not, but declaring it costs
+ * nothing and keeps the wrappers correct if the entry mechanism ever changes.
+ *
+ * "memory" clobbers keep the compiler from caching anything the kernel may
+ * have written through a pointer we passed it.
  */
 #ifndef WKERNEL_SYSCALL_H
 #define WKERNEL_SYSCALL_H
 
 #include "wabi.h"
 
-static inline int wsyscall0(int n)
+static inline long wsyscall0(long n)
 {
-    int r;
-    __asm__ volatile("int $0x80" : "=a"(r) : "a"(n) : "memory");
-    return r;
-}
-
-static inline int wsyscall1(int n, int a)
-{
-    int r;
-    __asm__ volatile("int $0x80" : "=a"(r) : "a"(n), "b"(a) : "memory");
-    return r;
-}
-
-static inline int wsyscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ volatile("int $0x80" : "=a"(r) : "a"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static inline int wsyscall3(int n, int a, int b, int c)
-{
-    int r;
+    long r;
     __asm__ volatile("int $0x80"
                      : "=a"(r)
-                     : "a"(n), "b"(a), "c"(b), "d"(c)
-                     : "memory");
+                     : "a"(n)
+                     : "rcx", "r11", "memory");
+    return r;
+}
+
+static inline long wsyscall1(long n, long a)
+{
+    long r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(n), "D"(a)
+                     : "rcx", "r11", "memory");
+    return r;
+}
+
+static inline long wsyscall2(long n, long a, long b)
+{
+    long r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(n), "D"(a), "S"(b)
+                     : "rcx", "r11", "memory");
+    return r;
+}
+
+static inline long wsyscall3(long n, long a, long b, long c)
+{
+    long r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(n), "D"(a), "S"(b), "d"(c)
+                     : "rcx", "r11", "memory");
     return r;
 }
 

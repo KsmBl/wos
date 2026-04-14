@@ -1,6 +1,6 @@
-/* Minimal ELF32 definitions and the program loader.
+/* Minimal ELF64 definitions and the program loader.
  *
- * WOS only ever loads statically linked ET_EXEC binaries for i386, so this
+ * WOS only ever loads statically linked ET_EXEC binaries for x86-64, so this
  * covers the program headers and nothing else -- no sections, no relocations,
  * no dynamic linking.
  */
@@ -14,11 +14,11 @@
 /* e_ident indices and the values we require. */
 #define EI_CLASS 4
 #define EI_DATA  5
-#define ELFCLASS32  1
+#define ELFCLASS64  2
 #define ELFDATA2LSB 1
 
-#define ET_EXEC 2
-#define EM_386  3
+#define ET_EXEC    2
+#define EM_X86_64 62
 
 #define PT_LOAD 1
 
@@ -32,9 +32,9 @@ typedef struct {
     uint16_t e_type;
     uint16_t e_machine;
     uint32_t e_version;
-    uint32_t e_entry;
-    uint32_t e_phoff;
-    uint32_t e_shoff;
+    uint64_t e_entry;
+    uint64_t e_phoff;
+    uint64_t e_shoff;
     uint32_t e_flags;
     uint16_t e_ehsize;
     uint16_t e_phentsize;
@@ -42,18 +42,19 @@ typedef struct {
     uint16_t e_shentsize;
     uint16_t e_shnum;
     uint16_t e_shstrndx;
-} __attribute__((packed)) Elf32_Ehdr;
+} __attribute__((packed)) Elf64_Ehdr;
 
+/* Note the field order differs from ELF32: flags moves up next to the type. */
 typedef struct {
     uint32_t p_type;
-    uint32_t p_offset;
-    uint32_t p_vaddr;
-    uint32_t p_paddr;
-    uint32_t p_filesz;
-    uint32_t p_memsz;
     uint32_t p_flags;
-    uint32_t p_align;
-} __attribute__((packed)) Elf32_Phdr;
+    uint64_t p_offset;
+    uint64_t p_vaddr;
+    uint64_t p_paddr;
+    uint64_t p_filesz;
+    uint64_t p_memsz;
+    uint64_t p_align;
+} __attribute__((packed)) Elf64_Phdr;
 
 struct process;
 
@@ -61,7 +62,7 @@ struct process;
  * belong to `proc`.  Fills in the process's code/data byte counts and heap
  * start, and stores the entry point in `entry_out`.
  * Returns 0 or a negative W_E* code. */
-int elf_load(struct process *proc, const void *image, uint32_t size,
-             uint32_t *entry_out);
+int elf_load(struct process *proc, const void *image, uint64_t size,
+             uint64_t *entry_out);
 
 #endif /* WOS_ELF_H */

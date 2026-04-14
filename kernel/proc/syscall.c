@@ -30,9 +30,9 @@
 #define MAX_IO_SIZE (1u * 1024u * 1024u)
 
 /* Check that [addr, addr+len) is entirely mapped and reachable from ring 3. */
-static bool user_range_ok(const void *addr, uint32_t len, bool need_write)
+static bool user_range_ok(const void *addr, uint64_t len, bool need_write)
 {
-    uint32_t start = (uint32_t)addr;
+    uint64_t start = (uint64_t)addr;
 
     if (len == 0)
         return true;
@@ -42,7 +42,7 @@ static bool user_range_ok(const void *addr, uint32_t len, bool need_write)
         return false;
 
     process_t *p = proc_current();
-    for (uint32_t page = ALIGN_DOWN(start, PAGE_SIZE);
+    for (uint64_t page = ALIGN_DOWN(start, PAGE_SIZE);
          page < start + len; page += PAGE_SIZE) {
         if (!paging_user_can_access(p->space, page, need_write))
             return false;
@@ -52,17 +52,17 @@ static bool user_range_ok(const void *addr, uint32_t len, bool need_write)
 
 /* Copy a NUL-terminated string in from user space, checking each page as we
  * reach it so a string running off the end of a mapping is caught. */
-static int copy_string_from_user(const char *user, char *dst, uint32_t max)
+static int copy_string_from_user(const char *user, char *dst, uint64_t max)
 {
-    uint32_t addr = (uint32_t)user;
+    uint64_t addr = (uint64_t)user;
 
     if (addr < USER_BASE || addr >= USER_STACK_TOP)
         return -W_EFAULT;
 
     process_t *p = proc_current();
 
-    for (uint32_t i = 0; i < max; i++) {
-        uint32_t at = addr + i;
+    for (uint64_t i = 0; i < max; i++) {
+        uint64_t at = addr + i;
 
         if (at >= USER_STACK_TOP)
             return -W_EFAULT;
@@ -82,13 +82,13 @@ static int copy_string_from_user(const char *user, char *dst, uint32_t max)
  *  The calls
  * ------------------------------------------------------------------ */
 
-static int32_t sys_exit(uint32_t status)
+static int64_t sys_exit(uint64_t status)
 {
     proc_exit((int32_t)status);
     return 0;   /* not reached */
 }
 
-static int32_t sys_open(uint32_t path, uint32_t flags)
+static int64_t sys_open(uint64_t path, uint64_t flags)
 {
     char buf[W_PATH_MAX + 1];
     int  r = copy_string_from_user((const char *)path, buf, sizeof(buf));
@@ -98,12 +98,12 @@ static int32_t sys_open(uint32_t path, uint32_t flags)
     return vfs_open(proc_current(), buf, flags);
 }
 
-static int32_t sys_close(uint32_t fd)
+static int64_t sys_close(uint64_t fd)
 {
     return vfs_close(proc_current(), (int)fd);
 }
 
-static int32_t sys_read(uint32_t fd, uint32_t buf, uint32_t len)
+static int64_t sys_read(uint64_t fd, uint64_t buf, uint32_t len)
 {
     if (len > MAX_IO_SIZE)
         len = MAX_IO_SIZE;
@@ -113,7 +113,7 @@ static int32_t sys_read(uint32_t fd, uint32_t buf, uint32_t len)
     return vfs_read(proc_current(), (int)fd, (void *)buf, len);
 }
 
-static int32_t sys_write(uint32_t fd, uint32_t buf, uint32_t len)
+static int64_t sys_write(uint64_t fd, uint64_t buf, uint32_t len)
 {
     if (len > MAX_IO_SIZE)
         len = MAX_IO_SIZE;
@@ -123,12 +123,12 @@ static int32_t sys_write(uint32_t fd, uint32_t buf, uint32_t len)
     return vfs_write(proc_current(), (int)fd, (const void *)buf, len);
 }
 
-static int32_t sys_lseek(uint32_t fd, uint32_t offset, uint32_t whence)
+static int64_t sys_lseek(uint64_t fd, uint64_t offset, uint32_t whence)
 {
     return vfs_lseek(proc_current(), (int)fd, (int32_t)offset, (int)whence);
 }
 
-static int32_t sys_stat(uint32_t path, uint32_t out)
+static int64_t sys_stat(uint64_t path, uint64_t out)
 {
     char buf[W_PATH_MAX + 1];
     int  r = copy_string_from_user((const char *)path, buf, sizeof(buf));
@@ -140,7 +140,7 @@ static int32_t sys_stat(uint32_t path, uint32_t out)
     return vfs_stat(proc_current(), buf, (wstat_t *)out);
 }
 
-static int32_t sys_path_only(uint32_t path,
+static int64_t sys_path_only(uint64_t path,
                              int (*op)(struct process *, const char *))
 {
     char buf[W_PATH_MAX + 1];
@@ -151,13 +151,13 @@ static int32_t sys_path_only(uint32_t path,
     return op(proc_current(), buf);
 }
 
-static int32_t sys_unlink(uint32_t path)  { return sys_path_only(path, vfs_unlink); }
-static int32_t sys_mkdir(uint32_t path)   { return sys_path_only(path, vfs_mkdir); }
-static int32_t sys_rmdir(uint32_t path)   { return sys_path_only(path, vfs_rmdir); }
-static int32_t sys_chdir(uint32_t path)   { return sys_path_only(path, vfs_chdir); }
-static int32_t sys_opendir(uint32_t path) { return sys_path_only(path, vfs_opendir); }
+static int64_t sys_unlink(uint64_t path)  { return sys_path_only(path, vfs_unlink); }
+static int64_t sys_mkdir(uint64_t path)   { return sys_path_only(path, vfs_mkdir); }
+static int64_t sys_rmdir(uint64_t path)   { return sys_path_only(path, vfs_rmdir); }
+static int64_t sys_chdir(uint64_t path)   { return sys_path_only(path, vfs_chdir); }
+static int64_t sys_opendir(uint64_t path) { return sys_path_only(path, vfs_opendir); }
 
-static int32_t sys_readdir(uint32_t fd, uint32_t out)
+static int64_t sys_readdir(uint64_t fd, uint64_t out)
 {
     if (!user_range_ok((void *)out, sizeof(wdirent_t), true))
         return -W_EFAULT;
@@ -165,7 +165,7 @@ static int32_t sys_readdir(uint32_t fd, uint32_t out)
     return vfs_readdir(proc_current(), (int)fd, (wdirent_t *)out);
 }
 
-static int32_t sys_getcwd(uint32_t buf, uint32_t size)
+static int64_t sys_getcwd(uint64_t buf, uint64_t size)
 {
     if (size > W_PATH_MAX + 1)
         size = W_PATH_MAX + 1;
@@ -175,7 +175,7 @@ static int32_t sys_getcwd(uint32_t buf, uint32_t size)
     return vfs_getcwd(proc_current(), (char *)buf, size);
 }
 
-static int32_t sys_meminfo(uint32_t out)
+static int64_t sys_meminfo(uint64_t out)
 {
     if (!user_range_ok((void *)out, sizeof(wmeminfo_t), true))
         return -W_EFAULT;
@@ -189,7 +189,7 @@ static int32_t sys_meminfo(uint32_t out)
     return 0;
 }
 
-static int32_t sys_procmem(uint32_t pid, uint32_t out)
+static int64_t sys_procmem(uint64_t pid, uint64_t out)
 {
     if (!user_range_ok((void *)out, sizeof(wprocmem_t), true))
         return -W_EFAULT;
@@ -203,7 +203,7 @@ static int32_t sys_procmem(uint32_t pid, uint32_t out)
     return 0;
 }
 
-static int32_t sys_threadmem(uint32_t tid, uint32_t out)
+static int64_t sys_threadmem(uint64_t tid, uint64_t out)
 {
     if (!user_range_ok((void *)out, sizeof(wthreadmem_t), true))
         return -W_EFAULT;
@@ -218,7 +218,7 @@ static int32_t sys_threadmem(uint32_t tid, uint32_t out)
     return 0;
 }
 
-static int32_t sys_proclist(uint32_t out, uint32_t max)
+static int64_t sys_proclist(uint64_t out, uint64_t max)
 {
     if (max > MAX_PROCESSES)
         max = MAX_PROCESSES;
@@ -228,7 +228,7 @@ static int32_t sys_proclist(uint32_t out, uint32_t max)
     return proc_list((wprocmem_t *)out, (int32_t)max);
 }
 
-static int32_t sys_diskinfo(uint32_t out)
+static int64_t sys_diskinfo(uint64_t out)
 {
     if (!user_range_ok((void *)out, sizeof(wdiskinfo_t), true))
         return -W_EFAULT;
@@ -237,7 +237,7 @@ static int32_t sys_diskinfo(uint32_t out)
     return 0;
 }
 
-static int32_t sys_spawn(uint32_t path, uint32_t argv)
+static int64_t sys_spawn(uint64_t path, uint64_t argv)
 {
     char pathbuf[W_PATH_MAX + 1];
     int  r = copy_string_from_user((const char *)path, pathbuf, sizeof(pathbuf));
@@ -255,23 +255,23 @@ static int32_t sys_spawn(uint32_t path, uint32_t argv)
     int   argc = 0;
 
     if (argv) {
-        if (!user_range_ok((void *)argv, sizeof(uint32_t), false))
+        if (!user_range_ok((void *)argv, sizeof(uint64_t), false))
             return -W_EFAULT;
 
         storage = kmalloc(MAX_ARGS * (W_PATH_MAX + 1));
         if (!storage)
             return -W_ENOMEM;
 
-        const uint32_t *user_argv = (const uint32_t *)argv;
+        const uint64_t *user_argv = (const uint64_t *)argv;
         while (argc < MAX_ARGS) {
-            if (!user_range_ok(&user_argv[argc], sizeof(uint32_t), false)) {
+            if (!user_range_ok(&user_argv[argc], sizeof(uint64_t), false)) {
                 kfree(storage);
                 return -W_EFAULT;
             }
             if (user_argv[argc] == 0)
                 break;
 
-            char *slot = storage + (uint32_t)argc * (W_PATH_MAX + 1);
+            char *slot = storage + (uint64_t)argc * (W_PATH_MAX + 1);
             r = copy_string_from_user((const char *)user_argv[argc],
                                       slot, W_PATH_MAX + 1);
             if (r < 0) {
@@ -293,43 +293,45 @@ static int32_t sys_spawn(uint32_t path, uint32_t argv)
     return pid;
 }
 
-static int32_t sys_wait(uint32_t pid, uint32_t status_out)
+static int64_t sys_wait(uint64_t pid, uint64_t status_out)
 {
-    int32_t status = 0;
+    int64_t status = 0;
 
     if (status_out && !user_range_ok((void *)status_out, sizeof(int32_t), true))
         return -W_EFAULT;
 
-    int32_t r = proc_wait((int32_t)pid, &status);
+    int32_t st32 = 0;
+    int32_t r = proc_wait((int32_t)pid, &st32);
+    status = st32;
 
     if (r >= 0 && status_out)
-        *(int32_t *)status_out = status;
+        *(int32_t *)status_out = (int32_t)status;
 
     return r;
 }
 
-static int32_t sys_getpid(void)
+static int64_t sys_getpid(void)
 {
     return proc_current()->pid;
 }
 
-static int32_t sys_sbrk(uint32_t increment)
+static int64_t sys_sbrk(uint64_t increment)
 {
-    return (int32_t)proc_sbrk((int32_t)increment);
+    return (int64_t)proc_sbrk((int64_t)increment);
 }
 
-static int32_t sys_ticks(void)
+static int64_t sys_ticks(void)
 {
-    return (int32_t)pit_ticks();
+    return (int64_t)pit_ticks();
 }
 
-static int32_t sys_yield(void)
+static int64_t sys_yield(void)
 {
     sched_yield();
     return 0;
 }
 
-static int32_t sys_console(uint32_t mode)
+static int64_t sys_console(uint64_t mode)
 {
     if (mode != W_CONSOLE_CANONICAL && mode != W_CONSOLE_RAW)
         return -W_EINVAL;
@@ -340,7 +342,7 @@ static int32_t sys_console(uint32_t mode)
     return was_raw ? W_CONSOLE_RAW : W_CONSOLE_CANONICAL;
 }
 
-static int32_t sys_pollin(uint32_t fd)
+static int64_t sys_pollin(uint64_t fd)
 {
     /* Only the console can ever make a reader wait; a file read always has
      * something to return, even if that something is end of file. */
@@ -350,7 +352,7 @@ static int32_t sys_pollin(uint32_t fd)
     return 1;
 }
 
-static int32_t sys_shutdown(void)
+static int64_t sys_shutdown(void)
 {
     /* There is no user or permission model in WOS, so any process may do
      * this. On a system with several users that would need a check here. */
@@ -364,42 +366,42 @@ static int32_t sys_shutdown(void)
 
 static void syscall_handler(regs_t *regs)
 {
-    uint32_t n = regs->eax;
-    int32_t  r;
+    uint64_t n = regs->rax;
+    int64_t  r;
 
     switch (n) {
-    case WSYS_EXIT:      r = sys_exit(regs->ebx); break;
-    case WSYS_OPEN:      r = sys_open(regs->ebx, regs->ecx); break;
-    case WSYS_CLOSE:     r = sys_close(regs->ebx); break;
-    case WSYS_READ:      r = sys_read(regs->ebx, regs->ecx, regs->edx); break;
-    case WSYS_WRITE:     r = sys_write(regs->ebx, regs->ecx, regs->edx); break;
-    case WSYS_LSEEK:     r = sys_lseek(regs->ebx, regs->ecx, regs->edx); break;
-    case WSYS_STAT:      r = sys_stat(regs->ebx, regs->ecx); break;
-    case WSYS_UNLINK:    r = sys_unlink(regs->ebx); break;
-    case WSYS_MKDIR:     r = sys_mkdir(regs->ebx); break;
-    case WSYS_RMDIR:     r = sys_rmdir(regs->ebx); break;
-    case WSYS_OPENDIR:   r = sys_opendir(regs->ebx); break;
-    case WSYS_READDIR:   r = sys_readdir(regs->ebx, regs->ecx); break;
-    case WSYS_CHDIR:     r = sys_chdir(regs->ebx); break;
-    case WSYS_GETCWD:    r = sys_getcwd(regs->ebx, regs->ecx); break;
-    case WSYS_MEMINFO:   r = sys_meminfo(regs->ebx); break;
-    case WSYS_PROCMEM:   r = sys_procmem(regs->ebx, regs->ecx); break;
-    case WSYS_THREADMEM: r = sys_threadmem(regs->ebx, regs->ecx); break;
-    case WSYS_PROCLIST:  r = sys_proclist(regs->ebx, regs->ecx); break;
-    case WSYS_DISKINFO:  r = sys_diskinfo(regs->ebx); break;
-    case WSYS_SPAWN:     r = sys_spawn(regs->ebx, regs->ecx); break;
-    case WSYS_WAIT:      r = sys_wait(regs->ebx, regs->ecx); break;
+    case WSYS_EXIT:      r = sys_exit(regs->rdi); break;
+    case WSYS_OPEN:      r = sys_open(regs->rdi, regs->rsi); break;
+    case WSYS_CLOSE:     r = sys_close(regs->rdi); break;
+    case WSYS_READ:      r = sys_read(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_WRITE:     r = sys_write(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_LSEEK:     r = sys_lseek(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_STAT:      r = sys_stat(regs->rdi, regs->rsi); break;
+    case WSYS_UNLINK:    r = sys_unlink(regs->rdi); break;
+    case WSYS_MKDIR:     r = sys_mkdir(regs->rdi); break;
+    case WSYS_RMDIR:     r = sys_rmdir(regs->rdi); break;
+    case WSYS_OPENDIR:   r = sys_opendir(regs->rdi); break;
+    case WSYS_READDIR:   r = sys_readdir(regs->rdi, regs->rsi); break;
+    case WSYS_CHDIR:     r = sys_chdir(regs->rdi); break;
+    case WSYS_GETCWD:    r = sys_getcwd(regs->rdi, regs->rsi); break;
+    case WSYS_MEMINFO:   r = sys_meminfo(regs->rdi); break;
+    case WSYS_PROCMEM:   r = sys_procmem(regs->rdi, regs->rsi); break;
+    case WSYS_THREADMEM: r = sys_threadmem(regs->rdi, regs->rsi); break;
+    case WSYS_PROCLIST:  r = sys_proclist(regs->rdi, regs->rsi); break;
+    case WSYS_DISKINFO:  r = sys_diskinfo(regs->rdi); break;
+    case WSYS_SPAWN:     r = sys_spawn(regs->rdi, regs->rsi); break;
+    case WSYS_WAIT:      r = sys_wait(regs->rdi, regs->rsi); break;
     case WSYS_GETPID:    r = sys_getpid(); break;
-    case WSYS_SBRK:      r = sys_sbrk(regs->ebx); break;
+    case WSYS_SBRK:      r = sys_sbrk(regs->rdi); break;
     case WSYS_TICKS:     r = sys_ticks(); break;
     case WSYS_YIELD:     r = sys_yield(); break;
-    case WSYS_CONSOLE:   r = sys_console(regs->ebx); break;
-    case WSYS_POLLIN:    r = sys_pollin(regs->ebx); break;
+    case WSYS_CONSOLE:   r = sys_console(regs->rdi); break;
+    case WSYS_POLLIN:    r = sys_pollin(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }
 
-    regs->eax = (uint32_t)r;
+    regs->rax = (uint64_t)r;
 }
 
 void syscall_init(void)

@@ -5,37 +5,37 @@
 
 int wmeminfo(wmeminfo_t *out)
 {
-    return wsyscall1(WSYS_MEMINFO, (int)out);
+    return wsyscall1(WSYS_MEMINFO, (long)out);
 }
 
 int wprocmem(int pid, wprocmem_t *out)
 {
-    return wsyscall2(WSYS_PROCMEM, pid, (int)out);
+    return wsyscall2(WSYS_PROCMEM, pid, (long)out);
 }
 
 int wthreadmem(int tid, wthreadmem_t *out)
 {
-    return wsyscall2(WSYS_THREADMEM, tid, (int)out);
+    return wsyscall2(WSYS_THREADMEM, tid, (long)out);
 }
 
 int wproclist(wprocmem_t *out, int max)
 {
-    return wsyscall2(WSYS_PROCLIST, (int)out, max);
+    return wsyscall2(WSYS_PROCLIST, (long)out, max);
 }
 
 int wdiskinfo(wdiskinfo_t *out)
 {
-    return wsyscall1(WSYS_DISKINFO, (int)out);
+    return wsyscall1(WSYS_DISKINFO, (long)out);
 }
 
 int wspawn(const char *path, char *const argv[])
 {
-    return wsyscall2(WSYS_SPAWN, (int)path, (int)argv);
+    return wsyscall2(WSYS_SPAWN, (long)path, (long)argv);
 }
 
 int wwait(int pid, int *status)
 {
-    return wsyscall2(WSYS_WAIT, pid, (int)status);
+    return wsyscall2(WSYS_WAIT, pid, (long)status);
 }
 
 void wexit(int status)

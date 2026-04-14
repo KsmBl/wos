@@ -126,10 +126,10 @@ int main(int argc, char **argv)
     int         rows = 0;
 
     keys[rows] = "OS";
-    strlcpy(values[rows++], "WOS 0.1 (i386)", 64);
+    strlcpy(values[rows++], "WOS 0.1 (x86_64)", 64);
 
     keys[rows] = "Kernel";
-    strlcpy(values[rows++], "wos-0.1", 64);
+    strlcpy(values[rows++], "wos-0.1 (long mode)", 64);
 
     keys[rows] = "Uptime";
     strlcpy(values[rows++], uptime, 64);

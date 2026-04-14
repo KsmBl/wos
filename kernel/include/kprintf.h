@@ -26,7 +26,7 @@ void kputs(const char *s);
 /* Format a byte count with a B/KiB/MiB/GiB suffix, e.g. "256 MiB".
  * Returns one of a small rotating set of static buffers, so up to four
  * results can be live in a single kprintf call. Not reentrant. */
-const char *fmt_bytes(uint32_t bytes);
+const char *fmt_bytes(uint64_t bytes);
 void kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void kvprintf(const char *fmt, va_list ap);
 

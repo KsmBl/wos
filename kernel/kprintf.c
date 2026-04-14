@@ -1,8 +1,8 @@
 /* Kernel formatted output: a small printf that writes to VGA and COM1.
  *
- * Deliberately avoids 64-bit division: this kernel is linked without libgcc,
- * so __udivdi3 and friends are unavailable.  Every size in WOS is a uint32_t,
- * which covers 4 GiB of RAM and the disk image with room to spare.
+ * On x86-64 a 64-bit divide is a single instruction, so unlike the 32-bit
+ * kernel this needs no help from libgcc and can print 64-bit quantities
+ * directly.
  */
 
 #include "kprintf.h"
@@ -31,14 +31,14 @@ static void emit_padded(const char *s, size_t len, int width, char pad)
         kputc(s[i]);
 }
 
-static void print_uint(uint32_t value, uint32_t base, bool upper,
+static void print_uint(uint64_t value, uint64_t base, bool upper,
                        int width, char pad)
 {
     static const char digits_lower[] = "0123456789abcdef";
     static const char digits_upper[] = "0123456789ABCDEF";
     const char *digits = upper ? digits_upper : digits_lower;
 
-    char buf[33];
+    char buf[65];
     size_t len = 0;
 
     if (value == 0) {
@@ -60,22 +60,23 @@ static void print_uint(uint32_t value, uint32_t base, bool upper,
     emit_padded(buf, len, width, pad);
 }
 
-static void print_int(int32_t value, int width, char pad)
+static void print_int(int64_t value, int width, char pad)
 {
     if (value < 0) {
         kputc('-');
-        /* Negating INT32_MIN overflows, so widen through unsigned. */
-        print_uint((uint32_t)(-(int64_t)value), 10, false,
+        /* Negating the most negative value overflows, so widen through
+         * unsigned before taking the magnitude. */
+        print_uint(-(uint64_t)value, 10, false,
                    width > 0 ? width - 1 : 0, pad);
     } else {
-        print_uint((uint32_t)value, 10, false, width, pad);
+        print_uint((uint64_t)value, 10, false, width, pad);
     }
 }
 
 /* Append the decimal form of `v` to buf[] at *pos. */
-static void append_uint(char *buf, size_t *pos, size_t cap, uint32_t v)
+static void append_uint(char *buf, size_t *pos, size_t cap, uint64_t v)
 {
-    char tmp[11];
+    char tmp[21];
     size_t n = 0;
 
     if (v == 0)
@@ -90,20 +91,20 @@ static void append_uint(char *buf, size_t *pos, size_t cap, uint32_t v)
 
 /* Format a byte count with the largest unit that keeps the value >= 1,
  * e.g. 268435456 -> "256 MiB".  One decimal place, no floating point. */
-const char *fmt_bytes(uint32_t bytes)
+const char *fmt_bytes(uint64_t bytes)
 {
-    static const char *units[] = { "B", "KiB", "MiB", "GiB" };
+    static const char *units[] = { "B", "KiB", "MiB", "GiB", "TiB" };
     static char slots[4][24];
     static int  next_slot;
 
     char *buf = slots[next_slot];
     next_slot = (next_slot + 1) % 4;
 
-    uint32_t whole = bytes;
-    uint32_t frac  = 0;
+    uint64_t whole = bytes;
+    uint64_t frac  = 0;
     int      unit  = 0;
 
-    while (whole >= 1024 && unit < 3) {
+    while (whole >= 1024 && unit < 4) {
         frac  = ((whole % 1024) * 10) / 1024;
         whole /= 1024;
         unit++;
@@ -134,6 +135,7 @@ void kvprintf(const char *fmt, va_list ap)
 
         char pad   = ' ';
         int  width = 0;
+        int  is_long = 0;
 
         if (*fmt == '0') {
             pad = '0';
@@ -142,15 +144,34 @@ void kvprintf(const char *fmt, va_list ap)
         while (*fmt >= '0' && *fmt <= '9')
             width = width * 10 + (*fmt++ - '0');
 
+        /* Length modifiers. `z` is here because size_t is 64-bit. */
+        while (*fmt == 'l' || *fmt == 'z') {
+            is_long = 1;
+            fmt++;
+        }
+
         switch (*fmt++) {
-        case 'd': print_int(va_arg(ap, int32_t), width, pad); break;
-        case 'u': print_uint(va_arg(ap, uint32_t), 10, false, width, pad); break;
-        case 'x': print_uint(va_arg(ap, uint32_t), 16, false, width, pad); break;
-        case 'X': print_uint(va_arg(ap, uint32_t), 16, true, width, pad); break;
+        case 'd':
+            print_int(is_long ? va_arg(ap, int64_t) : va_arg(ap, int32_t),
+                      width, pad);
+            break;
+        case 'u':
+            print_uint(is_long ? va_arg(ap, uint64_t) : va_arg(ap, uint32_t),
+                       10, false, width, pad);
+            break;
+        case 'x':
+            print_uint(is_long ? va_arg(ap, uint64_t) : va_arg(ap, uint32_t),
+                       16, false, width, pad);
+            break;
+        case 'X':
+            print_uint(is_long ? va_arg(ap, uint64_t) : va_arg(ap, uint32_t),
+                       16, true, width, pad);
+            break;
         case 'c': kputc((char)va_arg(ap, int)); break;
         case 'p':
             kputs("0x");
-            print_uint((uint32_t)(uintptr_t)va_arg(ap, void *), 16, false, 8, '0');
+            print_uint((uint64_t)(uintptr_t)va_arg(ap, void *), 16, false,
+                       16, '0');
             break;
         case 's': {
             const char *s = va_arg(ap, const char *);

@@ -13,32 +13,33 @@
 /* Frames below this address are identity mapped into every address space, so
  * the kernel can always dereference them directly.  Page tables and the kernel
  * heap must live here; user pages need not. */
-#define LOW_MEMORY_LIMIT (16u * 1024u * 1024u)
+/* Defined in paging.h, which owns the identity-map size. */
+#include "paging.h"
 
 void pmm_init(const struct multiboot_info *mbi);
 
 /* Allocate one frame. Returns its physical address, or 0 if memory is full.
  * The frame's contents are undefined. */
-uint32_t pmm_alloc_frame(void);
+uint64_t pmm_alloc_frame(void);
 
 /* Allocate one frame below LOW_MEMORY_LIMIT, for structures the kernel must
  * be able to touch through the identity map (page directories and tables). */
-uint32_t pmm_alloc_frame_low(void);
+uint64_t pmm_alloc_frame_low(void);
 
-void pmm_free_frame(uint32_t phys);
+void pmm_free_frame(uint64_t phys);
 
 /* Reserve an explicit physical range, e.g. a module the bootloader loaded. */
-void pmm_reserve_range(uint32_t start, uint32_t end);
+void pmm_reserve_range(uint64_t start, uint64_t end);
 
-uint32_t pmm_total_bytes(void);
-uint32_t pmm_used_bytes(void);
-uint32_t pmm_free_bytes(void);
+uint64_t pmm_total_bytes(void);
+uint64_t pmm_used_bytes(void);
+uint64_t pmm_free_bytes(void);
 
 /* Bytes that were already in use when the allocator finished initialising:
  * the kernel image, the frame bitmap, the heap arena and low memory. */
-uint32_t pmm_kernel_bytes(void);
+uint64_t pmm_kernel_bytes(void);
 
 /* First address the heap may use; the bitmap ends just below it. */
-uint32_t pmm_heap_base(void);
+uint64_t pmm_heap_base(void);
 
 #endif /* WOS_PMM_H */

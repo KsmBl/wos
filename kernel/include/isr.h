@@ -1,4 +1,4 @@
-/* Interrupt dispatch.
+/* Interrupt dispatch, x86-64.
  *
  * Every interrupt, exception and syscall funnels through a single assembly
  * stub that builds a `regs_t` on the stack and calls interrupt_dispatch().
@@ -9,13 +9,17 @@
 #include "types.h"
 
 /* The saved machine state, laid out exactly as the stub pushes it.
- * Fields appear in increasing address order: the last thing pushed is first. */
+ * Fields appear in increasing address order: the last thing pushed is first.
+ *
+ * There is no `pusha` in long mode, so the stub pushes all fifteen general
+ * registers by hand.  The CPU always pushes rsp and ss on a 64-bit interrupt,
+ * whether or not the privilege level changed, which makes the frame one fixed
+ * shape rather than two. */
 typedef struct {
-    uint32_t ds;                                    /* pushed by the stub    */
-    uint32_t edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax;  /* pusha         */
-    uint32_t int_no, err_code;                      /* stub + maybe the CPU  */
-    uint32_t eip, cs, eflags;                       /* pushed by the CPU     */
-    uint32_t useresp, ss;                           /* only on a ring change */
+    uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
+    uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
+    uint64_t int_no, err_code;              /* stub, and maybe the CPU  */
+    uint64_t rip, cs, rflags, rsp, ss;      /* pushed by the CPU        */
 } regs_t;
 
 typedef void (*interrupt_handler_t)(regs_t *regs);

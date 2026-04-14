@@ -1,13 +1,13 @@
-/* C runtime startup for WOS applications.
+/* C runtime startup for WOS applications, x86-64.
  *
  * The kernel enters a new process with the stack laid out as
  *
- *     [argc][argv[0]][argv[1]]...[NULL]  <- esp
+ *     [argc][argv[0]][argv[1]]...[NULL]  <- rsp
  *
- * which is exactly what main(int, char **) wants, so all this has to do is
- * turn it into a call and then hand main's return value to wexit.  Placing
- * this in .text.start makes the linker script put _start at the very front of
- * the image, where the ELF entry point points.
+ * so all this has to do is move those into the System V argument registers
+ * and hand main's return value to wexit.  Placing this in .text.start makes
+ * the linker script put _start at the very front of the image, where the ELF
+ * entry point points.
  */
 
 .section .text.start, "ax"
@@ -15,18 +15,21 @@
 .type _start, @function
 _start:
     /* A zeroed frame pointer terminates any stack walk cleanly. */
-    xorl  %ebp, %ebp
+    xorq  %rbp, %rbp
 
-    movl  (%esp), %eax          /* argc */
-    leal  4(%esp), %edx         /* argv */
+    movq  (%rsp), %rdi          /* argc */
+    leaq  8(%rsp), %rsi         /* argv */
 
-    pushl %edx
-    pushl %eax
+    /* System V wants rsp 16-byte aligned at the call instruction.  The kernel
+     * aligned the argv block, and popping nothing since means rsp is already
+     * where it should be; force it regardless so a future change to the entry
+     * layout cannot silently misalign a callee. */
+    andq  $-16, %rsp
+
     call  main
-    addl  $8, %esp
 
     /* main returned, so exit with its value. wexit never comes back. */
-    pushl %eax
+    movl  %eax, %edi
     call  wexit
 
     /* Unreachable: stop the CPU rather than run into whatever follows. */

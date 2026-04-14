@@ -433,7 +433,7 @@ int vfs_getcwd(struct process *p, char *buf, uint32_t size)
 }
 
 int vfs_read_file(struct process *p, const char *path, void **data_out,
-                  uint32_t *size_out)
+                  uint64_t *size_out)
 {
     char abs[W_PATH_MAX + 1];
     int  r = vfs_resolve(p, path, abs, sizeof(abs));

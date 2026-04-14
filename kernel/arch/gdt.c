@@ -1,41 +1,38 @@
-/* GDT and TSS setup. */
+/* GDT and TSS setup for x86-64. */
 
 #include "gdt.h"
+#include "string.h"
 
-#define GDT_ENTRIES 6
+/* Five 8-byte slots, the last two forming the 16-byte TSS descriptor. */
+#define GDT_SLOTS 7
 
-struct gdt_entry {
-    uint16_t limit_low;
-    uint16_t base_low;
-    uint8_t  base_mid;
-    uint8_t  access;
-    uint8_t  granularity;   /* high nibble = flags, low nibble = limit 19:16 */
-    uint8_t  base_high;
-} __attribute__((packed));
+static uint64_t     gdt[GDT_SLOTS];
+static struct tss64 tss;
 
-struct gdt_ptr {
+struct gdt_pointer {
     uint16_t limit;
-    uint32_t base;
+    uint64_t base;
 } __attribute__((packed));
 
-static struct gdt_entry gdt[GDT_ENTRIES];
-static struct gdt_ptr   gdtp;
-static struct tss_entry tss;
+static struct gdt_pointer gdtp;
 
-static void gdt_set_entry(int i, uint32_t base, uint32_t limit,
-                          uint8_t access, uint8_t flags)
+/* Build a code or data descriptor.  Base and limit are ignored in long mode,
+ * so only the access and flag bits carry meaning. */
+static uint64_t segment(uint8_t access, uint8_t flags)
 {
-    gdt[i].limit_low   = (uint16_t)(limit & 0xFFFF);
-    gdt[i].base_low    = (uint16_t)(base & 0xFFFF);
-    gdt[i].base_mid    = (uint8_t)((base >> 16) & 0xFF);
-    gdt[i].access      = access;
-    gdt[i].granularity = (uint8_t)(((limit >> 16) & 0x0F) | (flags & 0xF0));
-    gdt[i].base_high   = (uint8_t)((base >> 24) & 0xFF);
+    uint64_t d = 0;
+
+    d |= (uint64_t)0xFFFF;                  /* limit 15:0, ignored  */
+    d |= (uint64_t)0xF << 48;               /* limit 19:16, ignored */
+    d |= (uint64_t)access << 40;
+    d |= (uint64_t)(flags & 0xF0) << 48;
+
+    return d;
 }
 
-void tss_set_kernel_stack(uint32_t esp0)
+void tss_set_kernel_stack(uint64_t rsp0)
 {
-    tss.esp0 = esp0;
+    tss.rsp0 = rsp0;
 }
 
 void gdt_init(void)
@@ -43,44 +40,55 @@ void gdt_init(void)
     /* access byte: P | DPL | S | type
      *   0x9A = present, ring 0, code, readable
      *   0x92 = present, ring 0, data, writable
-     *   0xFA = present, ring 3, code, readable
      *   0xF2 = present, ring 3, data, writable
-     *   0x89 = present, ring 0, 32-bit TSS (available)
-     * flags nibble 0xC = 4 KiB granularity + 32-bit
-     */
-    gdt_set_entry(0, 0, 0, 0, 0);
-    gdt_set_entry(1, 0, 0xFFFFF, 0x9A, 0xC0);
-    gdt_set_entry(2, 0, 0xFFFFF, 0x92, 0xC0);
-    gdt_set_entry(3, 0, 0xFFFFF, 0xFA, 0xC0);
-    gdt_set_entry(4, 0, 0xFFFFF, 0xF2, 0xC0);
+     *   0xFA = present, ring 3, code, readable
+     * flags nibble 0xA = long mode (L) + 4 KiB granularity; the D bit must be
+     * clear whenever L is set. */
+    gdt[0] = 0;
+    gdt[1] = segment(0x9A, 0xA0);           /* kernel code */
+    gdt[2] = segment(0x92, 0xC0);           /* kernel data */
+    gdt[3] = segment(0xF2, 0xC0);           /* user data   */
+    gdt[4] = segment(0xFA, 0xA0);           /* user code   */
 
-    /* The TSS descriptor uses a byte-granular limit covering the struct. */
-    for (size_t i = 0; i < sizeof(tss); i++)
-        ((uint8_t *)&tss)[i] = 0;
-    tss.ss0 = SEL_KDATA;
-    tss.esp0 = 0;               /* filled in per context switch */
-    /* No I/O permission bitmap: setting the base past the segment limit tells
-     * the CPU that every port access from ring 3 must fault. */
+    memset(&tss, 0, sizeof(tss));
+    tss.rsp0 = 0;                           /* filled in per context switch */
+    /* No I/O permission bitmap: pointing the base past the segment limit
+     * tells the CPU that every port access from ring 3 must fault. */
     tss.iomap_base = sizeof(tss);
-    gdt_set_entry(5, (uint32_t)&tss, sizeof(tss) - 1, 0x89, 0x00);
+
+    /* The TSS descriptor is 16 bytes and spans two slots. */
+    uint64_t base  = (uint64_t)&tss;
+    uint64_t limit = sizeof(tss) - 1;
+
+    gdt[5] = (limit & 0xFFFF)
+           | ((base & 0xFFFFFF) << 16)
+           | ((uint64_t)0x89 << 40)         /* present, 64-bit TSS available */
+           | (((limit >> 16) & 0xF) << 48)
+           | (((base >> 24) & 0xFF) << 56);
+    gdt[6] = (base >> 32) & 0xFFFFFFFF;
 
     gdtp.limit = (uint16_t)(sizeof(gdt) - 1);
-    gdtp.base  = (uint32_t)&gdt;
+    gdtp.base  = (uint64_t)&gdt;
 
-    /* Load the GDT, reload the data segments, then far-jump to reload CS. */
+    /* CS cannot be loaded with a plain move, and long mode has no far jump
+     * to an immediate.  Pushing the selector and return address and using a
+     * far return is the usual way to reload it. */
     __asm__ volatile(
         "lgdt %0\n\t"
-        "movw %1, %%ax\n\t"
+        "movw %w1, %%ax\n\t"
         "movw %%ax, %%ds\n\t"
         "movw %%ax, %%es\n\t"
         "movw %%ax, %%fs\n\t"
         "movw %%ax, %%gs\n\t"
         "movw %%ax, %%ss\n\t"
-        "ljmp %2, $1f\n"
+        "pushq %q2\n\t"
+        "leaq 1f(%%rip), %%rax\n\t"
+        "pushq %%rax\n\t"
+        "lretq\n"
         "1:\n\t"
         :
-        : "m"(gdtp), "i"(SEL_KDATA), "i"(SEL_KCODE)
-        : "eax", "memory");
+        : "m"(gdtp), "i"(SEL_KDATA), "i"((uint64_t)SEL_KCODE)
+        : "rax", "memory");
 
-    __asm__ volatile("ltr %0" : : "r"((uint16_t)SEL_TSS));
+    __asm__ volatile("ltr %w0" : : "r"((uint16_t)SEL_TSS));
 }

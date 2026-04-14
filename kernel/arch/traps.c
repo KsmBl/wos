@@ -22,7 +22,7 @@
 
 /* Overridable by the memory manager once demand paging exists; until then a
  * fault is always fatal. Returns true if the fault was handled. */
-__attribute__((weak)) bool paging_handle_fault(uint32_t addr, uint32_t err)
+__attribute__((weak)) bool paging_handle_fault(uint64_t addr, uint64_t err)
 {
     (void)addr;
     (void)err;
@@ -48,18 +48,18 @@ static void fault_in_process(regs_t *regs, const char *what)
 
 static void page_fault_handler(regs_t *regs)
 {
-    uint32_t addr;
+    uint64_t addr;
     __asm__ volatile("mov %%cr2, %0" : "=r"(addr));
 
     if (paging_handle_fault(addr, regs->err_code))
         return;
 
-    kprintf("\npage fault at %p while %s (%s, ring %u)%s\n",
+    kprintf("\npage fault at %p while %s (%s, ring %lu)%s\n",
             (void *)addr,
             (regs->err_code & PF_WRITE) ? "writing" : "reading",
             (regs->err_code & PF_PRESENT) ? "protection violation"
                                           : "page not present",
-            (regs->err_code & PF_USER) ? 3u : 0u,
+            (regs->err_code & PF_USER) ? 3UL : 0UL,
             (regs->err_code & PF_RESERVED) ? " [reserved bit set]" : "");
 
     fault_in_process(regs, "page fault");
@@ -67,20 +67,20 @@ static void page_fault_handler(regs_t *regs)
 
 static void gpf_handler(regs_t *regs)
 {
-    kprintf("\ngeneral protection fault (selector %04x)\n",
+    kprintf("\ngeneral protection fault (selector %04lx)\n",
             regs->err_code & 0xFFFF);
     fault_in_process(regs, "general protection fault");
 }
 
 static void opcode_handler(regs_t *regs)
 {
-    kprintf("\ninvalid opcode at %p\n", (void *)regs->eip);
+    kprintf("\ninvalid opcode at %p\n", (void *)regs->rip);
     fault_in_process(regs, "invalid opcode");
 }
 
 static void divide_handler(regs_t *regs)
 {
-    kprintf("\ndivide by zero at %p\n", (void *)regs->eip);
+    kprintf("\ndivide by zero at %p\n", (void *)regs->rip);
     fault_in_process(regs, "divide by zero");
 }
 
@@ -88,7 +88,7 @@ static void divide_handler(regs_t *regs)
  * `int $3` usable as a lightweight kernel tracepoint. */
 static void breakpoint_handler(regs_t *regs)
 {
-    kprintf("breakpoint at %p\n", (void *)regs->eip);
+    kprintf("breakpoint at %p\n", (void *)regs->rip);
     dump_regs(regs);
 }
 
