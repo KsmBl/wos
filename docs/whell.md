@@ -1,11 +1,16 @@
 # whell — the WOS shell
 
 `whell` is the first WOS application and the one the kernel starts at boot. It
-reads a line, splits it into arguments, and either runs a builtin or launches a
-program.
+reads a line, splits it into arguments, and either runs one of its three
+builtins or launches a program.
+
+The shell is deliberately small. `ls`, `cat`, `free` and the rest are not part
+of it: they are ordinary programs in `/app`, documented in
+[`docs/apps.md`](apps.md). Only the things that change state belonging to the
+shell process itself are built in.
 
 ```
-whell -- the WOS shell. Type `help` for the builtins.
+whell -- the WOS shell. Type `help` for an introduction.
 
 wos:/home$ ls
 boots.txt   notes.txt   readme.txt
@@ -107,43 +112,7 @@ how shells keep dotfiles from burying the useful names.
 
 # Builtins
 
-## `ls` — list directory contents
-
-```
-ls [-l] [-a] [path...]
-```
-
-With no operand, lists the working directory. With several, each directory gets
-a `path:` header and a blank line between them; a file operand is listed as
-itself rather than being descended into. Entries are sorted by name, and plain
-output is laid out in columns that fit an 80-column terminal, with a `/` after
-directory names.
-
-| Option | Effect |
-|---|---|
-| `-l` | long listing: type, size in bytes, blocks used, name |
-| `-a` | include entries starting with `.`, including `.` and `..` |
-
-```
-wos:/home$ ls -l
-total 3
--   2     1  boots.txt
--  66     1  notes.txt
-- 560     1  readme.txt
-```
-
-The first column is `d` for a directory and `-` for a file. `total` is the sum
-of the block counts, as in Linux.
-
-WFS stores no owners, permissions or timestamps, so the corresponding Linux
-columns are absent rather than filled with invented values.
-
-**Exit status:** 0, or 1 if any operand could not be read.
-
-```
-wos:/home$ ls /nope
-ls: /nope: no such file or directory
-```
+There are three, and there only need to be three.
 
 ## `cd` — change directory
 
@@ -157,198 +126,25 @@ cd [path | -]
 | `cd <path>` | go to that directory |
 | `cd -` | go back to the previous directory, and print it |
 
-`.` and `..` work as expected and are resolved by the kernel, so `cd /app/../home`
-lands in `/home`.
+**This is the one command that cannot be a separate program.** A child process
+gets a *copy* of its parent's working directory; changing it changes only that
+copy, and when the child exits the shell is exactly where it started. So while
+`pwd` works perfectly well as an application, `cd` has to run inside the shell.
+Every Unix shell is built this way, for this reason.
+
+`.` and `..` work as expected and are resolved by the kernel, so
+`cd /app/../home` lands in `/home`.
 
 **Exit status:** 0, or 1 if the directory does not exist, is not a directory,
 or `cd -` was used before any other `cd`.
 
-## `pwd` — print working directory
-
-```
-pwd
-```
-
-Prints the working directory as an absolute, normalised path.
-
-**Exit status:** 0, or 1 if the path could not be read.
-
-## `free` — show memory use
-
-```
-free [-b | -k | -m | -h]
-```
-
-```
-wos:/home$ free
-          total        used        free
-Mem:     262016        5360      256656
-Swap:         0           0           0
-```
-
-| Option | Units |
-|---|---|
-| *(none)* | kibibytes, as Linux does by default |
-| `-b` | bytes |
-| `-k` | kibibytes |
-| `-m` | mebibytes |
-| `-h` | human readable, e.g. `250.6M` |
-
-The figures come from the kernel's physical frame allocator, so `used` is
-exactly the RAM currently allocated — including the kernel's own image, heap
-and page tables — and `used + free == total` always holds.
-
-WOS has no swap. The `Swap:` row is printed as zeroes so the output matches
-what a reader of `free` expects to find.
-
-**Exit status:** 0, or 1 on an invalid option.
-
-## `df` — show disk use
-
-```
-df [-b | -k | -m | -h]
-```
-
-```
-wos:/home$ df
-Filesystem    1K-blocks       Used  Available Use% Mounted on
-wfs               65536        302      65234   1% /
-
-inodes: 20 used, 2028 free, 2048 total
-```
-
-Options are the same as `free`. The numbers come from the filesystem's block
-bitmap, so `Used` counts blocks that are genuinely allocated, including the
-superblock, bitmap and inode table. A disk with anything at all on it reports
-at least 1%, never 0%.
-
-**Exit status:** 0, or 1 if no filesystem is mounted or the option is invalid.
-
-## `ps` — show processes
-
-```
-ps
-```
-
-```
-wos:/home$ ps
-  PID NAME          RESIDENT     CODE     DATA     HEAP    STACK THR
-    6 whell            92.0K    12.0K     8.0K       0B    64.0K   1
-```
-
-`RESIDENT` is counted from the process's page tables: it is what the process
-actually occupies, including its own page tables, so it is slightly more than
-the four columns beside it add up to.
-
-**Exit status:** 0.
-
-## `cat` — print files
-
-```
-cat file...
-```
-
-Writes each file to standard output in order. Continues after a file it cannot
-open, reporting each failure.
-
-**Exit status:** 0, or 1 if any file could not be read.
-
-## `touch` — create files
-
-```
-touch file...
-```
-
-Creates each file if it does not exist, and leaves the contents of one that
-does alone.
-
-WFS stores no timestamps, so unlike Linux there is nothing to update on a file
-that already exists — `touch` on it simply succeeds.
-
-**Exit status:** 0, or 1 if any file could not be created.
-
-## `mkdir` — create directories
-
-```
-mkdir dir...
-```
-
-Creates each directory. The parent must already exist, so making a nested path
-takes one `mkdir` per level.
-
-**Exit status:** 0, or 1 if any directory could not be created — `already
-exists` if the name is taken, `no such file or directory` if the parent is
-missing.
-
-## `rm` — remove files and directories
-
-```
-rm [-r] [-f] file...
-```
-
-| Option | Effect |
-|---|---|
-| `-r`, `-R` | remove directories and everything inside them |
-| `-f` | ignore files that do not exist, and say nothing about them |
-
-Without `-r`, naming a directory is an error:
-
-```
-wos:/home$ rm tree
-rm: tree: is a directory
-wos:/home$ rm -r tree
-```
-
-`rm` refuses to remove `.` or `..`, as Linux does — `rm -r .` would delete the
-working directory out from under the shell:
-
-```
-wos:/home$ rm -r .
-rm: refusing to remove '.' or '..': skipping .
-```
-
-Removal continues past a file it cannot delete, reporting each failure, so one
-bad operand does not stop the rest.
-
-**Exit status:** 0, or 1 if anything could not be removed. With `-f`, a
-missing file is not a failure.
-
-## `shutdown` — power the machine off
-
-```
-shutdown
-```
-
-Powers the machine off. Nothing needs flushing first: WFS writes its
-superblock, block bitmap and inodes straight through on every change, so the
-disk is consistent at every moment.
-
-```
-wos:/home$ shutdown
-shutting down
-
-[kernel] shutting down
-```
-
-Under QEMU, VirtualBox or Bochs the VM exits. On real hardware the kernel has
-no ACPI parser to find the platform's soft-off registers, so it reports that
-and halts the CPU instead:
-
-```
-[kernel] no ACPI soft-off available on this machine
-[kernel] it is now safe to turn off the power
-```
-
-There is no user or permission model in WOS, so any process can do this.
-
-**Exit status:** does not return on success; 1 if the machine could not be
-powered off.
-
-## `help` — list the builtins
+## `help` — an introduction
 
 ```
 help
 ```
+
+Lists the builtins and points at `/app` for everything else.
 
 **Exit status:** 0.
 
@@ -379,14 +175,12 @@ whell lives in `app/whell/sourcecode/`, and the same source is on the disk at
 |---|---|
 | `whell.c` | the main loop, prompt, dispatch and program launching |
 | `parse.c` | splitting a line into arguments, with quoting |
-| `cmd_ls.c` | `ls` |
-| `cmd_mem.c` | `free`, `df`, `ps` |
-| `cmd_nav.c` | `cd`, `pwd`, `cat`, `help` |
-| `cmd_file.c` | `rm`, `mkdir`, `touch` |
-| `cmd_power.c` | `shutdown` |
+| `cmd_nav.c` | `cd` and `help` |
 | `complete.c` | tab completion |
 | `whell.h` | shared declarations |
 
 Every builtin has the same shape as `main()` — it takes `argc`/`argv` with the
 command name in `argv[0]` and returns an exit status — so adding one means
-writing that function and adding a line to the table in `whell.c`.
+writing that function and adding a line to the table in `whell.c`. Before you
+do, check whether it needs to be a builtin at all: unless it changes the
+shell's own state, it belongs in `/app` instead.

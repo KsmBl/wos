@@ -1,6 +1,8 @@
-/* rm and touch -- remove and create files. */
+/* rm -- remove files and directories. */
 
-#include "whell.h"
+#include <wkernel.h>
+
+#define MAX_OPERANDS 32
 
 static int opt_recursive;
 static int opt_force;
@@ -98,12 +100,9 @@ static int remove_tree(const char *path)
     return (r < 0) ? fail(path, r) : 0;
 }
 
-int cmd_rm(int argc, char **argv)
+int main(int argc, char **argv)
 {
-    opt_recursive = 0;
-    opt_force     = 0;
-
-    const char *operands[WHELL_MAX_ARGS];
+    const char *operands[MAX_OPERANDS];
     int operand_count = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -118,7 +117,7 @@ int cmd_rm(int argc, char **argv)
                     return 1;
                 }
             }
-        } else {
+        } else if (operand_count < MAX_OPERANDS) {
             operands[operand_count++] = argv[i];
         }
     }
@@ -149,54 +148,6 @@ int cmd_rm(int argc, char **argv)
 
         if (remove_tree(operands[i]) != 0)
             status = 1;
-    }
-
-    return status;
-}
-
-int cmd_mkdir(int argc, char **argv)
-{
-    if (argc < 2) {
-        wfprintf(W_STDERR, "mkdir: no directory given\n");
-        return 1;
-    }
-
-    int status = 0;
-
-    for (int i = 1; i < argc; i++) {
-        int r = wmkdir(argv[i]);
-
-        if (r < 0) {
-            wfprintf(W_STDERR, "mkdir: %s: %s\n", argv[i], wstrerror(-r));
-            status = 1;
-        }
-    }
-
-    return status;
-}
-
-int cmd_touch(int argc, char **argv)
-{
-    if (argc < 2) {
-        wfprintf(W_STDERR, "touch: no file given\n");
-        return 1;
-    }
-
-    int status = 0;
-
-    for (int i = 1; i < argc; i++) {
-        /* Without W_O_TRUNC an existing file keeps its contents.  WFS stores
-         * no timestamps, so unlike Linux there is nothing to update on a file
-         * that already exists -- touch simply succeeds. */
-        int fd = wopen(argv[i], W_O_WRONLY | W_O_CREAT);
-
-        if (fd < 0) {
-            wfprintf(W_STDERR, "touch: %s: %s\n", argv[i], wstrerror(-fd));
-            status = 1;
-            continue;
-        }
-
-        wclose(fd);
     }
 
     return status;

@@ -5,11 +5,13 @@
  * operands are listed, and plain output is laid out in columns.
  *
  * -l shows type, size and block count. WFS has no owners, permissions or
- * timestamps, so those Linux columns simply have nothing behind them and are
- * left out rather than filled with invented values.
+ * timestamps, so those Linux columns are left out rather than filled with
+ * invented values.
  */
 
-#include "whell.h"
+#include <wkernel.h>
+
+#define MAX_OPERANDS 32
 
 struct entry {
     char     name[W_NAME_MAX + 1];
@@ -38,9 +40,9 @@ static void sort_entries(struct entry *e, int n)
 
 static void print_long(const struct entry *e, int count)
 {
-    uint32_t widest = 1;
+    unsigned long widest = 1;
     for (int i = 0; i < count; i++) {
-        uint32_t w = 1, v = e[i].size;
+        unsigned long w = 1, v = e[i].size;
         while (v >= 10) {
             v /= 10;
             w++;
@@ -49,10 +51,10 @@ static void print_long(const struct entry *e, int count)
             widest = w;
     }
 
-    uint32_t total = 0;
+    unsigned long total = 0;
     for (int i = 0; i < count; i++)
         total += e[i].blocks;
-    wprintf("total %u\n", total);
+    wprintf("total %lu\n", total);
 
     for (int i = 0; i < count; i++)
         wprintf("%c %*u %5u  %s\n",
@@ -73,7 +75,7 @@ static void print_columns(const struct entry *e, int count)
     }
 
     wsize_t column = widest + 2;
-    int per_line = (int)(WHELL_COLUMNS / column);
+    int per_line = (int)(W_CONSOLE_WIDTH / column);
     if (per_line < 1)
         per_line = 1;
 
@@ -159,12 +161,9 @@ static int list_directory(const char *path)
     return 0;
 }
 
-int cmd_ls(int argc, char **argv)
+int main(int argc, char **argv)
 {
-    opt_long = 0;
-    opt_all  = 0;
-
-    const char *operands[WHELL_MAX_ARGS];
+    const char *operands[MAX_OPERANDS];
     int operand_count = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -178,7 +177,7 @@ int cmd_ls(int argc, char **argv)
                     return 1;
                 }
             }
-        } else {
+        } else if (operand_count < MAX_OPERANDS) {
             operands[operand_count++] = argv[i];
         }
     }

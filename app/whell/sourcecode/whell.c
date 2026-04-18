@@ -7,9 +7,12 @@
  * /app/<name>/launch, so a bare command name maps straight onto that path.
  * A name containing a '/' is treated as a path and run directly.
  *
- * Line editing (backspace, and Ctrl+C to discard a line) is handled by the
- * kernel's console, which is line buffered like a Linux terminal, so a read
- * here returns a whole line and the shell does no editing of its own.
+ * The shell itself is small on purpose: only cd, exit and help are builtins,
+ * because only those change state belonging to the shell process.  ls, cat,
+ * free and the rest are ordinary programs under /app.
+ *
+ * Line editing happens here rather than in the kernel, because Tab has to be
+ * seen as a keystroke rather than buffered into a line.
  */
 
 #include "whell.h"
@@ -22,19 +25,8 @@ struct builtin {
 static int cmd_exit(int argc, char **argv);
 
 static const struct builtin builtins[] = {
-    { "ls",   cmd_ls   },
     { "cd",   cmd_cd   },
-    { "pwd",  cmd_pwd  },
-    { "free", cmd_free },
-    { "df",   cmd_df   },
-    { "ps",   cmd_ps   },
-    { "cat",  cmd_cat  },
-    { "rm",   cmd_rm   },
-    { "mkdir", cmd_mkdir },
-    { "touch", cmd_touch },
-    { "clear", cmd_clear },
     { "help", cmd_help },
-    { "shutdown", cmd_shutdown },
     { "exit", cmd_exit },
 };
 
@@ -90,7 +82,7 @@ static void complete_line(char *buf, int *len, int size)
         const char *name = whell_completion_name(i);
         int width = (int)strlen(name) + (whell_completion_is_dir(i) ? 1 : 0);
 
-        if (column + width + 2 > WHELL_COLUMNS) {
+        if (column + width + 2 > W_CONSOLE_WIDTH) {
             wputs("\n");
             column = 0;
         }
@@ -227,8 +219,8 @@ int main(int argc, char **argv)
     char  line[WHELL_LINE_MAX];
     char *args[WHELL_MAX_ARGS + 1];
 
-    /* `whell -c "command"` runs one command and exits, which is how another
-     * program borrows the builtins instead of reimplementing them. */
+    /* `whell -c "command"` runs one command and exits, the way any shell
+     * does when something wants to hand it a single line. */
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
         strlcpy(line, argv[2], sizeof(line));
 
@@ -239,7 +231,7 @@ int main(int argc, char **argv)
         return run_command(count, args);
     }
 
-    wprintf("\nwhell -- the WOS shell. Type `help` for the builtins.\n");
+    wprintf("\nwhell -- the WOS shell. Type `help` for an introduction.\n");
     wprintf("Tab completes commands and paths.\n\n");
 
     /* Start where the user's files are, not at the root. */
