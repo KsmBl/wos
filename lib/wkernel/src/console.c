@@ -131,3 +131,52 @@ int wgetkey(void)
 
     return W_KEY_ESCAPE;
 }
+
+int wgetpass(const char *prompt, char *buf, wsize_t size)
+{
+    if (size == 0)
+        return 0;
+
+    wputs(prompt);
+
+    int previous = wconsole_raw(W_CONSOLE_RAW);
+    wsize_t len = 0;
+
+    for (;;) {
+        char c;
+        int  n = wread(W_STDIN, &c, 1);
+
+        if (n < 0) {
+            wconsole_raw(previous);
+            return n;
+        }
+        if (n == 0)
+            continue;
+
+        if (c == '\n' || c == '\r')
+            break;
+
+        if (c == 0x03) {                 /* Ctrl+C abandons the entry */
+            len = 0;
+            break;
+        }
+
+        if (c == '\b' || c == 0x7F) {
+            if (len > 0)
+                len--;
+            continue;
+        }
+
+        /* Nothing is echoed: not even a placeholder, since the length of a
+         * password is itself worth not showing. */
+        if (c >= 32 && c < 127 && len + 1 < size)
+            buf[len++] = c;
+    }
+
+    buf[len] = '\0';
+
+    wconsole_raw(previous);
+    wputs("\n");
+
+    return (int)len;
+}

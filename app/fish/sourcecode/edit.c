@@ -239,15 +239,20 @@ static void draw_prompt(void)
     if (wgetcwd(cwd, sizeof(cwd)) < 0)
         strlcpy(cwd, "?", sizeof(cwd));
 
+    wuser_t me;
+    const char *who = (wuserinfo(-1, &me) == 0) ? me.name : "?";
+
     wcolor(W_CYAN | W_BRIGHT, W_DEFAULT);
-    wprintf("wos ");
+    wprintf("%s", who);
+    wcolor(W_WHITE, W_DEFAULT);
+    wprintf(" ");
     wcolor(W_GREEN | W_BRIGHT, W_DEFAULT);
     wprintf("%s", cwd);
     wcolor(W_WHITE, W_DEFAULT);
     wprintf("> ");
     wcolor_reset();
 
-    prompt_width = 4 + (int)strlen(cwd) + 2;
+    prompt_width = (int)strlen(who) + 1 + (int)strlen(cwd) + 2;
 }
 
 /* The first word decides the colour: green if it can actually be run, red if

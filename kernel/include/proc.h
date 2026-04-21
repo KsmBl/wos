@@ -75,6 +75,10 @@ typedef struct process {
     char         cwd[W_PATH_MAX + 1];
     file_t       fds[MAX_OPEN_FILES];
 
+    /* Who this process runs as.  Inherited by every child, and changed only
+     * by a successful login. */
+    uint32_t     uid;
+
     /* Memory accounting, in bytes. */
     uint64_t     code_bytes;
     uint64_t     data_bytes;

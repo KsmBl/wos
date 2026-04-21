@@ -26,6 +26,13 @@ which is the price of having no shared libraries.
 | [`rm`](#rm) | remove files and directories |
 | [`clear`](#clear) | clear the screen |
 | [`shutdown`](#shutdown) | power the machine off |
+| [`whoami`](#whoami) | print the current user and what it may do |
+| [`passwd`](#passwd) | change a password |
+| [`su`](#su) | start a shell as another user |
+| [`useradd`](#useradd) | create a user |
+
+Users, roles and what each may write are covered in
+[`docs/users.md`](users.md).
 
 ---
 
@@ -239,6 +246,75 @@ There is no user or permission model in WOS, so any process can do this.
 
 **Exit status:** does not return on success; 1 if the machine could not be
 powered off.
+
+## whoami
+
+```
+whoami [-v]
+```
+
+Prints the current user's name. `-v` also lists the roles held and the
+directories that user may write.
+
+**Exit status:** 0.
+
+## passwd
+
+```
+passwd [user]
+```
+
+Changes your own password, or another user's if you are root or hold the
+`useradmin` role. With no argument it changes your own.
+
+An unprivileged user is asked for the current password first; a privileged one
+is not, because the kernel would ignore it anyway. Nothing is echoed while
+typing, not even a placeholder — the length of a password is itself worth not
+showing.
+
+An empty new password clears it, letting that account be entered without one.
+`passwd` says so explicitly when that happens rather than letting it pass
+quietly.
+
+The program never sees a hash: the kernel does the checking and the storing,
+which is what makes it safe for an ordinary user to run without setuid.
+
+**Exit status:** 0, or 1 — with different messages for "not permitted" and
+"the current password is wrong", since those are different problems.
+
+## su
+
+```
+su [user]
+```
+
+Starts a shell as another user, defaulting to `root`. Asks for that user's
+password unless you are already root.
+
+It starts a **new** shell rather than changing the current one, because a
+process can drop to another user but never climb back. `exit` returns you to
+the shell you came from, still as whoever you were.
+
+**Exit status:** the shell's, or 1 if authentication failed.
+
+## useradd
+
+```
+useradd [-a] [-u] <name>
+```
+
+| Option | Grants |
+|---|---|
+| `-a` | `appeditor` — may write under `/app` |
+| `-u` | `useradmin` — may add users and set passwords |
+
+Creates the user and their home directory under `/home`. Only root and holders
+of `useradmin` may run it; anyone else is refused by the kernel, not by the
+program.
+
+Names become part of a path, so `/`, `:`, `.` and newlines are refused.
+
+**Exit status:** 0, or 1.
 
 ## A note on the "ports"
 

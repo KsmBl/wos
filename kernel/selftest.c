@@ -189,7 +189,7 @@ void selftest_memory(void)
  * is genuinely persistent this climbs by one on every boot. */
 static void test_boot_counter(void)
 {
-    const char *path = "/home/boots.txt";
+    const char *path = "/etc/boots.txt";
     char        buf[32];
     uint32_t    count = 0;
     uint32_t    ino;
@@ -247,7 +247,7 @@ static void test_filesystem_paths(void)
     check(wfs_lookup("/", &ino) == 0 && ino == WFS_ROOT_INO,
           "the root directory resolves to inode 1");
 
-    int r = wfs_lookup("/home/readme.txt", &ino);
+    int r = wfs_lookup("/home/root/readme.txt", &ino);
     check(r == 0, "a nested path resolves");
 
     if (r == 0) {
@@ -272,13 +272,13 @@ static void test_filesystem_paths(void)
 
     check(wfs_lookup("/nope", &ino) == -W_ENOENT,
           "a missing path reports ENOENT");
-    check(wfs_lookup("/home/readme.txt/x", &ino) == -W_ENOTDIR,
+    check(wfs_lookup("/home/root/readme.txt/x", &ino) == -W_ENOTDIR,
           "walking through a file reports ENOTDIR");
 }
 
 static void test_filesystem_write(void)
 {
-    const char *path = "/home/selftest.tmp";
+    const char *path = "/etc/selftest.tmp";
     wdiskinfo_t before, after;
     uint32_t    ino;
 

@@ -68,8 +68,15 @@ static int builtin_cd(int argc, char **argv)
     if (wgetcwd(here, sizeof(here)) < 0)
         here[0] = '\0';
 
+    char home[W_PATH_MAX + 1];
+
     if (argc < 2) {
-        target = "/home";
+        wuser_t me;
+        if (wuserinfo(-1, &me) == 0)
+            wsnprintf(home, sizeof(home), "/home/%s", me.name);
+        else
+            strlcpy(home, "/", sizeof(home));
+        target = home;
     } else if (strcmp(argv[1], "-") == 0) {
         if (!have_previous) {
             wfprintf(W_STDERR, "cd: no previous directory\n");
@@ -189,7 +196,16 @@ int main(int argc, char **argv)
     wcolor_reset();
     wprintf(" for instructions on how to use fish\n\n");
 
-    wchdir("/home");
+    {
+        wuser_t me;
+        char    home[W_PATH_MAX + 1];
+
+        if (wuserinfo(-1, &me) == 0) {
+            wsnprintf(home, sizeof(home), "/home/%s", me.name);
+            if (wchdir(home) < 0)
+                wchdir("/");
+        }
+    }
 
     while (!should_exit) {
         int len = fish_read_line(line, sizeof(line));

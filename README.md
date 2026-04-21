@@ -75,6 +75,11 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 - **Commands as programs**: `ls`, `pwd`, `cat`, `free`, `df`, `ps`, `touch`,
   `mkdir`, `rm`, `clear` and `shutdown` each live in `/app`, behaving as they
   do on Linux. Both shells run the same ones.
+- **Users and roles**: every process runs as a user, `root` may do anything,
+  and everyone else writes only in their own `/home` directory unless a role
+  says otherwise — `appeditor` for `/app`, `useradmin` for managing users.
+  `/kernel` is root-only. Password hashes never leave the kernel, so `passwd`
+  and `su` need no setuid.
 - **Applications**: `fish` (a shell that colours commands as you type and
   suggests from history), `vim` (a modal editor), `htop` (a live process
   monitor) and `fastfetch` (system information). These are WOS-native programs
@@ -86,6 +91,7 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 - [`docs/wkernel-api.md`](docs/wkernel-api.md) — every application-facing function,
   with parameters, return values, errors and examples
 - [`docs/whell.md`](docs/whell.md) — the shell and its builtins
+- [`docs/users.md`](docs/users.md) — users, roles, passwords and who may write where
 - [`docs/apps.md`](docs/apps.md) — the commands (`ls`, `free`, `rm`, ...) and
   fish, vim, htop, fastfetch
 - [`docs/console.md`](docs/console.md) — raw input mode and the ANSI escape

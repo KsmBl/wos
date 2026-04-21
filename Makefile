@@ -175,7 +175,7 @@ APP_SRC    := $(shell find app -type f 2>/dev/null)
 
 disk: $(DISK)
 
-$(DISK): $(MKWFS) $(APP_BINS) $(ROOTFS_SRC) $(APP_SRC)
+$(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(ROOTFS_SRC) $(APP_SRC)
 	@rm -rf $(ROOTFS)
 	@mkdir -p $(ROOTFS)
 	@cp -r rootfs/. $(ROOTFS)/
@@ -184,6 +184,12 @@ $(DISK): $(MKWFS) $(APP_BINS) $(ROOTFS_SRC) $(APP_SRC)
 	    cp $(BUILD)/app/$$a/launch $(ROOTFS)/app/$$a/launch; \
 	    cp app/$$a/sourcecode/* $(ROOTFS)/app/$$a/sourcecode/; \
 	done
+	@# /kernel gets the stripped binary and the source it came from. Stripped
+	@# because the debug build is close to the 268 KiB per-file ceiling.
+	@mkdir -p $(ROOTFS)/kernel/sourcecode
+	@objcopy --strip-debug $(KERNEL) $(ROOTFS)/kernel/kernel.elf
+	@find kernel include -name '*.c' -o -name '*.h' -o -name '*.S' \
+	    | while read f; do cp "$$f" $(ROOTFS)/kernel/sourcecode/; done
 	$(MKWFS) $@ $(DISK_MB) $(ROOTFS)
 
 QEMU := qemu-system-x86_64

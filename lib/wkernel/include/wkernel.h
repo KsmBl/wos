@@ -472,6 +472,90 @@ int wconsole_raw(int mode);
  */
 int wpollin(int fd);
 
+/* ==================================================================== *
+ *  Users and permissions
+ *
+ *  Every process runs as a user.  Root is uid 0 and bypasses every check;
+ *  anyone else needs the matching role, and may write only inside their own
+ *  home directory (plus /app, with W_ROLE_APPEDITOR).
+ *
+ *  Password hashes are never readable from a program: the kernel owns the
+ *  database and does the checking, which is why none of these calls needs
+ *  anything like setuid.
+ * ==================================================================== */
+
+/**
+ * @return The uid this process runs as. Cannot fail.
+ */
+int wgetuid(void);
+
+/**
+ * Look a user up by id.
+ *
+ * @param uid User to look up, or -1 for the calling process's own user.
+ * @param out Filled in with the uid, the role bitmask and the name.
+ * @return 0, `-W_ENOENT` if there is no such user, or `-W_EFAULT`.
+ */
+int wuserinfo(int uid, wuser_t *out);
+
+/**
+ * List every user on the system.
+ *
+ * @param out Array to fill, of at least @p max entries.
+ * @param max Maximum number of entries to write.
+ * @return The number written, or `-W_EFAULT`.
+ */
+int wuserlist(wuser_t *out, int max);
+
+/**
+ * Check a password and, if it matches, become that user.
+ *
+ * The check happens in the kernel, so a wrong password cannot be told from a
+ * right one by anything the caller can observe except the return value.
+ *
+ * Root may become any user without supplying a password -- that is what being
+ * root means. There is no way back: a process that drops to another user
+ * cannot return to root, so `su` runs a fresh shell rather than changing the
+ * one you are sitting in.
+ *
+ * @param name     User to become.
+ * @param password Their password; ignored when the caller is root.
+ * @return The new uid, `-W_ENOENT` if there is no such user, `-W_EACCES` if
+ *         the password is wrong, or `-W_EFAULT`.
+ */
+int wlogin(const char *name, const char *password);
+
+/**
+ * Set a user's password.
+ *
+ * Root and holders of #W_ROLE_USERADMIN may set anyone's password without
+ * knowing the old one. Anyone else may set only their own, and must supply it.
+ *
+ * @param name         User whose password to change.
+ * @param old_password The current password; ignored for a privileged caller,
+ *                     and ignored for an account that has none.
+ * @param new_password The new password. An empty string clears it, which
+ *                     lets that account be entered without one.
+ * @return 0, `-W_ENOENT`, `-W_EPERM` if not permitted, `-W_EACCES` if the old
+ *         password is wrong, or `-W_EFAULT`.
+ */
+int wpasswd(const char *name, const char *old_password,
+            const char *new_password);
+
+/**
+ * Create a user, and their home directory under /home.
+ *
+ * Only root and holders of #W_ROLE_USERADMIN may do this.
+ *
+ * @param name     Name for the new user. May not contain '/', ':', '.' or a
+ *                 newline, since it becomes part of a path.
+ * @param password Their initial password; empty means none.
+ * @param roles    Bitmask of `W_ROLE_*` values.
+ * @return The new uid, `-W_EPERM` if not permitted, `-W_EEXIST` if the name is
+ *         taken, `-W_EINVAL` for an unusable name, or `-W_ENOSPC`.
+ */
+int wuseradd(const char *name, const char *password, unsigned int roles);
+
 /**
  * Shut the machine down.
  *
@@ -601,6 +685,20 @@ void wcursor(int visible);
  *       immediately -- the same guess a terminal program makes.
  */
 int wgetkey(void);
+
+/**
+ * Prompt for a password and read it without echoing.
+ *
+ * Switches the console to raw mode for the duration, so nothing appears on
+ * screen and nothing is left in the scrollback. Backspace works; Ctrl+C
+ * abandons the entry and yields an empty string.
+ *
+ * @param prompt Text to print before reading, e.g. "Password: ".
+ * @param buf    Buffer to fill, always NUL-terminated.
+ * @param size   Size of @p buf.
+ * @return The length read, or a negative error.
+ */
+int wgetpass(const char *prompt, char *buf, wsize_t size);
 
 /**
  * Read one line from the console.

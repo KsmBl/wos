@@ -7,6 +7,7 @@
 #include "kheap.h"
 #include "string.h"
 #include "kprintf.h"
+#include "user.h"
 
 void vfs_init_fds(struct process *p)
 {
@@ -121,6 +122,77 @@ int vfs_resolve(struct process *p, const char *path, char *out, size_t out_size)
 }
 
 /* ------------------------------------------------------------------ *
+ *  Write permission
+ *
+ * WFS stores no per-file owner or mode -- an inode is 64 bytes and has no
+ * room for one -- so permission is decided by path instead.  That is coarser
+ * than Unix, but it expresses the rules this system actually has:
+ *
+ *   root            may write anywhere
+ *   /kernel         root only, whatever roles a user holds
+ *   /app            needs W_ROLE_APPEDITOR
+ *   /home/<user>    that user's own directory, and everything beneath it
+ *   anywhere else   read-only
+ *
+ * Reading is unrestricted.  The one thing worth hiding, the password file, is
+ * never handed to a program at all: the kernel reads and writes it itself.
+ * ------------------------------------------------------------------ */
+
+/* True if `path` is `prefix`, or something inside it.  Compares whole
+ * components, so "/apple" does not count as being under "/app". */
+static bool path_within(const char *path, const char *prefix)
+{
+    size_t n = strlen(prefix);
+
+    if (strncmp(path, prefix, n) != 0)
+        return false;
+
+    return path[n] == '\0' || path[n] == '/';
+}
+
+/* Decide whether `p` may create, modify or delete `abs`, which must already
+ * be resolved and normalised -- otherwise "/home/bob/../../app/x" would slip
+ * past the prefix tests. */
+static bool may_write(struct process *p, const char *abs)
+{
+    if (p->uid == W_ROOT_UID)
+        return true;
+
+    if (path_within(abs, "/kernel"))
+        return false;
+
+    if (path_within(abs, "/app"))
+        return user_has_role(p->uid, W_ROLE_APPEDITOR);
+
+    wuser_t me;
+    if (user_by_uid(p->uid, &me) < 0)
+        return false;
+
+    char home[W_PATH_MAX + 1];
+    size_t at = 0;
+
+    for (const char *s = "/home/"; *s; s++)
+        home[at++] = *s;
+    for (const char *s = me.name; *s && at < W_PATH_MAX; s++)
+        home[at++] = *s;
+    home[at] = '\0';
+
+    return path_within(abs, home);
+}
+
+/* Resolve `path` and check write permission in one step, since every caller
+ * that changes something needs both. */
+static int resolve_for_write(struct process *p, const char *path,
+                             char *out, size_t out_size)
+{
+    int r = vfs_resolve(p, path, out, out_size);
+    if (r < 0)
+        return r;
+
+    return may_write(p, out) ? 0 : -W_EACCES;
+}
+
+/* ------------------------------------------------------------------ *
  *  Console
  * ------------------------------------------------------------------ */
 
@@ -147,6 +219,14 @@ int vfs_open(struct process *p, const char *path, uint32_t flags)
     int  r = vfs_resolve(p, path, abs, sizeof(abs));
     if (r < 0)
         return r;
+
+    /* Reading is open to everyone; anything that could change the file is
+     * checked before the file is even looked up. */
+    if ((flags & W_O_ACCMODE) != W_O_RDONLY ||
+        (flags & (W_O_CREAT | W_O_TRUNC | W_O_APPEND))) {
+        if (!may_write(p, abs))
+            return -W_EACCES;
+    }
 
     uint32_t ino;
     r = wfs_lookup(abs, &ino);
@@ -302,7 +382,7 @@ int vfs_stat(struct process *p, const char *path, wstat_t *out)
 int vfs_unlink(struct process *p, const char *path)
 {
     char abs[W_PATH_MAX + 1];
-    int  r = vfs_resolve(p, path, abs, sizeof(abs));
+    int  r = resolve_for_write(p, path, abs, sizeof(abs));
     if (r < 0)
         return r;
 
@@ -324,7 +404,7 @@ int vfs_unlink(struct process *p, const char *path)
 int vfs_mkdir(struct process *p, const char *path)
 {
     char abs[W_PATH_MAX + 1];
-    int  r = vfs_resolve(p, path, abs, sizeof(abs));
+    int  r = resolve_for_write(p, path, abs, sizeof(abs));
     if (r < 0)
         return r;
 
@@ -334,7 +414,7 @@ int vfs_mkdir(struct process *p, const char *path)
 int vfs_rmdir(struct process *p, const char *path)
 {
     char abs[W_PATH_MAX + 1];
-    int  r = vfs_resolve(p, path, abs, sizeof(abs));
+    int  r = resolve_for_write(p, path, abs, sizeof(abs));
     if (r < 0)
         return r;
 
