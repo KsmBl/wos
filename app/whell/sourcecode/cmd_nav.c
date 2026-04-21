@@ -2,7 +2,6 @@
 
 #include "whell.h"
 
-#define HOME_DIR "/home"
 
 /* Where `cd -` goes back to. */
 static char previous_dir[W_PATH_MAX + 1];
@@ -23,8 +22,16 @@ int cmd_cd(int argc, char **argv)
     if (wgetcwd(here, sizeof(here)) < 0)
         here[0] = '\0';
 
+    char home[W_PATH_MAX + 1];
+
     if (argc < 2) {
-        target = HOME_DIR;
+        /* Bare `cd` goes to this user's own directory. */
+        wuser_t me;
+        if (wuserinfo(-1, &me) == 0)
+            wsnprintf(home, sizeof(home), "/home/%s", me.name);
+        else
+            strlcpy(home, "/", sizeof(home));
+        target = home;
     } else if (strcmp(argv[1], "-") == 0) {
         if (!have_previous) {
             wfprintf(W_STDERR, "cd: OLDPWD not set\n");
@@ -55,14 +62,14 @@ int cmd_help(int argc, char **argv)
 {
     wprintf("whell -- the WOS shell\n\n");
     wprintf("Builtins, which must run inside the shell itself:\n");
-    wprintf("  cd [path | -]            change directory (no argument: %s)\n",
-            HOME_DIR);
+    wprintf("  cd [path | -]            change directory (no argument: your home)\n");
     wprintf("  exit [status]            leave the shell\n");
     wprintf("  help                     this text\n\n");
     wprintf("Everything else is a program in /app. Typing a bare name runs\n");
     wprintf("/app/<name>/launch, so `ls` runs /app/ls/launch. Press Tab to\n");
     wprintf("see what is installed.\n\n");
     wprintf("Installed alongside the shell: ls, pwd, cat, free, df, ps, rm,\n");
-    wprintf("mkdir, touch, clear, shutdown, fish, vim, htop, fastfetch.\n");
+    wprintf("mkdir, touch, clear, shutdown, whoami, passwd, su, useradd,\n");
+    wprintf("fish, vim, htop, fastfetch.\n");
     return 0;
 }

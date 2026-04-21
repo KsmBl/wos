@@ -110,6 +110,7 @@ void proc_init(void)
 
     kernel_proc.used  = true;
     kernel_proc.pid   = 0;
+    kernel_proc.uid   = W_ROOT_UID;   /* the kernel, and so the first shell */
     kernel_proc.space = paging_kernel_space();
     strlcpy(kernel_proc.name, "kernel", sizeof(kernel_proc.name));
     strlcpy(kernel_proc.cwd, "/", sizeof(kernel_proc.cwd));
@@ -201,6 +202,7 @@ int32_t proc_spawn(const char *path, char *const argv[], process_t *parent)
     }
 
     p->parent = parent;
+    p->uid    = parent->uid;        /* a child runs as whoever started it */
     strlcpy(p->cwd, parent->cwd, sizeof(p->cwd));
     vfs_init_fds(p);
 

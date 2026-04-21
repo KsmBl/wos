@@ -68,7 +68,7 @@ static void show_heap(void)
 
 static void test_files(void)
 {
-    const char *path = "/home/hello.tmp";
+    const char *path = "hello.tmp";
     const char *text = "written by hello through the wkernel API\n";
 
     int fd = wopen(path, W_O_WRONLY | W_O_CREAT | W_O_TRUNC);
@@ -96,9 +96,9 @@ static void test_files(void)
     if (wstat(path, &st) == 0)
         wprintf("hello: it is %u bytes in %u block(s)\n", st.size, st.blocks);
 
-    int d = wopendir("/home");
+    int d = wopendir(".");
     if (d >= 0) {
-        wprintf("hello: /home contains");
+        wprintf("hello: this directory contains");
         wdirent_t e;
         while (wreaddir(d, &e) == 1) {
             if (strcmp(e.name, ".") == 0 || strcmp(e.name, "..") == 0)

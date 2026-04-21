@@ -656,3 +656,84 @@ if (key == W_KEY_UP)
     move_up();
 wconsole_raw(W_CONSOLE_CANONICAL);
 ```
+
+---
+
+# Users and permissions
+
+Every process runs as a user. Root is uid 0 and bypasses every check; anyone
+else needs the matching role, and may write only inside their own home
+directory (plus `/app`, with `W_ROLE_APPEDITOR`).
+
+Password hashes are never readable from a program: the kernel owns the database
+and does the checking, which is why none of these calls needs anything like
+setuid. See [`docs/users.md`](users.md) for the whole picture.
+
+```c
+typedef struct {
+    uint32_t uid;
+    uint32_t roles;                /* W_ROLE_* bitmask */
+    char     name[W_NAME_LEN + 1];
+} wuser_t;
+```
+
+| Role | Grants |
+|---|---|
+| `W_ROLE_APPEDITOR` | write access under `/app` |
+| `W_ROLE_USERADMIN` | creating users and setting anyone's password |
+
+## `int wgetuid(void)`
+
+**Returns** the uid this process runs as. Cannot fail.
+
+## `int wuserinfo(int uid, wuser_t *out)`
+
+Look a user up by id. Pass `-1` for the calling process's own user.
+
+**Returns** 0, `-W_ENOENT`, or `-W_EFAULT`.
+
+## `int wuserlist(wuser_t *out, int max)`
+
+Fill `out` with up to `max` user records. **Returns** the number written, or
+`-W_EFAULT`.
+
+## `int wlogin(const char *name, const char *password)`
+
+Check a password and, if it matches, become that user. Root may become anyone
+without supplying one.
+
+**Returns** the new uid, `-W_ENOENT` if there is no such user, `-W_EACCES` if
+the password is wrong, or `-W_EFAULT`.
+
+There is no way back — a process that drops to another user cannot return to
+root — which is why `su` runs a fresh shell rather than changing the current
+one.
+
+## `int wpasswd(const char *name, const char *old, const char *new)`
+
+Set a user's password. Root and holders of `W_ROLE_USERADMIN` may set anyone's
+without knowing the old one; anyone else may set only their own and must supply
+it. An empty `new` clears the password.
+
+**Returns** 0, `-W_ENOENT`, `-W_EPERM` (not permitted), `-W_EACCES` (the old
+password is wrong), or `-W_EFAULT`.
+
+## `int wuseradd(const char *name, const char *password, unsigned roles)`
+
+Create a user and their home directory under `/home`. Only root and holders of
+`W_ROLE_USERADMIN` may do this.
+
+**Returns** the new uid, `-W_EPERM`, `-W_EEXIST`, `-W_EINVAL` for a name that
+cannot be part of a path, or `-W_ENOSPC`.
+
+## `int wgetpass(const char *prompt, char *buf, wsize_t size)`
+
+Prompt for a password and read it without echoing. Switches the console to raw
+mode for the duration and restores whatever mode was in effect. Backspace
+works; Ctrl+C abandons the entry.
+
+**Returns** the length read, or a negative error.
+
+Note that switching console modes discards anything typed but not yet
+submitted, so text typed ahead of the prompt is dropped rather than being
+captured into the password.

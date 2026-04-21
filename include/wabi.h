@@ -136,6 +136,29 @@ typedef struct {
 } wdiskinfo_t;
 
 /* ------------------------------------------------------------------ *
+ *  Users, roles and permissions
+ *
+ *  Every process runs as a user, identified by a uid.  Root is uid 0 and
+ *  bypasses every check.  Any other user needs the matching role for a
+ *  privileged action, and may write only inside its own home directory.
+ * ------------------------------------------------------------------ */
+
+#define W_ROOT_UID 0
+
+#define W_NAME_LEN 31              /* longest user name */
+#define W_MAX_USERS 32
+
+/* Roles are a bitmask, so a user can hold several. */
+#define W_ROLE_APPEDITOR (1u << 0)  /* may write under /app                */
+#define W_ROLE_USERADMIN (1u << 1)  /* may add users and set their passwords */
+
+typedef struct {
+    uint32_t uid;
+    uint32_t roles;
+    char     name[W_NAME_LEN + 1];
+} wuser_t;
+
+/* ------------------------------------------------------------------ *
  *  Syscall numbers
  * ------------------------------------------------------------------ */
 #define WSYS_EXIT        0
@@ -166,7 +189,13 @@ typedef struct {
 #define WSYS_SHUTDOWN   25
 #define WSYS_CONSOLE    26
 #define WSYS_POLLIN     27
-#define WSYS_MAX        28
+#define WSYS_GETUID     28
+#define WSYS_USERINFO   29
+#define WSYS_USERLIST   30
+#define WSYS_LOGIN      31
+#define WSYS_PASSWD     32
+#define WSYS_USERADD    33
+#define WSYS_MAX        34
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

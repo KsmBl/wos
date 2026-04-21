@@ -40,7 +40,14 @@ void whell_print_prompt(void)
     if (wgetcwd(cwd, sizeof(cwd)) < 0)
         strlcpy(cwd, "?", sizeof(cwd));
 
-    wprintf("wos:%s$ ", cwd);
+    wuser_t me;
+    const char *who = (wuserinfo(-1, &me) == 0) ? me.name : "?";
+
+    /* Root's prompt ends in '#', everyone else's in '$'. An old convention,
+     * and a useful one: it says at a glance that nothing here is protected
+     * from you. */
+    wprintf("%s@wos:%s%c ", who, cwd,
+            (wuserinfo(-1, &me) == 0 && me.uid == W_ROOT_UID) ? '#' : '$');
 }
 
 const char *whell_builtin_name(int index)
@@ -234,8 +241,20 @@ int main(int argc, char **argv)
     wprintf("\nwhell -- the WOS shell. Type `help` for an introduction.\n");
     wprintf("Tab completes commands and paths.\n\n");
 
-    /* Start where the user's files are, not at the root. */
-    wchdir("/home");
+    /* Start in this user's own directory: the one place they can certainly
+     * write. */
+    {
+        wuser_t me;
+        char    home[W_PATH_MAX + 1];
+
+        if (wuserinfo(-1, &me) == 0) {
+            wsnprintf(home, sizeof(home), "/home/%s", me.name);
+            if (wchdir(home) < 0)
+                wchdir("/");
+        } else {
+            wchdir("/");
+        }
+    }
 
     while (!should_exit) {
         whell_print_prompt();

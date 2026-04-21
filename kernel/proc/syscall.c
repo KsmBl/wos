@@ -21,6 +21,7 @@
 #include "pit.h"
 #include "power.h"
 #include "keyboard.h"
+#include "user.h"
 #include "string.h"
 #include "kprintf.h"
 #include "wabi.h"
@@ -352,6 +353,105 @@ static int64_t sys_pollin(uint64_t fd)
     return 1;
 }
 
+/* ------------------------------------------------------------------ *
+ *  Users
+ * ------------------------------------------------------------------ */
+
+static int64_t sys_getuid(void)
+{
+    return proc_current()->uid;
+}
+
+static int64_t sys_userinfo(uint64_t uid, uint64_t out)
+{
+    if (!user_range_ok((void *)out, sizeof(wuser_t), true))
+        return -W_EFAULT;
+
+    /* A negative uid means "whoever is asking". */
+    uint32_t want = ((int64_t)uid < 0) ? proc_current()->uid : (uint32_t)uid;
+
+    return user_by_uid(want, (wuser_t *)out);
+}
+
+static int64_t sys_userlist(uint64_t out, uint64_t max)
+{
+    if (max > W_MAX_USERS)
+        max = W_MAX_USERS;
+    if (!user_range_ok((void *)out, max * sizeof(wuser_t), true))
+        return -W_EFAULT;
+
+    return user_list((wuser_t *)out, (int)max);
+}
+
+/* Authenticate and, if it works, become that user.
+ *
+ * Doing the check in the kernel is what lets this exist at all: the password
+ * file is unreadable from ring 3, so there is no way to verify a password in
+ * user space and no need for setuid to work around it. */
+static int64_t sys_login(uint64_t name, uint64_t password)
+{
+    char namebuf[W_NAME_LEN + 1];
+    char passbuf[128];
+
+    int r = copy_string_from_user((const char *)name, namebuf, sizeof(namebuf));
+    if (r < 0)
+        return r;
+    r = copy_string_from_user((const char *)password, passbuf, sizeof(passbuf));
+    if (r < 0)
+        return r;
+
+    process_t *p = proc_current();
+    wuser_t    who;
+
+    /* Root may become anyone without proving anything; that is what being
+     * root means. */
+    if (p->uid == W_ROOT_UID) {
+        r = user_by_name(namebuf, &who);
+    } else {
+        r = user_authenticate(namebuf, passbuf, &who);
+    }
+    if (r < 0)
+        return r;
+
+    p->uid = who.uid;
+    return (int64_t)who.uid;
+}
+
+static int64_t sys_passwd(uint64_t name, uint64_t old_password,
+                          uint64_t new_password)
+{
+    char namebuf[W_NAME_LEN + 1];
+    char oldbuf[128];
+    char newbuf[128];
+
+    int r = copy_string_from_user((const char *)name, namebuf, sizeof(namebuf));
+    if (r < 0)
+        return r;
+    r = copy_string_from_user((const char *)old_password, oldbuf, sizeof(oldbuf));
+    if (r < 0)
+        return r;
+    r = copy_string_from_user((const char *)new_password, newbuf, sizeof(newbuf));
+    if (r < 0)
+        return r;
+
+    return user_set_password(proc_current()->uid, namebuf, oldbuf, newbuf);
+}
+
+static int64_t sys_useradd(uint64_t name, uint64_t password, uint64_t roles)
+{
+    char namebuf[W_NAME_LEN + 1];
+    char passbuf[128];
+
+    int r = copy_string_from_user((const char *)name, namebuf, sizeof(namebuf));
+    if (r < 0)
+        return r;
+    r = copy_string_from_user((const char *)password, passbuf, sizeof(passbuf));
+    if (r < 0)
+        return r;
+
+    return user_add(proc_current()->uid, namebuf, passbuf, (uint32_t)roles);
+}
+
 static int64_t sys_shutdown(void)
 {
     /* There is no user or permission model in WOS, so any process may do
@@ -397,6 +497,12 @@ static void syscall_handler(regs_t *regs)
     case WSYS_YIELD:     r = sys_yield(); break;
     case WSYS_CONSOLE:   r = sys_console(regs->rdi); break;
     case WSYS_POLLIN:    r = sys_pollin(regs->rdi); break;
+    case WSYS_GETUID:    r = sys_getuid(); break;
+    case WSYS_USERINFO:  r = sys_userinfo(regs->rdi, regs->rsi); break;
+    case WSYS_USERLIST:  r = sys_userlist(regs->rdi, regs->rsi); break;
+    case WSYS_LOGIN:     r = sys_login(regs->rdi, regs->rsi); break;
+    case WSYS_PASSWD:    r = sys_passwd(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_USERADD:   r = sys_useradd(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

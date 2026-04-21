@@ -84,6 +84,39 @@ int wpollin(int fd)
     return wsyscall1(WSYS_POLLIN, fd);
 }
 
+int wgetuid(void)
+{
+    return (int)wsyscall0(WSYS_GETUID);
+}
+
+int wuserinfo(int uid, wuser_t *out)
+{
+    return (int)wsyscall2(WSYS_USERINFO, uid, (long)out);
+}
+
+int wuserlist(wuser_t *out, int max)
+{
+    return (int)wsyscall2(WSYS_USERLIST, (long)out, max);
+}
+
+int wlogin(const char *name, const char *password)
+{
+    return (int)wsyscall2(WSYS_LOGIN, (long)name, (long)password);
+}
+
+int wpasswd(const char *name, const char *old_password,
+            const char *new_password)
+{
+    return (int)wsyscall3(WSYS_PASSWD, (long)name, (long)old_password,
+                          (long)new_password);
+}
+
+int wuseradd(const char *name, const char *password, unsigned int roles)
+{
+    return (int)wsyscall3(WSYS_USERADD, (long)name, (long)password,
+                          (long)roles);
+}
+
 int wshutdown(void)
 {
     /* Only comes back if the kernel could not power the machine off, and even
