@@ -69,9 +69,12 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   reboots, and the disk figures come from its block bitmap.
 - **wkernel**, the documented application API: file and directory I/O, memory
   and disk statistics, process control, `printf`, `malloc`.
-- **whell**, a shell with `ls`, `free`, `cd` and `pwd` behaving as they do on
-  Linux, plus `df`, `ps`, `cat`, `rm`, `mkdir`, `touch`, `clear`, `shutdown`
-  and tab completion.
+- **whell**, a shell with tab completion and line editing. It is deliberately
+  tiny: only `cd`, `exit` and `help` are builtins, because only those change
+  state belonging to the shell process.
+- **Commands as programs**: `ls`, `pwd`, `cat`, `free`, `df`, `ps`, `touch`,
+  `mkdir`, `rm`, `clear` and `shutdown` each live in `/app`, behaving as they
+  do on Linux. Both shells run the same ones.
 - **Applications**: `fish` (a shell that colours commands as you type and
   suggests from history), `vim` (a modal editor), `htop` (a live process
   monitor) and `fastfetch` (system information). These are WOS-native programs
@@ -83,7 +86,8 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 - [`docs/wkernel-api.md`](docs/wkernel-api.md) — every application-facing function,
   with parameters, return values, errors and examples
 - [`docs/whell.md`](docs/whell.md) — the shell and its builtins
-- [`docs/apps.md`](docs/apps.md) — fish, vim, htop and fastfetch
+- [`docs/apps.md`](docs/apps.md) — the commands (`ls`, `free`, `rm`, ...) and
+  fish, vim, htop, fastfetch
 - [`docs/console.md`](docs/console.md) — raw input mode and the ANSI escape
   sequences full-screen programs use
 - [`docs/architecture.md`](docs/architecture.md) — how the kernel fits together

@@ -4,6 +4,242 @@ Every application lives in `/app/<name>/`, with its executable at
 `/app/<name>/launch` and its source in `/app/<name>/sourcecode/`. Typing the
 bare name in `whell` runs it.
 
+This is where the commands live. The shells contain almost nothing: only `cd`,
+`exit` and `help` are builtins, because only those change state belonging to
+the shell process. `ls`, `cat`, `free` and the rest are ordinary programs, so
+`whell` and `fish` run exactly the same ones.
+
+Each is statically linked against `libwkernel.a`, so a program is around 50 KiB
+whatever it does. Seventeen of them come to about 1.2 MiB on a 64 MiB disk,
+which is the price of having no shared libraries.
+
+| Command | What it does |
+|---|---|
+| [`ls`](#ls) | list directory contents |
+| [`pwd`](#pwd) | print the working directory |
+| [`cat`](#cat) | print files |
+| [`free`](#free) | show memory use |
+| [`df`](#df) | show disk use |
+| [`ps`](#ps) | show processes and their memory |
+| [`touch`](#touch) | create files |
+| [`mkdir`](#mkdir) | create directories |
+| [`rm`](#rm) | remove files and directories |
+| [`clear`](#clear) | clear the screen |
+| [`shutdown`](#shutdown) | power the machine off |
+
+---
+
+# Core commands
+
+## ls
+
+```
+ls [-l] [-a] [path...]
+```
+
+With no operand, lists the working directory. With several, each directory gets
+a `path:` header and a blank line between them; a file operand is listed as
+itself rather than being descended into. Entries are sorted by name, and plain
+output is laid out in columns with a `/` after directory names.
+
+| Option | Effect |
+|---|---|
+| `-l` | long listing: type, size in bytes, blocks used, name |
+| `-a` | include entries starting with `.`, including `.` and `..` |
+
+```
+wos:/home$ ls -l
+total 3
+-   2     1  boots.txt
+-  66     1  notes.txt
+- 560     1  readme.txt
+```
+
+The first column is `d` for a directory and `-` for a file. `total` is the sum
+of the block counts, as in Linux.
+
+WFS stores no owners, permissions or timestamps, so those Linux columns are
+absent rather than filled with invented values.
+
+**Exit status:** 0, or 1 if any operand could not be read.
+
+## pwd
+
+```
+pwd
+```
+
+Prints the working directory as an absolute, normalised path. A child inherits
+its parent's directory, which is why this works as a program while `cd` cannot.
+
+**Exit status:** 0, or 1 if the path could not be read.
+
+## cat
+
+```
+cat file...
+```
+
+Writes each file to standard output in order. Continues past a file it cannot
+open, reporting each failure, so one bad operand does not hide the rest.
+
+**Exit status:** 0, or 1 if any file could not be read.
+
+## free
+
+```
+free [-b | -k | -m | -h]
+```
+
+```
+wos:/home$ free
+          total        used        free
+Mem:     262016        9532      252484
+Swap:         0           0           0
+```
+
+| Option | Units |
+|---|---|
+| *(none)* | kibibytes, as Linux does by default |
+| `-b` `-k` `-m` | bytes, kibibytes, mebibytes |
+| `-h` | human readable, e.g. `246.5M` |
+
+The figures come from the kernel's physical frame allocator, so `used` is
+exactly the RAM currently allocated — including the kernel's own image, heap
+and page tables — and `used + free == total` always holds.
+
+WOS has no swap. The row is printed as zeroes so the output matches what a
+reader of `free` expects to find.
+
+**Exit status:** 0, or 1 on an invalid option.
+
+## df
+
+```
+df [-b | -k | -m | -h]
+```
+
+```
+wos:/home$ df
+Filesystem    1K-blocks       Used  Available Use% Mounted on
+wfs               65536       1264      64272   1% /
+
+inodes: 83 used, 1965 free, 2048 total
+```
+
+Options are the same as `free`. The numbers come from the filesystem's block
+bitmap, so `Used` counts blocks that are genuinely allocated, including the
+superblock, bitmap and inode table. A disk with anything on it reports at least
+1%, never 0%.
+
+**Exit status:** 0, or 1 if no filesystem is mounted or the option is invalid.
+
+## ps
+
+```
+ps
+```
+
+```
+wos:/home$ ps
+  PID NAME          RESIDENT     CODE     DATA     HEAP    STACK THR
+    6 whell           108.0K    12.0K     8.0K       0B    64.0K   1
+   11 ps              104.0K     8.0K     8.0K       0B    64.0K   1
+```
+
+`ps` lists itself, which it could not do as a shell builtin — a useful reminder
+that these really are separate processes.
+
+`RESIDENT` is what the process actually has mapped, counted from its page
+tables, which is why it exceeds the four columns beside it: those do not
+include the process's own page tables.
+
+**Exit status:** 0.
+
+## touch
+
+```
+touch file...
+```
+
+Creates each file if it does not exist, and leaves the contents of one that
+does alone.
+
+WFS stores no timestamps, so unlike Linux there is nothing to update on a file
+that already exists — `touch` on it simply succeeds.
+
+**Exit status:** 0, or 1 if any file could not be created.
+
+## mkdir
+
+```
+mkdir dir...
+```
+
+Creates each directory. The parent must already exist, so making a nested path
+takes one `mkdir` per level.
+
+**Exit status:** 0, or 1 if any directory could not be created.
+
+## rm
+
+```
+rm [-r] [-f] file...
+```
+
+| Option | Effect |
+|---|---|
+| `-r`, `-R` | remove directories and everything inside them |
+| `-f` | ignore files that do not exist, and say nothing about them |
+
+Without `-r`, naming a directory is an error:
+
+```
+wos:/home$ rm tree
+rm: tree: is a directory
+wos:/home$ rm -r tree
+```
+
+`rm` refuses to remove `.` or `..`, as Linux does — `rm -r .` would delete the
+working directory out from under the shell.
+
+Recursive removal collects a directory's children before deleting any of them:
+`wreaddir` walks by entry index, so removing an entry mid-iteration shifts the
+ones after it and the walk would silently skip files.
+
+**Exit status:** 0, or 1 if anything could not be removed. With `-f`, a missing
+file is not a failure.
+
+## clear
+
+```
+clear
+```
+
+Clears the screen and homes the cursor, by emitting the ANSI escapes described
+in [`docs/console.md`](console.md).
+
+**Exit status:** 0.
+
+## shutdown
+
+```
+shutdown
+```
+
+Powers the machine off. Nothing needs flushing first: WFS writes its
+superblock, block bitmap and inodes straight through on every change, so the
+disk is consistent at every moment.
+
+Under QEMU, VirtualBox or Bochs the VM exits. On real hardware the kernel has
+no ACPI parser to find the platform's soft-off registers, so it says so and
+halts the CPU instead.
+
+There is no user or permission model in WOS, so any process can do this.
+
+**Exit status:** does not return on success; 1 if the machine could not be
+powered off.
+
 ## A note on the "ports"
 
 `fastfetch`, `htop`, `vim` and `fish` here are **WOS-native programs written in

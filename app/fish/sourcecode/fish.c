@@ -6,8 +6,9 @@
  * coloured as you type it, the rest of a previous command is offered ahead of
  * the cursor, and Tab completes.
  *
- * Commands fish does not implement itself are handed to `whell -c`, so the
- * two shells share one set of builtins rather than each keeping a copy.
+ * Only cd and exit are builtins, plus history and help which describe fish
+ * itself.  Everything else is a program under /app, so both shells run the
+ * same ls and the same free without either one carrying a copy.
  */
 
 #include "fish.h"
@@ -108,21 +109,9 @@ static int builtin_help(int argc, char **argv)
     wprintf("  a grey suggestion continues the line from your history\n");
     wprintf("  right arrow or End accepts the suggestion\n");
     wprintf("  up/down walk the history, Tab completes\n\n");
-    wprintf("Builtins: cd, pwd, history, clear, help, exit\n");
-    wprintf("Everything else runs from /app/<name>/launch, or is handed\n");
-    wprintf("to whell, which is where ls, free, df, ps, cat, rm, mkdir,\n");
-    wprintf("touch and shutdown live.\n");
-    return 0;
-}
-
-static int builtin_pwd(int argc, char **argv)
-{
-    char cwd[W_PATH_MAX + 1];
-
-    if (wgetcwd(cwd, sizeof(cwd)) < 0)
-        return 1;
-
-    wprintf("%s\n", cwd);
+    wprintf("Builtins: cd, history, help, exit\n");
+    wprintf("Everything else is a program in /app, so `ls` runs\n");
+    wprintf("/app/ls/launch. Press Tab to see what is installed.\n");
     return 0;
 }
 
@@ -138,24 +127,6 @@ static int spawn_and_wait(const char *path, char *const argv[])
         return -1;
 
     return status;
-}
-
-/* Hand a whole command line to whell, which owns the shared builtins. */
-static int delegate_to_whell(const char *line)
-{
-    char *argv[4];
-
-    argv[0] = "whell";
-    argv[1] = "-c";
-    argv[2] = (char *)line;
-    argv[3] = NULL;
-
-    int r = spawn_and_wait("/app/whell/launch", argv);
-    if (r < 0) {
-        wfprintf(W_STDERR, "fish: cannot run whell\n");
-        return 127;
-    }
-    return r;
 }
 
 static int run_line(char *line)
@@ -177,14 +148,8 @@ static int run_line(char *line)
     }
     if (strcmp(argv[0], "cd") == 0)
         return builtin_cd(argc, argv);
-    if (strcmp(argv[0], "pwd") == 0)
-        return builtin_pwd(argc, argv);
     if (strcmp(argv[0], "history") == 0)
         return builtin_history(argc, argv);
-    if (strcmp(argv[0], "clear") == 0) {
-        wcls();
-        return 0;
-    }
     if (strcmp(argv[0], "help") == 0)
         return builtin_help(argc, argv);
 
@@ -206,8 +171,8 @@ static int run_line(char *line)
         return r;
     }
 
-    /* Otherwise it may be one of whell's builtins. */
-    return delegate_to_whell(original);
+    wfprintf(W_STDERR, "fish: %s: command not found\n", argv[0]);
+    return 127;
 }
 
 int main(int argc, char **argv)

@@ -17,15 +17,11 @@ static char match_names[MAX_MATCHES][W_NAME_MAX + 1];
 static char match_is_dir[MAX_MATCHES];
 static int  match_count;
 
-/* The builtins fish handles itself, plus the ones it borrows from whell.
- * Completion and highlighting both consult this. */
+/* The builtins fish handles itself.  Everything else a user would call a
+ * command is a program under /app, which completion and highlighting find by
+ * scanning that directory rather than from a list kept here. */
 static const char *fish_builtins[] = {
-    "cd", "exit", "history", "clear", "help", "pwd",
-    NULL
-};
-
-static const char *whell_builtins[] = {
-    "ls", "free", "df", "ps", "cat", "rm", "mkdir", "touch", "shutdown",
+    "cd", "exit", "history", "help",
     NULL
 };
 
@@ -61,10 +57,6 @@ int fish_command_exists(const char *name)
 
     for (int i = 0; fish_builtins[i]; i++)
         if (strcmp(name, fish_builtins[i]) == 0)
-            return 1;
-
-    for (int i = 0; whell_builtins[i]; i++)
-        if (strcmp(name, whell_builtins[i]) == 0)
             return 1;
 
     wstat_t st;
@@ -105,11 +97,6 @@ static void match_commands(const char *prefix, int prefix_len)
         if (prefix_len == 0 ||
             strncmp(fish_builtins[i], prefix, (wsize_t)prefix_len) == 0)
             add_match(fish_builtins[i], 0);
-
-    for (int i = 0; whell_builtins[i]; i++)
-        if (prefix_len == 0 ||
-            strncmp(whell_builtins[i], prefix, (wsize_t)prefix_len) == 0)
-            add_match(whell_builtins[i], 0);
 
     int d = wopendir("/app");
     if (d < 0)
