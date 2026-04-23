@@ -1,12 +1,17 @@
-/* The user database.
+/* The user database, stored under /userconfig.
  *
- * Stored as text at /etc/users, one record per line:
+ *     /userconfig/users              the list:  name:uid:roles
+ *     /userconfig/<name>/password    that user's password: salt:hash
  *
- *     name:uid:roles:salt:hash
+ * The split matters.  A user with the usereditor role may write /userconfig --
+ * that is how accounts are added and roles changed -- but the password files
+ * inside it are root-only, for reading as well as writing.  The VFS enforces
+ * that; see may_write() and may_read() in vfs.c.
  *
- * Text rather than a packed struct so the file can be read with `cat` while
- * debugging -- though only by root, since /etc is not writable by anyone else
- * and the hashes are useless without the salt anyway.
+ * The kernel reaches these files through wfs_* directly, below the permission
+ * layer, so it can always read and rewrite them whoever is asking.  That is
+ * what lets passwd and su work without setuid: no program ever opens a
+ * password file, and there is nothing privileged in those programs to abuse.
  */
 
 #include "user.h"
@@ -15,7 +20,8 @@
 #include "kprintf.h"
 #include "pit.h"
 
-#define USER_FILE "/etc/users"
+#define USERCONFIG_DIR "/userconfig"
+#define USER_LIST_FILE "/userconfig/users"
 
 typedef struct {
     bool     used;
@@ -41,8 +47,8 @@ static uint32_t     next_uid = 1;
  * holds something other than plaintext, and because the salt at least means
  * two users with the same password do not look identical.
  *
- * What actually protects passwords here is that no program can read the file:
- * see the comment at the top of user.h. */
+ * What actually protects passwords is that the files are unreadable outside
+ * the kernel; see the comment at the top of this file. */
 static uint64_t hash_password(uint64_t salt, const char *password)
 {
     uint64_t h = 0xcbf29ce484222325UL ^ salt;
@@ -73,9 +79,9 @@ static bool hash_equal(uint64_t a, uint64_t b)
     return acc == 0;
 }
 
-/* There is no entropy source in WOS, so the salt comes from the timer and the
- * address of a stack object.  Weak, but it varies between users, which is all
- * a salt has to do here. */
+/* There is no entropy source in WOS, so the salt comes from the timer and an
+ * address.  Weak, but it varies between users, which is all a salt has to do
+ * here. */
 static uint64_t make_salt(void)
 {
     uint64_t marker = (uint64_t)(uintptr_t)&next_uid;
@@ -84,7 +90,7 @@ static uint64_t make_salt(void)
 }
 
 /* ------------------------------------------------------------------ *
- *  Parsing and serialising
+ *  Small text helpers
  * ------------------------------------------------------------------ */
 
 static uint64_t parse_u64(const char **p)
@@ -112,6 +118,30 @@ static void append_u64(char *buf, size_t *at, size_t cap, uint64_t v)
         buf[(*at)++] = tmp[--n];
 }
 
+static void append_str(char *buf, size_t *at, size_t cap, const char *s)
+{
+    while (*s && *at + 1 < cap)
+        buf[(*at)++] = *s++;
+}
+
+/* Build "/userconfig/<name>" or "/userconfig/<name>/password". */
+static void user_dir_path(char *out, size_t cap, const char *name)
+{
+    size_t at = 0;
+    append_str(out, &at, cap, USERCONFIG_DIR "/");
+    append_str(out, &at, cap, name);
+    out[at] = '\0';
+}
+
+static void user_password_path(char *out, size_t cap, const char *name)
+{
+    size_t at = 0;
+    append_str(out, &at, cap, USERCONFIG_DIR "/");
+    append_str(out, &at, cap, name);
+    append_str(out, &at, cap, "/password");
+    out[at] = '\0';
+}
+
 static user_entry_t *find_by_name(const char *name)
 {
     for (int i = 0; i < W_MAX_USERS; i++)
@@ -135,40 +165,29 @@ static void fill(wuser_t *out, const user_entry_t *e)
     strlcpy(out->name, e->name, sizeof(out->name));
 }
 
-/* Write the whole table back. Small enough that rewriting beats patching. */
-static int save_users(void)
+/* ------------------------------------------------------------------ *
+ *  Storage
+ * ------------------------------------------------------------------ */
+
+/* Create a directory if it is not already there. */
+static int ensure_dir(const char *path)
 {
-    char   text[W_MAX_USERS * 96];
-    size_t at = 0;
-
-    for (int i = 0; i < W_MAX_USERS; i++) {
-        if (!users[i].used)
-            continue;
-
-        for (const char *n = users[i].name; *n && at + 1 < sizeof(text); n++)
-            text[at++] = *n;
-        text[at++] = ':';
-        append_u64(text, &at, sizeof(text), users[i].uid);
-        text[at++] = ':';
-        append_u64(text, &at, sizeof(text), users[i].roles);
-        text[at++] = ':';
-        append_u64(text, &at, sizeof(text), users[i].salt);
-        text[at++] = ':';
-        append_u64(text, &at, sizeof(text), users[i].hash);
-        text[at++] = '\n';
-    }
-
     uint32_t ino;
-    int r = wfs_lookup(USER_FILE, &ino);
 
-    if (r == -W_ENOENT) {
-        /* /etc may not exist yet on a freshly built image. */
-        uint32_t dir;
-        if (wfs_lookup("/etc", &dir) == -W_ENOENT)
-            wfs_create("/etc", WFS_TYPE_DIR, NULL);
+    if (wfs_lookup(path, &ino) == 0)
+        return 0;
 
-        r = wfs_create(USER_FILE, WFS_TYPE_FILE, &ino);
-    }
+    return wfs_create(path, WFS_TYPE_DIR, NULL);
+}
+
+/* Replace a file's contents wholesale. */
+static int write_file(const char *path, const char *text, uint32_t len)
+{
+    uint32_t ino;
+    int r = wfs_lookup(path, &ino);
+
+    if (r == -W_ENOENT)
+        r = wfs_create(path, WFS_TYPE_FILE, &ino);
     if (r < 0)
         return r;
 
@@ -176,11 +195,91 @@ static int save_users(void)
     if (r < 0)
         return r;
 
-    r = wfs_write(ino, 0, text, (uint32_t)at);
-    return (r == (int)at) ? 0 : (r < 0 ? r : -W_EIO);
+    if (len == 0)
+        return 0;
+
+    r = wfs_write(ino, 0, text, len);
+    return (r == (int)len) ? 0 : (r < 0 ? r : -W_EIO);
 }
 
-static void parse_line(const char *line)
+/* Write the list of users. Deliberately holds no password material: that
+ * lives in each user's own directory, under a stricter rule. */
+static int save_user_list(void)
+{
+    char   text[W_MAX_USERS * 64];
+    size_t at = 0;
+
+    for (int i = 0; i < W_MAX_USERS; i++) {
+        if (!users[i].used)
+            continue;
+
+        append_str(text, &at, sizeof(text), users[i].name);
+        text[at++] = ':';
+        append_u64(text, &at, sizeof(text), users[i].uid);
+        text[at++] = ':';
+        append_u64(text, &at, sizeof(text), users[i].roles);
+        text[at++] = '\n';
+    }
+
+    int r = ensure_dir(USERCONFIG_DIR);
+    if (r < 0)
+        return r;
+
+    return write_file(USER_LIST_FILE, text, (uint32_t)at);
+}
+
+/* Write one user's password file, creating their directory if needed. */
+static int save_password(const user_entry_t *e)
+{
+    char path[W_PATH_MAX + 1];
+    char text[64];
+    size_t at = 0;
+
+    append_u64(text, &at, sizeof(text), e->salt);
+    text[at++] = ':';
+    append_u64(text, &at, sizeof(text), e->hash);
+    text[at++] = '\n';
+
+    int r = ensure_dir(USERCONFIG_DIR);
+    if (r < 0)
+        return r;
+
+    user_dir_path(path, sizeof(path), e->name);
+    r = ensure_dir(path);
+    if (r < 0)
+        return r;
+
+    user_password_path(path, sizeof(path), e->name);
+    return write_file(path, text, (uint32_t)at);
+}
+
+static void load_password(user_entry_t *e)
+{
+    char     path[W_PATH_MAX + 1];
+    uint32_t ino;
+
+    e->salt = 0;
+    e->hash = 0;
+
+    user_password_path(path, sizeof(path), e->name);
+    if (wfs_lookup(path, &ino) != 0)
+        return;                     /* no file means no password set */
+
+    char text[64];
+    int  got = wfs_read(ino, 0, text, sizeof(text) - 1);
+    if (got <= 0)
+        return;
+    text[got] = '\0';
+
+    const char *p = text;
+    e->salt = parse_u64(&p);
+    if (*p == ':') {
+        p++;
+        e->hash = parse_u64(&p);
+    }
+}
+
+static void parse_list_line(const char *line)
 {
     user_entry_t e;
     memset(&e, 0, sizeof(e));
@@ -194,18 +293,16 @@ static void parse_line(const char *line)
         return;                     /* malformed: skip the line */
     line++;
 
-    e.uid   = (uint32_t)parse_u64(&line);
-    if (*line++ != ':') return;
+    e.uid = (uint32_t)parse_u64(&line);
+    if (*line++ != ':')
+        return;
     e.roles = (uint32_t)parse_u64(&line);
-    if (*line++ != ':') return;
-    e.salt  = parse_u64(&line);
-    if (*line++ != ':') return;
-    e.hash  = parse_u64(&line);
 
     for (int i = 0; i < W_MAX_USERS; i++) {
         if (!users[i].used) {
             e.used = true;
             users[i] = e;
+            load_password(&users[i]);
             if (e.uid >= next_uid)
                 next_uid = e.uid + 1;
             return;
@@ -223,11 +320,11 @@ void user_init(void)
     next_uid = 1;
 
     uint32_t ino;
-    if (wfs_lookup(USER_FILE, &ino) == 0) {
+    if (wfs_lookup(USER_LIST_FILE, &ino) == 0) {
         struct wfs_inode in;
 
         if (wfs_read_inode(ino, &in) == 0 && in.size > 0) {
-            char text[W_MAX_USERS * 96];
+            char text[W_MAX_USERS * 64];
             uint32_t want = in.size;
 
             if (want > sizeof(text) - 1)
@@ -243,7 +340,7 @@ void user_init(void)
                         char saved = text[i];
                         text[i] = '\0';
                         if (line[0])
-                            parse_line(line);
+                            parse_list_line(line);
                         text[i] = saved;
                         line = text + i + 1;
                     }
@@ -263,8 +360,8 @@ void user_init(void)
         users[0].hash  = 0;         /* 0 means no password set */
         strlcpy(users[0].name, "root", sizeof(users[0].name));
 
-        if (save_users() < 0)
-            kprintf("user   : could not write %s\n", USER_FILE);
+        if (save_user_list() < 0)
+            kprintf("user   : could not write %s\n", USER_LIST_FILE);
     }
 
     int count = 0;
@@ -272,8 +369,8 @@ void user_init(void)
         if (users[i].used)
             count++;
 
-    kprintf("user   : %d user%s, root %s\n",
-            count, count == 1 ? "" : "s",
+    kprintf("user   : %d user%s in %s, root %s\n",
+            count, count == 1 ? "" : "s", USERCONFIG_DIR,
             find_by_uid(W_ROOT_UID)->hash ? "has a password"
                                           : "has no password yet");
 }
@@ -354,7 +451,7 @@ int user_set_password(uint32_t actor, const char *name,
         return -W_ENOENT;
 
     bool privileged = (actor == W_ROOT_UID) ||
-                      user_has_role(actor, W_ROLE_USERADMIN);
+                      user_has_role(actor, W_ROLE_USEREDITOR);
 
     if (!privileged) {
         /* Anyone else may only change their own, and must prove they know it. */
@@ -374,20 +471,38 @@ int user_set_password(uint32_t actor, const char *name,
         e->hash = hash_password(e->salt, new_password);
     }
 
-    return save_users();
+    return save_password(e);
+}
+
+int user_set_roles(uint32_t actor, const char *name, uint32_t roles)
+{
+    if (actor != W_ROOT_UID && !user_has_role(actor, W_ROLE_USEREDITOR))
+        return -W_EPERM;
+
+    user_entry_t *e = find_by_name(name);
+    if (!e)
+        return -W_ENOENT;
+
+    /* Root's roles are meaningless -- every check short-circuits on uid 0 --
+     * and letting them be edited would only suggest they mattered. */
+    if (e->uid == W_ROOT_UID)
+        return -W_EPERM;
+
+    e->roles = roles;
+    return save_user_list();
 }
 
 int user_add(uint32_t actor, const char *name, const char *password,
              uint32_t roles)
 {
-    if (actor != W_ROOT_UID && !user_has_role(actor, W_ROLE_USERADMIN))
+    if (actor != W_ROOT_UID && !user_has_role(actor, W_ROLE_USEREDITOR))
         return -W_EPERM;
 
     if (name[0] == '\0' || strlen(name) > W_NAME_LEN)
         return -W_EINVAL;
 
     /* Names go straight into a path, so anything that could escape the home
-     * directory has to be refused here. */
+     * or config directory has to be refused here. */
     for (const char *p = name; *p; p++)
         if (*p == '/' || *p == ':' || *p == '\n' || *p == '.')
             return -W_EINVAL;
@@ -418,9 +533,13 @@ int user_add(uint32_t actor, const char *name, const char *password,
         e->hash = hash_password(e->salt, password);
     }
 
-    int r = save_users();
+    int r = save_user_list();
+    if (r == 0)
+        r = save_password(e);
+
     if (r < 0) {
         e->used = false;
+        save_user_list();
         return r;
     }
 
@@ -428,15 +547,11 @@ int user_add(uint32_t actor, const char *name, const char *password,
     char home[W_PATH_MAX + 1];
     size_t at = 0;
 
-    for (const char *s = "/home/"; *s; s++)
-        home[at++] = *s;
-    for (const char *s = name; *s; s++)
-        home[at++] = *s;
+    append_str(home, &at, sizeof(home), "/home/");
+    append_str(home, &at, sizeof(home), name);
     home[at] = '\0';
 
-    uint32_t ino;
-    if (wfs_lookup(home, &ino) == -W_ENOENT)
-        wfs_create(home, WFS_TYPE_DIR, NULL);
+    ensure_dir(home);
 
     return (int)e->uid;
 }

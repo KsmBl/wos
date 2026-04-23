@@ -128,14 +128,22 @@ int vfs_resolve(struct process *p, const char *path, char *out, size_t out_size)
  * room for one -- so permission is decided by path instead.  That is coarser
  * than Unix, but it expresses the rules this system actually has:
  *
- *   root            may write anywhere
- *   /kernel         root only, whatever roles a user holds
- *   /app            needs W_ROLE_APPEDITOR
- *   /home/<user>    that user's own directory, and everything beneath it
- *   anywhere else   read-only
+ *   root                          may write anywhere
+ *   /kernel                       root only, whatever roles a user holds
+ *   /app                          needs W_ROLE_APPEDITOR
+ *   /userconfig                   needs W_ROLE_USEREDITOR
+ *   /userconfig/<name>/password   root only -- overrides the line above
+ *   /home/<user>                  that user's own directory, and below it
+ *   anywhere else                 read-only
  *
- * Reading is unrestricted.  The one thing worth hiding, the password file, is
- * never handed to a program at all: the kernel reads and writes it itself.
+ * Reading is unrestricted except for the password files, which are root-only
+ * both ways.  That exception is the whole point of keeping them in their own
+ * subdirectories: a usereditor can add users and set passwords through the
+ * kernel, but cannot open a file and read what is already stored.
+ *
+ * Note the ordering: the password rule is checked before the /userconfig rule,
+ * so the more specific path wins.  Written the other way round, usereditor
+ * would silently have gained access to every password on the system.
  * ------------------------------------------------------------------ */
 
 /* True if `path` is `prefix`, or something inside it.  Compares whole
@@ -150,6 +158,39 @@ static bool path_within(const char *path, const char *prefix)
     return path[n] == '\0' || path[n] == '/';
 }
 
+/* True for /userconfig/<anything>/password.
+ *
+ * Matched by shape rather than by looking the user up, so a stale directory
+ * left behind by a removed account is still protected. */
+static bool is_password_file(const char *abs)
+{
+    if (!path_within(abs, "/userconfig"))
+        return false;
+
+    const char *last = strrchr(abs, '/');
+    if (!last || strcmp(last + 1, "password") != 0)
+        return false;
+
+    /* Exactly /userconfig/<name>/password: three separators, no more, so a
+     * deeper path cannot pose as one. */
+    int slashes = 0;
+    for (const char *c = abs; *c; c++)
+        if (*c == '/')
+            slashes++;
+
+    return slashes == 3;
+}
+
+/* Decide whether `p` may read `abs`.  Everything is readable except the
+ * password files, which only root and the kernel may open. */
+static bool may_read(struct process *p, const char *abs)
+{
+    if (p->uid == W_ROOT_UID)
+        return true;
+
+    return !is_password_file(abs);
+}
+
 /* Decide whether `p` may create, modify or delete `abs`, which must already
  * be resolved and normalised -- otherwise "/home/bob/../../app/x" would slip
  * past the prefix tests. */
@@ -160,6 +201,13 @@ static bool may_write(struct process *p, const char *abs)
 
     if (path_within(abs, "/kernel"))
         return false;
+
+    /* Checked before the /userconfig rule below, so the specific case wins. */
+    if (is_password_file(abs))
+        return false;
+
+    if (path_within(abs, "/userconfig"))
+        return user_has_role(p->uid, W_ROLE_USEREDITOR);
 
     if (path_within(abs, "/app"))
         return user_has_role(p->uid, W_ROLE_APPEDITOR);
@@ -220,8 +268,11 @@ int vfs_open(struct process *p, const char *path, uint32_t flags)
     if (r < 0)
         return r;
 
-    /* Reading is open to everyone; anything that could change the file is
-     * checked before the file is even looked up. */
+    /* Both directions are checked before the file is even looked up, so a
+     * refusal cannot be told apart from the file not existing by timing. */
+    if (!may_read(p, abs))
+        return -W_EACCES;
+
     if ((flags & W_O_ACCMODE) != W_O_RDONLY ||
         (flags & (W_O_CREAT | W_O_TRUNC | W_O_APPEND))) {
         if (!may_write(p, abs))
@@ -519,6 +570,9 @@ int vfs_read_file(struct process *p, const char *path, void **data_out,
     int  r = vfs_resolve(p, path, abs, sizeof(abs));
     if (r < 0)
         return r;
+
+    if (!may_read(p, abs))
+        return -W_EACCES;
 
     uint32_t ino;
     r = wfs_lookup(abs, &ino);

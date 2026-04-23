@@ -452,6 +452,17 @@ static int64_t sys_useradd(uint64_t name, uint64_t password, uint64_t roles)
     return user_add(proc_current()->uid, namebuf, passbuf, (uint32_t)roles);
 }
 
+static int64_t sys_setroles(uint64_t name, uint64_t roles)
+{
+    char namebuf[W_NAME_LEN + 1];
+
+    int r = copy_string_from_user((const char *)name, namebuf, sizeof(namebuf));
+    if (r < 0)
+        return r;
+
+    return user_set_roles(proc_current()->uid, namebuf, (uint32_t)roles);
+}
+
 static int64_t sys_shutdown(void)
 {
     /* There is no user or permission model in WOS, so any process may do
@@ -503,6 +514,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_LOGIN:     r = sys_login(regs->rdi, regs->rsi); break;
     case WSYS_PASSWD:    r = sys_passwd(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_USERADD:   r = sys_useradd(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_SETROLES:  r = sys_setroles(regs->rdi, regs->rsi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

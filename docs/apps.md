@@ -29,7 +29,8 @@ which is the price of having no shared libraries.
 | [`whoami`](#whoami) | print the current user and what it may do |
 | [`passwd`](#passwd) | change a password |
 | [`su`](#su) | start a shell as another user |
-| [`useradd`](#useradd) | create a user |
+| [`adduser`](#adduser) | create a user, asking for a password |
+| [`edituser`](#edituser) | add or remove roles |
 
 Users, roles and what each may write are covered in
 [`docs/users.md`](users.md).
@@ -297,22 +298,43 @@ the shell you came from, still as whoever you were.
 
 **Exit status:** the shell's, or 1 if authentication failed.
 
-## useradd
+## adduser
 
 ```
-useradd [-a] [-u] <name>
+adduser [-a] [-u] <name>
 ```
 
 | Option | Grants |
 |---|---|
 | `-a` | `appeditor` — may write under `/app` |
-| `-u` | `useradmin` — may add users and set passwords |
+| `-u` | `usereditor` — may write `/userconfig`: add users, set passwords, change roles |
 
-Creates the user and their home directory under `/home`. Only root and holders
-of `useradmin` may run it; anyone else is refused by the kernel, not by the
-program.
+Asks for a password, then creates the user, their home directory under `/home`
+and their password file at `/userconfig/<name>/password`.
 
-Names become part of a path, so `/`, `:`, `.` and newlines are refused.
+Only root and holders of `usereditor` may run it; anyone else is refused by the
+kernel, not by the program.
+
+Names become part of a path, so `/`, `:`, `.` and newlines are refused. An
+empty password is allowed, and `adduser` says so rather than letting it pass
+quietly.
+
+**Exit status:** 0, or 1.
+
+## edituser
+
+```
+edituser <name>                    show the roles held
+edituser <name> +appeditor         grant a role
+edituser <name> -usereditor        take one away
+```
+
+Several changes can be given at once and are applied in order, so
+`edituser bob -appeditor +usereditor` does both.
+
+Root and holders of `usereditor` may run it. Root's own roles cannot be
+changed: every permission check short-circuits on uid 0, so they carry no
+meaning.
 
 **Exit status:** 0, or 1.
 

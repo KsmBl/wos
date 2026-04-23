@@ -28,8 +28,8 @@ int main(int argc, char **argv)
             wprintf(" none");
         if (me.roles & W_ROLE_APPEDITOR)
             wprintf(" appeditor");
-        if (me.roles & W_ROLE_USERADMIN)
-            wprintf(" useradmin");
+        if (me.roles & W_ROLE_USEREDITOR)
+            wprintf(" usereditor");
         wprintf("\n");
 
         wprintf("write : /home/%s\n", me.name);

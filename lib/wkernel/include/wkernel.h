@@ -528,7 +528,7 @@ int wlogin(const char *name, const char *password);
 /**
  * Set a user's password.
  *
- * Root and holders of #W_ROLE_USERADMIN may set anyone's password without
+ * Root and holders of #W_ROLE_USEREDITOR may set anyone's password without
  * knowing the old one. Anyone else may set only their own, and must supply it.
  *
  * @param name         User whose password to change.
@@ -545,7 +545,7 @@ int wpasswd(const char *name, const char *old_password,
 /**
  * Create a user, and their home directory under /home.
  *
- * Only root and holders of #W_ROLE_USERADMIN may do this.
+ * Only root and holders of #W_ROLE_USEREDITOR may do this.
  *
  * @param name     Name for the new user. May not contain '/', ':', '.' or a
  *                 newline, since it becomes part of a path.
@@ -555,6 +555,22 @@ int wpasswd(const char *name, const char *old_password,
  *         taken, `-W_EINVAL` for an unusable name, or `-W_ENOSPC`.
  */
 int wuseradd(const char *name, const char *password, unsigned int roles);
+
+/**
+ * Replace a user's roles outright.
+ *
+ * Only root and holders of #W_ROLE_USEREDITOR may do this. Root's own roles
+ * cannot be changed: every check short-circuits on uid 0, so they carry no
+ * meaning and letting them be edited would only suggest otherwise.
+ *
+ * @param name  User to change.
+ * @param roles The complete new bitmask -- this replaces the old set rather
+ *              than adding to it, so read the current roles with wuserinfo()
+ *              first if you mean to adjust one.
+ * @return 0, `-W_EPERM` if not permitted or the target is root, `-W_ENOENT`,
+ *         or `-W_EFAULT`.
+ */
+int wsetroles(const char *name, unsigned int roles);
 
 /**
  * Shut the machine down.

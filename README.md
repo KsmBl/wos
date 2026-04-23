@@ -77,9 +77,10 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   do on Linux. Both shells run the same ones.
 - **Users and roles**: every process runs as a user, `root` may do anything,
   and everyone else writes only in their own `/home` directory unless a role
-  says otherwise — `appeditor` for `/app`, `useradmin` for managing users.
-  `/kernel` is root-only. Password hashes never leave the kernel, so `passwd`
-  and `su` need no setuid.
+  says otherwise — `appeditor` for `/app`, `usereditor` for `/userconfig`.
+  `/kernel` is root-only. Passwords live in `/userconfig/<name>/password`,
+  readable and writable by root and the kernel alone, so `passwd` and `su`
+  need no setuid.
 - **Applications**: `fish` (a shell that colours commands as you type and
   suggests from history), `vim` (a modal editor), `htop` (a live process
   monitor) and `fastfetch` (system information). These are WOS-native programs

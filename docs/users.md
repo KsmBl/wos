@@ -30,12 +30,20 @@ exactly the rules this system has:
 |---|---|
 | `/kernel` | root only — no role grants this |
 | `/app` | root, or a user with the `appeditor` role |
+| `/userconfig` | root, or a user with the `usereditor` role |
+| `/userconfig/<name>/password` | **root only** — overrides the line above |
 | `/home/<user>` | that user, and everything beneath it |
 | anywhere else | root only |
 
-**Reading is unrestricted.** Any user can `cat /kernel/README.txt` or list
-`/app`. The one thing worth hiding — the password file — is never handed to a
-program at all.
+**Reading is unrestricted except for the password files**, which are root-only
+both ways. Any user can `cat /kernel/README.txt`, list `/app`, or read
+`/userconfig/users` — the list of accounts is not a secret. Only the passwords
+are.
+
+Note the ordering of those two `/userconfig` rules: the password rule is
+checked *first*, so the more specific path wins. Written the other way round,
+`usereditor` would silently have gained access to every password on the
+system.
 
 The check runs on the *resolved* path, after `.` and `..` have been collapsed,
 so `/home/bob/../../kernel/x` is caught rather than slipping past a prefix
@@ -48,20 +56,42 @@ Roles are a bitmask, so a user can hold several.
 | Role | Grants |
 |---|---|
 | `appeditor` | write access under `/app` — installing and editing programs |
-| `useradmin` | creating users, and setting anyone's password |
+| `usereditor` | write access to `/userconfig` — creating users, setting anyone's password, changing roles |
 
 Root holds no roles and needs none: every check short-circuits on uid 0.
 
 ## Passwords
 
-The user database lives at `/etc/users`, one record per line:
+The user database lives under `/userconfig`:
 
 ```
-name:uid:roles:salt:hash
+/userconfig/users              the list of accounts:  name:uid:roles
+/userconfig/alice/password     alice's password:      salt:hash
+/userconfig/bob/password       bob's password
 ```
 
-**The kernel owns it.** No program reads or writes it — `passwd`, `su` and
-`useradd` all work through syscalls, and the kernel does the file I/O itself.
+Giving each user their own subdirectory is what makes the split possible. A
+`usereditor` may write `/userconfig` — that is how accounts are added and roles
+changed — while the password files inside are root-only. So:
+
+```
+alice@wos:/home/alice$ edituser bob +appeditor      # allowed: usereditor
+bob (uid 2): appeditor
+alice@wos:/home/alice$ touch /userconfig/x          # allowed
+alice@wos:/home/alice$ cat /userconfig/bob/password
+cat: /userconfig/bob/password: permission denied
+alice@wos:/home/alice$ passwd bob                   # allowed, via the kernel
+Password updated.
+```
+
+Alice can *set* bob's password but cannot *read* it. Setting goes through the
+kernel, which does the file I/O itself; reading would mean opening the file,
+which the VFS refuses.
+
+**The kernel owns these files.** No program reads or writes them — `passwd`,
+`su`, `adduser` and `edituser` all work through syscalls, and the kernel
+reaches the files through the filesystem directly, below the permission
+layer.
 
 That is the design decision that matters here. A traditional Unix lets
 `passwd` read the hashes and relies on setuid to let it write them back. WOS
@@ -81,8 +111,8 @@ Comparison is constant-time, so a rejection takes the same time whatever was
 wrong with it.
 
 What actually protects passwords here is that the file is unreachable from
-ring 3. If you ever gave programs read access to `/etc/users`, you would want
-a real KDF first.
+ring 3. If you ever gave programs read access to the password files, you would want a
+real KDF first.
 
 The salt comes from the timer tick and an address, because WOS has no entropy
 source. It varies between users, which is all a salt has to do, but it is not
@@ -128,20 +158,38 @@ that password to anything first, so asking would be theatre.
 | `whoami [-v]` | print the current user; `-v` explains the roles and write access |
 | `passwd [user]` | change your own password, or another's if permitted |
 | `su [user]` | start a shell as another user (default `root`) |
-| `useradd [-a] [-u] <name>` | create a user; `-a` grants appeditor, `-u` useradmin |
+| `adduser [-a] [-u] <name>` | create a user, asking for a password; `-a` grants appeditor, `-u` usereditor |
+| `edituser <name> [+role] [-role]` | add or remove roles; with no change, prints what they hold |
 
-`useradd` also creates `/home/<name>`, since a user with nowhere to write is
-not much of a user. Names become part of a path, so `/`, `:`, `.` and newlines
-are refused.
+`adduser` also creates `/home/<name>` and `/userconfig/<name>/password`. Names
+become part of a path, so `/`, `:`, `.` and newlines are refused.
+
+`edituser` replaces the whole role set in one call, so it reads the current
+roles first and sends the result:
+
+```
+root@wos:/home/root# edituser bob
+bob (uid 2): no roles
+root@wos:/home/root# edituser bob +appeditor +usereditor
+bob (uid 2): appeditor usereditor
+root@wos:/home/root# edituser bob -usereditor
+bob (uid 2): appeditor
+```
+
+Root's roles cannot be edited. Every check short-circuits on uid 0, so they
+carry no meaning, and allowing it would only suggest otherwise.
 
 ## What this is not
 
 - **No per-file ownership.** Two users with write access to the same directory
   can overwrite each other's files. WFS has no room in an inode for an owner.
-- **No read restrictions.** Every user can read every file. Only the password
-  database is protected, and only because it never leaves the kernel.
+- **Read restrictions cover only the password files.** Everything else on the
+  disk is readable by everyone, including `/userconfig/users`.
 - **No setuid, and no groups.** Roles fill the same niche as groups but are
   fixed at compile time rather than being data.
+- **No locking on the database.** `edituser` reads the current roles and writes
+  back the result, so two simultaneous edits would have one overwrite the
+  other. With a single console there is no way to try.
 - **No login prompt at boot.** The machine starts a shell as root. `su` is how
   you become anyone else.
 - **No audit trail.** Nothing records who did what.

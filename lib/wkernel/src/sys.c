@@ -117,6 +117,11 @@ int wuseradd(const char *name, const char *password, unsigned int roles)
                           (long)roles);
 }
 
+int wsetroles(const char *name, unsigned int roles)
+{
+    return (int)wsyscall2(WSYS_SETROLES, (long)name, (long)roles);
+}
+
 int wshutdown(void)
 {
     /* Only comes back if the kernel could not power the machine off, and even
