@@ -39,7 +39,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    int privileged = (me.uid == W_ROOT_UID) || (me.roles & W_ROLE_USERADMIN);
+    int privileged = (me.uid == W_ROOT_UID) || (me.roles & W_ROLE_USEREDITOR);
 
     if (!privileged && victim.uid != me.uid) {
         wfprintf(W_STDERR,

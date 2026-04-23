@@ -680,7 +680,7 @@ typedef struct {
 | Role | Grants |
 |---|---|
 | `W_ROLE_APPEDITOR` | write access under `/app` |
-| `W_ROLE_USERADMIN` | creating users and setting anyone's password |
+| `W_ROLE_USEREDITOR` | writing `/userconfig`: creating users, setting anyone's password, changing roles |
 
 ## `int wgetuid(void)`
 
@@ -711,7 +711,7 @@ one.
 
 ## `int wpasswd(const char *name, const char *old, const char *new)`
 
-Set a user's password. Root and holders of `W_ROLE_USERADMIN` may set anyone's
+Set a user's password. Root and holders of `W_ROLE_USEREDITOR` may set anyone's
 without knowing the old one; anyone else may set only their own and must supply
 it. An empty `new` clears the password.
 
@@ -721,10 +721,20 @@ password is wrong), or `-W_EFAULT`.
 ## `int wuseradd(const char *name, const char *password, unsigned roles)`
 
 Create a user and their home directory under `/home`. Only root and holders of
-`W_ROLE_USERADMIN` may do this.
+`W_ROLE_USEREDITOR` may do this.
 
 **Returns** the new uid, `-W_EPERM`, `-W_EEXIST`, `-W_EINVAL` for a name that
 cannot be part of a path, or `-W_ENOSPC`.
+
+## `int wsetroles(const char *name, unsigned roles)`
+
+Replace a user's roles outright. Only root and holders of `W_ROLE_USEREDITOR`
+may do this, and root's own roles cannot be changed.
+
+`roles` is the complete new bitmask rather than a delta, so read the current
+set with `wuserinfo()` first if you mean to adjust one.
+
+**Returns** 0, `-W_EPERM`, `-W_ENOENT`, or `-W_EFAULT`.
 
 ## `int wgetpass(const char *prompt, char *buf, wsize_t size)`
 

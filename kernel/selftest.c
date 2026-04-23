@@ -189,7 +189,7 @@ void selftest_memory(void)
  * is genuinely persistent this climbs by one on every boot. */
 static void test_boot_counter(void)
 {
-    const char *path = "/etc/boots.txt";
+    const char *path = "/boots.txt";
     char        buf[32];
     uint32_t    count = 0;
     uint32_t    ino;
@@ -278,7 +278,7 @@ static void test_filesystem_paths(void)
 
 static void test_filesystem_write(void)
 {
-    const char *path = "/etc/selftest.tmp";
+    const char *path = "/selftest.tmp";
     wdiskinfo_t before, after;
     uint32_t    ino;
 

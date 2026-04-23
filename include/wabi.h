@@ -149,8 +149,12 @@ typedef struct {
 #define W_MAX_USERS 32
 
 /* Roles are a bitmask, so a user can hold several. */
-#define W_ROLE_APPEDITOR (1u << 0)  /* may write under /app                */
-#define W_ROLE_USERADMIN (1u << 1)  /* may add users and set their passwords */
+#define W_ROLE_APPEDITOR  (1u << 0)  /* may write under /app                  */
+#define W_ROLE_USEREDITOR (1u << 1)  /* may write /userconfig: add users, set
+                                      * their passwords and change their roles.
+                                      * NOT the password files themselves --
+                                      * those stay root-only, for reading as
+                                      * well as writing.                      */
 
 typedef struct {
     uint32_t uid;
@@ -195,7 +199,8 @@ typedef struct {
 #define WSYS_LOGIN      31
 #define WSYS_PASSWD     32
 #define WSYS_USERADD    33
-#define WSYS_MAX        34
+#define WSYS_SETROLES   34
+#define WSYS_MAX        35
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

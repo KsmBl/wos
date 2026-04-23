@@ -1,13 +1,19 @@
 /* Users, roles and password checking.
  *
- * The user database is owned by the kernel and lives at /etc/users.  No
- * program ever reads it: authentication, password changes and user creation
- * all happen through syscalls, and the kernel does the file I/O itself.
+ * The database lives under /userconfig:
  *
- * That is deliberate.  A traditional Unix would let `passwd` and `su` read the
- * hashes and rely on setuid to let them write; WOS has no setuid, and keeping
- * the file unreachable is both simpler and stronger -- there is no hash for an
- * ordinary user to take away and attack offline.
+ *     /userconfig/users              the list:  name:uid:roles
+ *     /userconfig/<name>/password    that user's password: salt:hash
+ *
+ * A user with W_ROLE_USEREDITOR may write /userconfig, which is how accounts
+ * are added and roles changed.  The password files inside it are root-only,
+ * for reading as well as writing -- a usereditor can create a user and set a
+ * password through these calls, but cannot open the file and read what is
+ * already there.
+ *
+ * No program ever opens a password file.  The kernel reaches them through
+ * wfs_* directly, below the permission layer, which is what lets passwd and su
+ * work without setuid: there is nothing privileged in those programs to abuse.
  */
 #ifndef WOS_USER_H
 #define WOS_USER_H
@@ -33,7 +39,7 @@ int user_authenticate(const char *name, const char *password, wuser_t *out);
 
 /* Set a user's password.
  *
- * `actor` is the uid asking.  Root and holders of W_ROLE_USERADMIN may set
+ * `actor` is the uid asking.  Root and holders of W_ROLE_USEREDITOR may set
  * anyone's password without knowing the old one; anyone else may set only
  * their own, and must supply it.
  *
@@ -43,10 +49,17 @@ int user_set_password(uint32_t actor, const char *name,
                       const char *old_password, const char *new_password);
 
 /* Create a user with the given roles and password.  Only root and holders of
- * W_ROLE_USERADMIN may do this.  Also creates /home/<name>.
+ * W_ROLE_USEREDITOR may do this.  Also creates /home/<name> and the user's
+ * directory under /userconfig.
  * Returns the new uid, or a negative W_E* code. */
 int user_add(uint32_t actor, const char *name, const char *password,
              uint32_t roles);
+
+/* Replace a user's roles outright.  Only root and holders of
+ * W_ROLE_USEREDITOR may do this, and root's own roles cannot be edited --
+ * they are meaningless, since every check short-circuits on uid 0.
+ * Returns 0, -W_EPERM, or -W_ENOENT. */
+int user_set_roles(uint32_t actor, const char *name, uint32_t roles);
 
 /* True if `uid` may act with `role`. Root always may. */
 bool user_has_role(uint32_t uid, uint32_t role);
