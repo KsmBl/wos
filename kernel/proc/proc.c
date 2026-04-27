@@ -4,6 +4,7 @@
 #include "sched.h"
 #include "elf.h"
 #include "vfs.h"
+#include "pipe.h"
 #include "kheap.h"
 #include "pmm.h"
 #include "string.h"
@@ -51,6 +52,8 @@ static process_t *proc_alloc(void)
             memset(&processes[i], 0, sizeof(processes[i]));
             processes[i].used = true;
             processes[i].pid  = next_pid++;
+            processes[i].term_rows = W_CONSOLE_HEIGHT;
+            processes[i].term_cols = W_CONSOLE_WIDTH;
             return &processes[i];
         }
     }
@@ -111,6 +114,8 @@ void proc_init(void)
     kernel_proc.used  = true;
     kernel_proc.pid   = 0;
     kernel_proc.uid   = W_ROOT_UID;   /* the kernel, and so the first shell */
+    kernel_proc.term_rows = W_CONSOLE_HEIGHT;
+    kernel_proc.term_cols = W_CONSOLE_WIDTH;
     kernel_proc.space = paging_kernel_space();
     strlcpy(kernel_proc.name, "kernel", sizeof(kernel_proc.name));
     strlcpy(kernel_proc.cwd, "/", sizeof(kernel_proc.cwd));
@@ -171,6 +176,12 @@ static uint64_t setup_user_stack(char *const argv[], uint64_t stack_top)
 
 int32_t proc_spawn(const char *path, char *const argv[], process_t *parent)
 {
+    return proc_spawn_io(path, argv, parent, NULL);
+}
+
+int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
+                      const struct spawn_io *io)
+{
     if (!parent)
         parent = &kernel_proc;
 
@@ -205,6 +216,23 @@ int32_t proc_spawn(const char *path, char *const argv[], process_t *parent)
     p->uid    = parent->uid;        /* a child runs as whoever started it */
     strlcpy(p->cwd, parent->cwd, sizeof(p->cwd));
     vfs_init_fds(p);
+
+    /* Wire standard descriptors to a pair of pipes instead of the console when
+     * the caller asked for it -- this is how vim's :term runs a program inside
+     * an editor window.  Referencing the pipes here, from the child's side,
+     * balances the unrefs vfs_close_all() will do when the child exits. */
+    if (io && io->piped) {
+        pipe_ref(io->in, false);       /* fd 0: read end            */
+        pipe_ref(io->out, true);       /* fd 1: write end           */
+        pipe_ref(io->out, true);       /* fd 2: the same write end  */
+
+        p->fds[0].type = FD_PIPE; p->fds[0].pipe = io->in;  p->fds[0].write_end = false;
+        p->fds[1].type = FD_PIPE; p->fds[1].pipe = io->out; p->fds[1].write_end = true;
+        p->fds[2].type = FD_PIPE; p->fds[2].pipe = io->out; p->fds[2].write_end = true;
+
+        if (io->rows) p->term_rows = io->rows;
+        if (io->cols) p->term_cols = io->cols;
+    }
 
     /* Name the process after the application directory, so /app/whell/launch
      * shows up as "whell" rather than "launch". */

@@ -13,6 +13,7 @@
 #include "proc.h"
 #include "sched.h"
 #include "vfs.h"
+#include "pipe.h"
 #include "wfs_kernel.h"
 #include "paging.h"
 #include "pmm.h"
@@ -238,6 +239,56 @@ static int64_t sys_diskinfo(uint64_t out)
     return 0;
 }
 
+/* Copy a user argv array into the kernel.  Fills `args` (NULL-terminated) with
+ * pointers into a single heap allocation returned through `storage_out`, which
+ * the caller must kfree.  Returns argc, or a negative W_E* code.
+ *
+ * The copies come from the heap, not the stack: MAX_ARGS full-length arguments
+ * are several times the size of a kernel stack.  Everything is captured before
+ * the address space is switched out from under the user pointers. */
+static int copy_user_argv(uint64_t argv, char *args[], char **storage_out)
+{
+    *storage_out = NULL;
+    int argc = 0;
+
+    if (!argv) {
+        args[0] = NULL;
+        return 0;
+    }
+
+    if (!user_range_ok((void *)argv, sizeof(uint64_t), false))
+        return -W_EFAULT;
+
+    char *storage = kmalloc(MAX_ARGS * (W_PATH_MAX + 1));
+    if (!storage)
+        return -W_ENOMEM;
+
+    const uint64_t *user_argv = (const uint64_t *)argv;
+    while (argc < MAX_ARGS) {
+        if (!user_range_ok(&user_argv[argc], sizeof(uint64_t), false)) {
+            kfree(storage);
+            return -W_EFAULT;
+        }
+        if (user_argv[argc] == 0)
+            break;
+
+        char *slot = storage + (uint64_t)argc * (W_PATH_MAX + 1);
+        int r = copy_string_from_user((const char *)user_argv[argc],
+                                      slot, W_PATH_MAX + 1);
+        if (r < 0) {
+            kfree(storage);
+            return r;
+        }
+
+        args[argc] = slot;
+        argc++;
+    }
+    args[argc] = NULL;
+
+    *storage_out = storage;
+    return argc;
+}
+
 static int64_t sys_spawn(uint64_t path, uint64_t argv)
 {
     char pathbuf[W_PATH_MAX + 1];
@@ -245,46 +296,11 @@ static int64_t sys_spawn(uint64_t path, uint64_t argv)
     if (r < 0)
         return r;
 
-    /* argv is an array of user pointers; both the array and every string it
-     * names have to be copied into the kernel before the address space is
-     * switched out from under them.
-     *
-     * The copies come from the heap, not the stack: MAX_ARGS full-length
-     * arguments are several times the size of a kernel stack. */
     char *args[MAX_ARGS + 1];
     char *storage = NULL;
-    int   argc = 0;
-
-    if (argv) {
-        if (!user_range_ok((void *)argv, sizeof(uint64_t), false))
-            return -W_EFAULT;
-
-        storage = kmalloc(MAX_ARGS * (W_PATH_MAX + 1));
-        if (!storage)
-            return -W_ENOMEM;
-
-        const uint64_t *user_argv = (const uint64_t *)argv;
-        while (argc < MAX_ARGS) {
-            if (!user_range_ok(&user_argv[argc], sizeof(uint64_t), false)) {
-                kfree(storage);
-                return -W_EFAULT;
-            }
-            if (user_argv[argc] == 0)
-                break;
-
-            char *slot = storage + (uint64_t)argc * (W_PATH_MAX + 1);
-            r = copy_string_from_user((const char *)user_argv[argc],
-                                      slot, W_PATH_MAX + 1);
-            if (r < 0) {
-                kfree(storage);
-                return r;
-            }
-
-            args[argc] = slot;
-            argc++;
-        }
-    }
-    args[argc] = NULL;
+    int   argc = copy_user_argv(argv, args, &storage);
+    if (argc < 0)
+        return argc;
 
     int32_t pid = proc_spawn(pathbuf, args, proc_current());
 
@@ -292,6 +308,89 @@ static int64_t sys_spawn(uint64_t path, uint64_t argv)
         kfree(storage);
 
     return pid;
+}
+
+/* Resolve a descriptor that must be a pipe end of the given direction, and
+ * hand back the pipe object behind it. */
+static int pipe_from_fd(struct process *p, int fd, bool want_write,
+                        struct pipe **out)
+{
+    if (fd < 0 || fd >= MAX_OPEN_FILES)
+        return -W_EBADF;
+
+    file_t *f = &p->fds[fd];
+    if (f->type != FD_PIPE || f->write_end != want_write)
+        return -W_EBADF;
+
+    *out = f->pipe;
+    return 0;
+}
+
+static int64_t sys_spawn_io(uint64_t path, uint64_t argv, uint64_t io_ptr)
+{
+    char pathbuf[W_PATH_MAX + 1];
+    int  r = copy_string_from_user((const char *)path, pathbuf, sizeof(pathbuf));
+    if (r < 0)
+        return r;
+
+    if (!user_range_ok((void *)io_ptr, sizeof(wspawnio_t), false))
+        return -W_EFAULT;
+
+    wspawnio_t req = *(const wspawnio_t *)io_ptr;
+    process_t *me  = proc_current();
+
+    struct spawn_io io = {
+        .piped = true,
+        .rows  = (req.rows > 0) ? (uint32_t)req.rows : 0,
+        .cols  = (req.cols > 0) ? (uint32_t)req.cols : 0,
+    };
+
+    r = pipe_from_fd(me, req.in_fd, false, &io.in);
+    if (r < 0)
+        return r;
+    r = pipe_from_fd(me, req.out_fd, true, &io.out);
+    if (r < 0)
+        return r;
+
+    char *args[MAX_ARGS + 1];
+    char *storage = NULL;
+    int   argc = copy_user_argv(argv, args, &storage);
+    if (argc < 0)
+        return argc;
+
+    int32_t pid = proc_spawn_io(pathbuf, args, me, &io);
+
+    if (storage)
+        kfree(storage);
+
+    return pid;
+}
+
+static int64_t sys_pipe(uint64_t user_fds)
+{
+    if (!user_range_ok((void *)user_fds, 2 * sizeof(int32_t), true))
+        return -W_EFAULT;
+
+    int fds[2];
+    int r = vfs_pipe(proc_current(), fds);
+    if (r < 0)
+        return r;
+
+    ((int32_t *)user_fds)[0] = fds[0];
+    ((int32_t *)user_fds)[1] = fds[1];
+    return 0;
+}
+
+static int64_t sys_consize(uint64_t rows_ptr, uint64_t cols_ptr)
+{
+    if (!user_range_ok((void *)rows_ptr, sizeof(int32_t), true) ||
+        !user_range_ok((void *)cols_ptr, sizeof(int32_t), true))
+        return -W_EFAULT;
+
+    process_t *p = proc_current();
+    *(int32_t *)rows_ptr = (int32_t)p->term_rows;
+    *(int32_t *)cols_ptr = (int32_t)p->term_cols;
+    return 0;
 }
 
 static int64_t sys_wait(uint64_t pid, uint64_t status_out)
@@ -337,6 +436,14 @@ static int64_t sys_console(uint64_t mode)
     if (mode != W_CONSOLE_CANONICAL && mode != W_CONSOLE_RAW)
         return -W_EINVAL;
 
+    /* The raw/canonical setting is a property of the physical keyboard.  A
+     * program reading from a pipe -- one running inside vim's :term, say --
+     * must not reach through and change it for whoever owns the real console.
+     * Its own stdin is a byte stream that is always effectively raw, so report
+     * that and do nothing. */
+    if (!vfs_stdin_is_console(proc_current()))
+        return W_CONSOLE_RAW;
+
     bool was_raw = keyboard_raw();
     keyboard_set_raw(mode == W_CONSOLE_RAW);
 
@@ -345,9 +452,15 @@ static int64_t sys_console(uint64_t mode)
 
 static int64_t sys_pollin(uint64_t fd)
 {
-    /* Only the console can ever make a reader wait; a file read always has
-     * something to return, even if that something is end of file. */
-    if (fd == W_STDIN)
+    process_t *p = proc_current();
+
+    if ((int)fd >= 0 && (int)fd < MAX_OPEN_FILES &&
+        p->fds[fd].type == FD_PIPE && !p->fds[fd].write_end)
+        return pipe_pollin(p->fds[fd].pipe) ? 1 : 0;
+
+    /* Only the console can otherwise make a reader wait; a file read always
+     * has something to return, even if that something is end of file. */
+    if (fd == W_STDIN && p->fds[W_STDIN].type == FD_CONSOLE)
         return keyboard_has_data() ? 1 : 0;
 
     return 1;
@@ -515,6 +628,9 @@ static void syscall_handler(regs_t *regs)
     case WSYS_PASSWD:    r = sys_passwd(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_USERADD:   r = sys_useradd(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_SETROLES:  r = sys_setroles(regs->rdi, regs->rsi); break;
+    case WSYS_PIPE:      r = sys_pipe(regs->rdi); break;
+    case WSYS_SPAWN_IO:  r = sys_spawn_io(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_CONSIZE:   r = sys_consize(regs->rdi, regs->rsi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

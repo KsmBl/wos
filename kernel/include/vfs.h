@@ -16,23 +16,36 @@ typedef enum {
     FD_NONE = 0,
     FD_FILE,
     FD_DIR,
-    FD_CONSOLE
+    FD_CONSOLE,
+    FD_PIPE
 } fd_type_t;
+
+struct pipe;
 
 typedef struct {
     fd_type_t type;
     uint32_t  ino;
     uint32_t  offset;      /* byte offset for files, entry index for dirs */
     uint32_t  flags;       /* the W_O_* flags it was opened with          */
+    struct pipe *pipe;     /* the pipe object, when type == FD_PIPE       */
+    bool      write_end;   /* which end of that pipe this descriptor is   */
 } file_t;
 
 struct process;
+
+/* Create a pipe and install its two ends in `p`, returning the read descriptor
+ * in out[0] and the write descriptor in out[1].  Returns 0 or a negative
+ * W_E* code. */
+int vfs_pipe(struct process *p, int out[2]);
 
 /* Give a new process the standard three console descriptors. */
 void vfs_init_fds(struct process *p);
 
 /* Release every descriptor a process holds. */
 void vfs_close_all(struct process *p);
+
+/* True if the process reads standard input from the console, not a pipe. */
+bool vfs_stdin_is_console(struct process *p);
 
 /* Turn `path` into a normalised absolute path, resolving it against the
  * process's working directory and collapsing "." and "..".

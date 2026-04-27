@@ -38,7 +38,8 @@ typedef enum {
 typedef enum {
     WAIT_NONE = 0,
     WAIT_INPUT,      /* console input; woken by the keyboard IRQ    */
-    WAIT_CHILD       /* a child to exit; woken by process teardown  */
+    WAIT_CHILD,      /* a child to exit; woken by process teardown  */
+    WAIT_PIPE        /* pipe space or data; woken by the other end  */
 } wait_reason_t;
 
 struct process;
@@ -79,6 +80,12 @@ typedef struct process {
      * by a successful login. */
     uint32_t     uid;
 
+    /* The size of the terminal this process draws to, reported by wconsize().
+     * The console is a fixed 80x25; a program started into a pipe by vim's
+     * :term is told the size of the window it was given instead. */
+    uint32_t     term_rows;
+    uint32_t     term_cols;
+
     /* Memory accounting, in bytes. */
     uint64_t     code_bytes;
     uint64_t     data_bytes;
@@ -104,10 +111,26 @@ thread_t  *thread_current(void);
 /* Look a process up by pid. Returns NULL if there is no such process. */
 process_t *proc_by_pid(int32_t pid);
 
+/* How a spawned process's standard descriptors should be wired.  When `piped`
+ * is false the child gets the console, exactly as an ordinary launch does.
+ * When true, fd 0 reads from `in` and fds 1 and 2 write to `out`, and the
+ * child reports `rows`x`cols` from wconsize(). */
+struct pipe;
+struct spawn_io {
+    bool         piped;
+    struct pipe *in;      /* child stdin  (read end)         */
+    struct pipe *out;     /* child stdout/stderr (write end) */
+    uint32_t     rows;
+    uint32_t     cols;
+};
+
 /* Load `path` as a new ring 3 process and make it runnable.
  * `argv` is a NULL-terminated array; argv[0] should be the program name.
+ * `io` may be NULL for the ordinary console wiring.
  * Returns the new pid, or a negative W_E* code. */
 int32_t proc_spawn(const char *path, char *const argv[], process_t *parent);
+int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
+                      const struct spawn_io *io);
 
 /* Terminate the calling process. Does not return. */
 void proc_exit(int32_t status) __attribute__((noreturn));
