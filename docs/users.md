@@ -35,10 +35,38 @@ exactly the rules this system has:
 | `/home/<user>` | that user, and everything beneath it |
 | anywhere else | root only |
 
-**Reading is unrestricted except for the password files**, which are root-only
-both ways. Any user can `cat /kernel/README.txt`, list `/app`, or read
-`/userconfig/users` — the list of accounts is not a secret. Only the passwords
-are.
+Reading is looser, but not unrestricted:
+
+| Path | Who may read |
+|---|---|
+| `/userconfig/<name>/password` | **root only** |
+| `/home/<user>` | that user — a home directory is private |
+| `/home` itself | everyone — you can see which accounts exist |
+| anywhere else | everyone |
+
+So a user can `cat /kernel/README.txt`, list `/app`, or read `/userconfig/users`
+— the list of accounts is not a secret. Passwords and other people's home
+directories are.
+
+`/home` stays listable on purpose. Hiding it would protect nothing:
+`/userconfig/users` already publishes every account name, so all it would cost
+you is the ability to see that your own home exists.
+
+```
+bob@wos:/home/bob$ ls /home
+bob/   root/
+bob@wos:/home/bob$ ls /home/root
+ls: /home/root: permission denied
+bob@wos:/home/bob$ cat /home/root/readme.txt
+cat: /home/root/readme.txt: permission denied
+bob@wos:/home/bob$ cd /home/root
+cd: /home/root: permission denied
+```
+
+Note that last one. `cd` checks read permission because standing in a
+directory you cannot read is simply a way to reach its contents by relative
+path afterwards. `stat` checks it too — a file's size and type are worth
+hiding, not just its contents.
 
 Note the ordering of those two `/userconfig` rules: the password rule is
 checked *first*, so the more specific path wins. Written the other way round,
@@ -183,8 +211,9 @@ carry no meaning, and allowing it would only suggest otherwise.
 
 - **No per-file ownership.** Two users with write access to the same directory
   can overwrite each other's files. WFS has no room in an inode for an owner.
-- **Read restrictions cover only the password files.** Everything else on the
-  disk is readable by everyone, including `/userconfig/users`.
+- **Read restrictions cover only home directories and the password files.**
+  Everything else on the disk is readable by everyone, including
+  `/userconfig/users` and every program under `/app`.
 - **No setuid, and no groups.** Roles fill the same niche as groups but are
   fixed at compile time rather than being data.
 - **No locking on the database.** `edituser` reads the current roles and writes

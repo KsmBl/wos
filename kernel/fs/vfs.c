@@ -136,10 +136,16 @@ int vfs_resolve(struct process *p, const char *path, char *out, size_t out_size)
  *   /home/<user>                  that user's own directory, and below it
  *   anywhere else                 read-only
  *
- * Reading is unrestricted except for the password files, which are root-only
- * both ways.  That exception is the whole point of keeping them in their own
- * subdirectories: a usereditor can add users and set passwords through the
- * kernel, but cannot open a file and read what is already stored.
+ * Reading is unrestricted apart from two things, both root-only:
+ *
+ *   /userconfig/<name>/password   nobody else may read a password, which is
+ *                                 the whole point of keeping them in their own
+ *                                 subdirectories -- a usereditor can set one
+ *                                 through the kernel but cannot read it back
+ *   /home/<other>                 home directories are private
+ *
+ * /home itself still lists, so you can see which accounts exist; the account
+ * list in /userconfig/users already says that much.
  *
  * Note the ordering: the password rule is checked before the /userconfig rule,
  * so the more specific path wins.  Written the other way round, usereditor
@@ -181,14 +187,48 @@ static bool is_password_file(const char *abs)
     return slashes == 3;
 }
 
-/* Decide whether `p` may read `abs`.  Everything is readable except the
- * password files, which only root and the kernel may open. */
+/* Build this process's own home directory. */
+static bool home_of(struct process *p, char *out, size_t cap)
+{
+    wuser_t me;
+
+    if (user_by_uid(p->uid, &me) < 0)
+        return false;
+
+    size_t at = 0;
+    for (const char *s = "/home/"; *s && at + 1 < cap; s++)
+        out[at++] = *s;
+    for (const char *s = me.name; *s && at + 1 < cap; s++)
+        out[at++] = *s;
+    out[at] = '\0';
+
+    return true;
+}
+
+/* Decide whether `p` may read `abs`. */
 static bool may_read(struct process *p, const char *abs)
 {
     if (p->uid == W_ROOT_UID)
         return true;
 
-    return !is_password_file(abs);
+    if (is_password_file(abs))
+        return false;
+
+    /* A home directory belongs to one user.  /home itself is still listable,
+     * so you can see that other accounts exist -- which the account list
+     * already tells you -- but not what is inside them. */
+    if (path_within(abs, "/home")) {
+        if (strcmp(abs, "/home") == 0)
+            return true;
+
+        char home[W_PATH_MAX + 1];
+        if (!home_of(p, home, sizeof(home)))
+            return false;
+
+        return path_within(abs, home);
+    }
+
+    return true;
 }
 
 /* Decide whether `p` may create, modify or delete `abs`, which must already
@@ -212,18 +252,9 @@ static bool may_write(struct process *p, const char *abs)
     if (path_within(abs, "/app"))
         return user_has_role(p->uid, W_ROLE_APPEDITOR);
 
-    wuser_t me;
-    if (user_by_uid(p->uid, &me) < 0)
-        return false;
-
     char home[W_PATH_MAX + 1];
-    size_t at = 0;
-
-    for (const char *s = "/home/"; *s; s++)
-        home[at++] = *s;
-    for (const char *s = me.name; *s && at < W_PATH_MAX; s++)
-        home[at++] = *s;
-    home[at] = '\0';
+    if (!home_of(p, home, sizeof(home)))
+        return false;
 
     return path_within(abs, home);
 }
@@ -413,6 +444,10 @@ int vfs_stat(struct process *p, const char *path, wstat_t *out)
     if (r < 0)
         return r;
 
+    /* Size and type are worth hiding too, not just contents. */
+    if (!may_read(p, abs))
+        return -W_EACCES;
+
     uint32_t ino;
     r = wfs_lookup(abs, &ino);
     if (r < 0)
@@ -491,6 +526,9 @@ int vfs_opendir(struct process *p, const char *path)
     if (r < 0)
         return r;
 
+    if (!may_read(p, abs))
+        return -W_EACCES;
+
     uint32_t ino;
     r = wfs_lookup(abs, &ino);
     if (r < 0)
@@ -535,6 +573,11 @@ int vfs_chdir(struct process *p, const char *path)
     int  r = vfs_resolve(p, path, abs, sizeof(abs));
     if (r < 0)
         return r;
+
+    /* Standing in a directory you cannot read is only a way to reach its
+     * contents by relative path. */
+    if (!may_read(p, abs))
+        return -W_EACCES;
 
     uint32_t ino;
     r = wfs_lookup(abs, &ino);
