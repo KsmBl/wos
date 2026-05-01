@@ -38,6 +38,21 @@ int wwait(int pid, int *status)
     return wsyscall2(WSYS_WAIT, pid, (long)status);
 }
 
+int wpipe(int fds[2])
+{
+    return wsyscall1(WSYS_PIPE, (long)fds);
+}
+
+int wspawn_io(const char *path, char *const argv[], const wspawnio_t *io)
+{
+    return wsyscall3(WSYS_SPAWN_IO, (long)path, (long)argv, (long)io);
+}
+
+int wconsize(int *rows, int *cols)
+{
+    return wsyscall2(WSYS_CONSIZE, (long)rows, (long)cols);
+}
+
 void wexit(int status)
 {
     wsyscall1(WSYS_EXIT, status);

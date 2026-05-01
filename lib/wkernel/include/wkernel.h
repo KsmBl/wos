@@ -354,6 +354,61 @@ int wdiskinfo(wdiskinfo_t *out);
 int wspawn(const char *path, char *const argv[]);
 
 /**
+ * Create a pipe: a one-way byte stream between two descriptors.
+ *
+ * `fds[0]` is the read end and `fds[1]` the write end.  Bytes written to the
+ * write end are read, in order, from the read end.  A read blocks while the
+ * pipe is empty and a writer still exists, and returns 0 once every writer has
+ * closed.  A write blocks while the pipe is full, and fails with `-W_EPIPE`
+ * once every reader has closed.
+ *
+ * Together with wspawn_io() this is how a program runs another inside a window
+ * of its own, the way vim's :term runs a shell.
+ *
+ * @param fds Receives the read and write descriptors.
+ * @return 0, or a negative error (`-W_EMFILE`, `-W_ENFILE`, `-W_EFAULT`).
+ */
+int wpipe(int fds[2]);
+
+/**
+ * Spawn a program with its standard descriptors wired to pipes.
+ *
+ * Like wspawn(), but the child's stdin reads from `io->in_fd` (a pipe read end
+ * in the caller) and its stdout and stderr write to `io->out_fd` (a pipe write
+ * end).  The child reports `io->rows` by `io->cols` from wconsize(), so a
+ * full-screen program can size itself to the window it was given.
+ *
+ * After spawning, close your copies of the child's ends: only then does the
+ * read end see end of file when the child exits.
+ *
+ * @param path Executable to run.
+ * @param argv NULL-terminated argument array.
+ * @param io   Descriptor wiring and terminal size.
+ * @return The child's pid, or a negative error.
+ *
+ * @code
+ *     int in[2], out[2];
+ *     wpipe(in); wpipe(out);
+ *     wspawnio_t io = { in[0], out[1], rows, cols };
+ *     int pid = wspawn_io("/app/whell/launch", argv, &io);
+ *     wclose(in[0]); wclose(out[1]);   // keep in[1] to send, out[0] to receive
+ * @endcode
+ */
+int wspawn_io(const char *path, char *const argv[], const wspawnio_t *io);
+
+/**
+ * Report the size of the terminal this process draws to.
+ *
+ * The console is a fixed 80x25; a program started by wspawn_io() is told the
+ * size of the window it was given instead.  Both pointers are required.
+ *
+ * @param rows Receives the number of rows.
+ * @param cols Receives the number of columns.
+ * @return 0, or `-W_EFAULT` if a pointer is not writable.
+ */
+int wconsize(int *rows, int *cols);
+
+/**
  * Wait for a child process to exit and clean it up.
  *
  * Blocks until a matching child has exited.  Until a child is waited for, its

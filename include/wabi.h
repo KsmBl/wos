@@ -43,6 +43,7 @@
 #define W_EMFILE        24   /* too many open files in this process */
 #define W_ENOSPC        28   /* no space left on the disk          */
 #define W_ESPIPE        29   /* seek on a stream that cannot seek  */
+#define W_EPIPE         32   /* write to a pipe with no reader     */
 #define W_ERANGE        34   /* result does not fit in the buffer  */
 #define W_ENAMETOOLONG  36   /* path or name too long              */
 #define W_ENOSYS        38   /* no such syscall                    */
@@ -162,6 +163,16 @@ typedef struct {
     char     name[W_NAME_LEN + 1];
 } wuser_t;
 
+/* Passed to wspawn_io(): the descriptors a child's stdin and stdout should be
+ * wired to, and the terminal size it should report from wconsize().  `in_fd`
+ * must be the read end of a pipe in the caller and `out_fd` the write end. */
+typedef struct {
+    int32_t in_fd;
+    int32_t out_fd;
+    int32_t rows;
+    int32_t cols;
+} wspawnio_t;
+
 /* ------------------------------------------------------------------ *
  *  Syscall numbers
  * ------------------------------------------------------------------ */
@@ -200,7 +211,10 @@ typedef struct {
 #define WSYS_PASSWD     32
 #define WSYS_USERADD    33
 #define WSYS_SETROLES   34
-#define WSYS_MAX        35
+#define WSYS_PIPE       35
+#define WSYS_SPAWN_IO   36
+#define WSYS_CONSIZE    37
+#define WSYS_MAX        38
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

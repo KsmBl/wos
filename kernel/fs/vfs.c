@@ -2,6 +2,7 @@
 
 #include "vfs.h"
 #include "proc.h"
+#include "pipe.h"
 #include "wfs_kernel.h"
 #include "keyboard.h"
 #include "kheap.h"
@@ -18,10 +19,28 @@ void vfs_init_fds(struct process *p)
         p->fds[i].type = FD_CONSOLE;
 }
 
+/* Release one descriptor, dropping a pipe reference if it holds one. */
+static void fd_release(file_t *f)
+{
+    if (f->type == FD_PIPE)
+        pipe_unref(f->pipe, f->write_end);
+    f->type      = FD_NONE;
+    f->pipe      = NULL;
+    f->write_end = false;
+}
+
 void vfs_close_all(struct process *p)
 {
     for (int i = 0; i < MAX_OPEN_FILES; i++)
-        p->fds[i].type = FD_NONE;
+        fd_release(&p->fds[i]);
+}
+
+/* True if this process reads its standard input from the real console rather
+ * than from a pipe.  Console modes (raw vs canonical) belong to the physical
+ * keyboard, so a program whose stdin is a pipe must not change them. */
+bool vfs_stdin_is_console(struct process *p)
+{
+    return p->fds[W_STDIN].type == FD_CONSOLE;
 }
 
 static file_t *fd_get(struct process *p, int fd)
@@ -38,6 +57,42 @@ static int fd_alloc(struct process *p)
         if (p->fds[i].type == FD_NONE)
             return i;
     return -W_EMFILE;
+}
+
+int vfs_pipe(struct process *p, int out[2])
+{
+    int rfd = fd_alloc(p);
+    if (rfd < 0)
+        return rfd;
+
+    /* Claim the read slot before allocating the write one, so the two cannot
+     * come back equal. */
+    p->fds[rfd].type = FD_CONSOLE;      /* placeholder to reserve the slot */
+
+    int wfd = fd_alloc(p);
+    if (wfd < 0) {
+        p->fds[rfd].type = FD_NONE;
+        return wfd;
+    }
+
+    pipe_t *pp = pipe_create();
+    if (!pp) {
+        p->fds[rfd].type = FD_NONE;
+        return -W_ENFILE;
+    }
+
+    /* pipe_create() already counts one reader and one writer -- these two. */
+    p->fds[rfd].type      = FD_PIPE;
+    p->fds[rfd].pipe      = pp;
+    p->fds[rfd].write_end = false;
+
+    p->fds[wfd].type      = FD_PIPE;
+    p->fds[wfd].pipe      = pp;
+    p->fds[wfd].write_end = true;
+
+    out[0] = rfd;
+    out[1] = wfd;
+    return 0;
 }
 
 /* ------------------------------------------------------------------ *
@@ -354,7 +409,7 @@ int vfs_close(struct process *p, int fd)
     if (!f)
         return -W_EBADF;
 
-    f->type = FD_NONE;
+    fd_release(f);
     return 0;
 }
 
@@ -368,6 +423,8 @@ int vfs_read(struct process *p, int fd, void *buf, uint32_t len)
 
     if (f->type == FD_CONSOLE)
         return console_read(buf, len);
+    if (f->type == FD_PIPE)
+        return f->write_end ? -W_EBADF : pipe_read(f->pipe, buf, len);
     if (f->type == FD_DIR)
         return -W_EISDIR;
     if ((f->flags & W_O_ACCMODE) == W_O_WRONLY)
@@ -389,6 +446,8 @@ int vfs_write(struct process *p, int fd, const void *buf, uint32_t len)
 
     if (f->type == FD_CONSOLE)
         return console_write(buf, len);
+    if (f->type == FD_PIPE)
+        return f->write_end ? pipe_write(f->pipe, buf, len) : -W_EBADF;
     if (f->type == FD_DIR)
         return -W_EISDIR;
     if ((f->flags & W_O_ACCMODE) == W_O_RDONLY)
@@ -413,7 +472,7 @@ int vfs_lseek(struct process *p, int fd, int32_t offset, int whence)
     file_t *f = fd_get(p, fd);
     if (!f)
         return -W_EBADF;
-    if (f->type == FD_CONSOLE)
+    if (f->type == FD_CONSOLE || f->type == FD_PIPE)
         return -W_ESPIPE;
 
     struct wfs_inode in;
