@@ -653,3 +653,54 @@ keeps the byte stream small — important when the frames are travelling through
 a pipe into vim's terminal emulator rather than straight to the VGA.
 
 **Exit status:** 0.
+
+---
+
+# chess
+
+```
+chess
+```
+
+Two-player chess. Two people share the keyboard and enter moves in coordinate
+notation; a referee enforces the rules.
+
+```
+     a  b  c  d  e  f  g  h
+  8  r  n  b  q  k  b  n  r  8
+  7  p  p  p  p  p  p  p  p  7
+  6                          6
+  5                          5
+  4              P           4
+  3                          3
+  2  P  P  P  P     P  P  P  2
+  1  R  N  B  Q  K  B  N  R  1
+     a  b  c  d  e  f  g  h
+
+Black to move.  Enter a move (e2e4), or 'help'.
+```
+
+White is UPPERCASE, black is lowercase, on a coloured checkerboard.
+
+| Input | Meaning |
+|---|---|
+| `e2e4` | move from e2 to e4 |
+| `e1g1` | castle — move the king two squares |
+| `e7e8q` | promote (`q` `r` `b` `n`; queen if omitted) |
+| `new` | start over |
+| `resign` | concede |
+| `help` | the move syntax |
+| `quit` | leave |
+
+All the real rules are enforced: legal movement for each piece, the ban on
+leaving your own king in check, castling (with its rights and the no-passing-
+through-check rule), en passant and promotion. The game recognises check,
+checkmate and stalemate.
+
+**No computer opponent.** This is two humans and a referee — writing an engine
+worth playing is a much larger project than the rules themselves. Move legality
+is checked by generating every legal reply and matching yours against it, which
+is also how checkmate and stalemate are detected: no legal move and in check is
+mate, no legal move and not in check is stalemate.
+
+**Exit status:** 0.
