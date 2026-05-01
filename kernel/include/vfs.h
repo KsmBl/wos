@@ -47,6 +47,10 @@ void vfs_close_all(struct process *p);
 /* True if the process reads standard input from the console, not a pipe. */
 bool vfs_stdin_is_console(struct process *p);
 
+/* Copy the parent's stdin/stdout/stderr into a child, so redirected output is
+ * inherited across a spawn.  Refs any pipe ends it copies. */
+void vfs_inherit_stdio(struct process *child, struct process *parent);
+
 /* Turn `path` into a normalised absolute path, resolving it against the
  * process's working directory and collapsing "." and "..".
  * Returns 0 or a negative W_E* code. */

@@ -43,6 +43,21 @@ bool vfs_stdin_is_console(struct process *p)
     return p->fds[W_STDIN].type == FD_CONSOLE;
 }
 
+/* Give a child the parent's standard descriptors, so output redirected to a
+ * pipe is inherited the way it is across a Unix fork+exec.  Without this a
+ * program run from a shell inside vim's :term would write past the shell to
+ * the real console.  A pipe end gains a reference, balanced when the child
+ * closes it. */
+void vfs_inherit_stdio(struct process *child, struct process *parent)
+{
+    for (int i = 0; i < 3; i++) {
+        file_t *src = &parent->fds[i];
+        child->fds[i] = *src;
+        if (src->type == FD_PIPE)
+            pipe_ref(src->pipe, src->write_end);
+    }
+}
+
 static file_t *fd_get(struct process *p, int fd)
 {
     if (fd < 0 || fd >= MAX_OPEN_FILES || p->fds[fd].type == FD_NONE)

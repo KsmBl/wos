@@ -512,15 +512,60 @@ identically on the VGA screen and over serial, and it does not.
 | `:q!` | quit, discarding changes |
 | `:wq`, `:x` | write and quit |
 | `:w!` | write regardless |
+| `:term [cmd]` | open a terminal window running `cmd` (default: a shell) |
 
 Errors use vim's own numbering where there is an equivalent, so `:q` with
 unsaved changes gives `E37: No write since last change (add ! to override)`.
+
+## `:term` — a terminal in a window
+
+`:term` splits the screen: the editor keeps the left half and a terminal
+window opens on the right, running a program with its input and output wired to
+that window instead of the console. `:term` on its own runs a shell; `:term
+asciiquarium` runs the aquarium; `:term ls -l /app` runs one command.
+
+```
+Welcome to WOS.                       |whell -- the WOS shell.
+This file lives on a real disk image i|root@wos:/home/root# free
+Anything you write here survives a reb|              total    used    free
+                                      |Mem:         262016    9964  252052
+ ...                                  |root@wos:/home/root# _
+ /home/root/readme.txt                |terminal
+:                                     (bottom: shared command line)
+```
+
+| Key | Effect |
+|---|---|
+| `Ctrl-W Ctrl-W` | move the keyboard between the two windows (also `Ctrl-W w`) |
+| `:q` (with a terminal open) | close the terminal window; a second `:q` quits |
+
+The highlighted status line shows which window has focus. When the editor has
+focus, keys edit as normal; when the terminal has focus, keys go to the program
+running in it. The terminal closes on its own when its program exits — `exit`
+in the shell, `q` in the aquarium — or with `:q`.
+
+This is real preemptive multitasking, not a trick: the program in the window is
+a separate process that keeps running while you edit. Run `:term asciiquarium`
+and the fish keep swimming whichever window you are typing in. That is the
+whole reason it exists.
+
+**How it works.** The kernel gained anonymous pipes and a spawn that wires a
+child's stdin and stdout to them (see [the kernel API](wkernel-api.md)). vim
+spawns the program that way, reads its output, and interprets it — text, the
+control characters, and the ANSI escape sequences a full-screen program uses —
+into a grid it paints into the window's corner of the screen. In other words,
+vim contains a small terminal emulator. The program is told the window's size
+through `wconsize()`, so it lays itself out to fit rather than assuming 80x25.
 
 ## What is missing
 
 No counts (`3dd`), no registers or yank/put, no undo, no visual mode, no
 search or `:%s///`, and no syntax highlighting. Undo and search are the two
 worth adding next; the rest is a long way down from what the editor is for.
+
+The terminal is one window only, and always the right half — no stacking,
+resizing or a second terminal. A window is 40 columns wide, so a program that
+insists on 80 wraps inside it.
 
 **Exit status:** 0.
 

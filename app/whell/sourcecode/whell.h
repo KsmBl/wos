@@ -15,6 +15,11 @@
 #define WHELL_MAX_ARGS 32
 #define WHELL_LINE_MAX 512
 
+/* read_line() returns this when its input stream reached end of file, which on
+ * the console cannot happen but does when the shell runs inside vim's :term and
+ * that window closes.  The main loop treats it as a clean exit. */
+#define WHELL_EOF (-2)
+
 /* Split `line` into arguments in place, honouring "double quotes" and
  * 'single quotes'.  Writes NULs into `line` and points argv at the pieces.
  * Returns the number of arguments, at most `max`. */
