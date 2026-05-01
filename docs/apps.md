@@ -578,3 +578,33 @@ need the kernel to support more than one console-attached descriptor per
 process.
 
 **Exit status:** the status of the last command, or whatever `exit` was given.
+
+---
+
+# asciiquarium
+
+```
+asciiquarium
+```
+
+An animated aquarium: fish drift across the water, bubbles rise, seaweed
+sways. A WOS-native take on Kirk Baucom's `asciiquarium` — the original is Perl
+over `Term::Animation`, neither of which exists here.
+
+Press `q` (or `Escape`) to leave; it restores the screen and cursor on the way
+out.
+
+It exists mainly as a moving thing to watch. Two reasons it earns its place:
+
+- **It proves multitasking.** Run it in one of vim's `:term` windows while you
+  edit in the other (`:term asciiquarium`) and both animate at once, driven by
+  the preemptive scheduler. That is the whole demonstration.
+- **It sizes itself to its window.** `wconsize()` tells it how big its terminal
+  is, so it fills the whole 80x25 console or a narrow vim split equally well.
+
+Rendering is double-buffered: each frame is composed into a grid off-screen and
+only the cells that changed from the last frame are actually written. That
+keeps the byte stream small — important when the frames are travelling through
+a pipe into vim's terminal emulator rather than straight to the VGA.
+
+**Exit status:** 0.
