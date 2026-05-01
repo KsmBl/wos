@@ -127,8 +127,14 @@ static int read_line(char *buf, int size)
             wconsole_raw(W_CONSOLE_CANONICAL);
             return n;
         }
-        if (n == 0)
-            continue;           /* no key yet; wread blocks, so this is rare */
+        if (n == 0) {
+            /* On the console wread blocks, so a zero-length read means the
+             * input stream itself closed -- which happens when the shell runs
+             * inside vim's :term and that window is closed.  Treat it as end of
+             * input and leave, the way Ctrl+D on an empty line would. */
+            wconsole_raw(W_CONSOLE_CANONICAL);
+            return WHELL_EOF;
+        }
 
         if (c == '\n' || c == '\r') {
             wputs("\n");
@@ -260,9 +266,11 @@ int main(int argc, char **argv)
         whell_print_prompt();
 
         int len = read_line(line, sizeof(line));
+        if (len == WHELL_EOF)
+            break;              /* stdin closed (e.g. vim's :term window shut) */
         if (len < 0) {
-            /* The console cannot really reach end of file, so this is a real
-             * error; reporting and stopping beats spinning on it. */
+            /* Otherwise a real read error; reporting and stopping beats
+             * spinning on it. */
             wfprintf(W_STDERR, "whell: input error: %s\n", wstrerror(-len));
             return 1;
         }

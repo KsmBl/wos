@@ -215,13 +215,18 @@ int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
     p->parent = parent;
     p->uid    = parent->uid;        /* a child runs as whoever started it */
     strlcpy(p->cwd, parent->cwd, sizeof(p->cwd));
+
+    /* A child sees the same terminal size as its parent unless it is being
+     * given a fresh window of its own below. */
+    p->term_rows = parent->term_rows;
+    p->term_cols = parent->term_cols;
+
     vfs_init_fds(p);
 
-    /* Wire standard descriptors to a pair of pipes instead of the console when
-     * the caller asked for it -- this is how vim's :term runs a program inside
-     * an editor window.  Referencing the pipes here, from the child's side,
-     * balances the unrefs vfs_close_all() will do when the child exits. */
     if (io && io->piped) {
+        /* A window of its own: fd 0 reads from one pipe, fds 1 and 2 write to
+         * another.  The refs taken here, from the child's side, balance the
+         * unrefs vfs_close_all() does when the child exits. */
         pipe_ref(io->in, false);       /* fd 0: read end            */
         pipe_ref(io->out, true);       /* fd 1: write end           */
         pipe_ref(io->out, true);       /* fd 2: the same write end  */
@@ -232,6 +237,11 @@ int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
 
         if (io->rows) p->term_rows = io->rows;
         if (io->cols) p->term_cols = io->cols;
+    } else {
+        /* An ordinary spawn inherits the parent's stdio, so a program run from
+         * a shell inside a :term window writes into that window, not past it
+         * to the console. */
+        vfs_inherit_stdio(p, parent);
     }
 
     /* Name the process after the application directory, so /app/whell/launch

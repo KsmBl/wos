@@ -21,6 +21,29 @@ static char status[128];
 static char command[128];
 static int  command_len;
 
+/* The size of the editor's view of the buffer.  With no terminal open this is
+ * the whole screen above the status line; when :term splits the window it
+ * shrinks to the left half. */
+static int  view_w = W_CONSOLE_WIDTH;
+static int  view_h = TEXT_ROWS;
+
+/* The :term window, and which window the keyboard is talking to. */
+static struct term term;
+enum { FOCUS_EDITOR = 0, FOCUS_TERM };
+static int  focus;
+static int  ctrl_w_pending;      /* saw Ctrl+W, waiting for the second key */
+
+/* The split geometry.  The left column is the editor, then a separator, then
+ * the terminal; the row below both is each window's status line, and the very
+ * bottom row is the shared command line. */
+#define SPLIT_LEFT_W   39
+#define SPLIT_SEP_COL  (SPLIT_LEFT_W + 1)         /* column 40 */
+#define SPLIT_RIGHT_X  (SPLIT_SEP_COL + 1)        /* column 41 */
+#define SPLIT_RIGHT_W  (W_CONSOLE_WIDTH - SPLIT_RIGHT_X + 1)
+#define SPLIT_CONTENT_H (W_CONSOLE_HEIGHT - 2)    /* rows 1..23 */
+#define SPLIT_STATUS_ROW (W_CONSOLE_HEIGHT - 1)   /* row 24     */
+#define COMMAND_ROW      W_CONSOLE_HEIGHT         /* row 25     */
+
 static int current_length(void)
 {
     return (cy < line_count) ? (int)strlen(lines[cy]) : 0;
@@ -49,13 +72,13 @@ static void scroll_to_cursor(void)
 {
     if (cy < row_offset)
         row_offset = cy;
-    if (cy >= row_offset + TEXT_ROWS)
-        row_offset = cy - TEXT_ROWS + 1;
+    if (cy >= row_offset + view_h)
+        row_offset = cy - view_h + 1;
 
     if (cx < col_offset)
         col_offset = cx;
-    if (cx >= col_offset + W_CONSOLE_WIDTH)
-        col_offset = cx - W_CONSOLE_WIDTH + 1;
+    if (cx >= col_offset + view_w)
+        col_offset = cx - view_w + 1;
 
     if (row_offset < 0)
         row_offset = 0;
@@ -106,7 +129,7 @@ static void draw_status(void)
     }
 }
 
-static void draw(void)
+static void draw_single(void)
 {
     for (int row = 0; row < TEXT_ROWS; row++) {
         int at = row_offset + row;
@@ -147,6 +170,112 @@ static void draw(void)
         wgotoxy(W_CONSOLE_HEIGHT, command_len + 2);
     else
         wgotoxy(cy - row_offset + 1, cx - col_offset + 1);
+}
+
+/* Write `text` at (row, col) and pad with spaces out to `width` columns, so a
+ * window can be cleared without erasing its neighbour the way wclear_line
+ * would. */
+static void draw_field(int row, int col, int width, const char *text)
+{
+    wgotoxy(row, col);
+
+    int n = 0;
+    for (; text[n] && n < width; n++)
+        ;
+
+    char out[W_CONSOLE_WIDTH + 1];
+    memcpy(out, text, (wsize_t)n);
+    for (int i = n; i < width; i++)
+        out[i] = ' ';
+    out[width] = '\0';
+    wprintf("%s", out);
+}
+
+/* The editor's text, confined to the left window of a split. */
+static void draw_split_editor(void)
+{
+    for (int row = 0; row < SPLIT_CONTENT_H; row++) {
+        int at = row_offset + row;
+        char linebuf[SPLIT_LEFT_W + 1];
+
+        if (at >= line_count) {
+            linebuf[0] = '~';
+            linebuf[1] = '\0';
+        } else {
+            const char *text = lines[at];
+            int len = (int)strlen(text);
+            int n = 0;
+
+            if (col_offset < len) {
+                n = len - col_offset;
+                if (n > SPLIT_LEFT_W)
+                    n = SPLIT_LEFT_W;
+                memcpy(linebuf, text + col_offset, (wsize_t)n);
+            }
+            linebuf[n] = '\0';
+        }
+
+        wcolor_reset();
+        draw_field(row + 1, 1, SPLIT_LEFT_W, linebuf);
+    }
+}
+
+/* The separator column and the two window status lines. */
+static void draw_split_chrome(void)
+{
+    /* Separator. */
+    wcolor(W_BLUE | W_BRIGHT, W_DEFAULT);
+    for (int row = 1; row <= SPLIT_STATUS_ROW; row++) {
+        wgotoxy(row, SPLIT_SEP_COL);
+        wprintf("|");
+    }
+    wcolor_reset();
+
+    /* Left status: the file, highlighted when the editor has focus. */
+    char left[SPLIT_LEFT_W + 1];
+    wsnprintf(left, sizeof(left), " %s%s",
+              filename[0] ? filename : "[No Name]", modified ? " [+]" : "");
+    if (focus == FOCUS_EDITOR) wcolor(W_BLACK, W_CYAN); else wcolor(W_WHITE, W_BLUE);
+    draw_field(SPLIT_STATUS_ROW, 1, SPLIT_LEFT_W, left);
+
+    /* Right status: the terminal, highlighted when it has focus. */
+    char right[SPLIT_RIGHT_W + 1];
+    wsnprintf(right, sizeof(right), " %s", term.open ? "terminal" : "(closed)");
+    if (focus == FOCUS_TERM) wcolor(W_BLACK, W_CYAN); else wcolor(W_WHITE, W_BLUE);
+    draw_field(SPLIT_STATUS_ROW, SPLIT_RIGHT_X, SPLIT_RIGHT_W, right);
+    wcolor_reset();
+}
+
+/* Everything in the split except the terminal's own cells and the cursor:
+ * the editor text, the separator, the status lines and the command line.
+ * Drawn only when it changes, so the fast poll loop is quiet. */
+static void draw_split_static(void)
+{
+    draw_split_editor();
+    draw_split_chrome();
+
+    /* The command line, shared across the bottom. */
+    wgotoxy(COMMAND_ROW, 1);
+    wcolor_reset();
+    if (mode == MODE_COMMAND)
+        wprintf(":%s", command);
+    else
+        wprintf("%s", status);
+    wclear_line();
+}
+
+/* Park the hardware cursor in whichever window has focus. */
+static void place_cursor(void)
+{
+    if (mode == MODE_COMMAND) {
+        wgotoxy(COMMAND_ROW, command_len + 2);
+    } else if (term.open && focus == FOCUS_TERM) {
+        int r, c;
+        term_cursor(&term, &r, &c);
+        wgotoxy(r, c);
+    } else {
+        wgotoxy(cy - row_offset + 1, cx - col_offset + 1);
+    }
 }
 
 /* ---------------------------------------------------------------- *
@@ -266,6 +395,84 @@ static void move_word_back(void)
 }
 
 /* ---------------------------------------------------------------- *
+ *  The :term window
+ * ---------------------------------------------------------------- */
+
+static void close_terminal(void)
+{
+    if (term.open)
+        term_close(&term);
+
+    focus  = FOCUS_EDITOR;
+    view_w = W_CONSOLE_WIDTH;
+    view_h = TEXT_ROWS;
+    wcls();                          /* wipe the split before the editor redraws */
+    strlcpy(status, "terminal closed", sizeof(status));
+}
+
+/* Open a terminal in the right half and run `argline` in it.  An empty command
+ * launches the shell, the way vim's :term does. */
+static void open_terminal(const char *argline)
+{
+    if (term.open) {
+        strlcpy(status, "a terminal is already open", sizeof(status));
+        return;
+    }
+
+    /* Split the argument line into argv, in a local copy we own. */
+    char argbuf[W_PATH_MAX + 1];
+    char *argv[9];
+    int   argc = 0;
+
+    while (*argline == ' ')
+        argline++;
+    strlcpy(argbuf, argline, sizeof(argbuf));
+
+    char *p = argbuf;
+    while (*p && argc < 8) {
+        while (*p == ' ')
+            *p++ = '\0';
+        if (!*p)
+            break;
+        argv[argc++] = p;
+        while (*p && *p != ' ')
+            p++;
+    }
+    argv[argc] = NULL;
+
+    char path[W_PATH_MAX + 1];
+    if (argc == 0) {
+        strlcpy(path, "/app/whell/launch", sizeof(path));
+        argv[0] = "whell";
+        argv[1] = NULL;
+    } else if (strchr(argv[0], '/')) {
+        strlcpy(path, argv[0], sizeof(path));
+    } else {
+        wsnprintf(path, sizeof(path), "/app/%s/launch", argv[0]);
+    }
+
+    /* Shrink the editor to the left half first, so its cursor stays visible. */
+    view_w = SPLIT_LEFT_W;
+    view_h = SPLIT_CONTENT_H;
+    wcls();
+
+    int r = term_start(&term, path, argv, 1, SPLIT_RIGHT_X,
+                       SPLIT_CONTENT_H, SPLIT_RIGHT_W);
+    if (r < 0) {
+        view_w = W_CONSOLE_WIDTH;
+        view_h = TEXT_ROWS;
+        wcls();
+        wsnprintf(status, sizeof(status),
+                  "E: cannot start terminal: %s", wstrerror(-r));
+        return;
+    }
+
+    focus = FOCUS_TERM;
+    wsnprintf(status, sizeof(status),
+              "terminal: %s  (Ctrl-W Ctrl-W switches windows)", argv[0]);
+}
+
+/* ---------------------------------------------------------------- *
  *  Ex commands
  * ---------------------------------------------------------------- */
 
@@ -279,6 +486,12 @@ static void run_command(void)
     int force = 0;
     int write = 0;
     int quit  = 0;
+
+    /* ":term [cmd...]" opens a terminal window running cmd (default: a shell). */
+    if (strcmp(c, "term") == 0 || strncmp(c, "term ", 5) == 0) {
+        open_terminal(c + 4);
+        return;
+    }
 
     if (strcmp(c, "w") == 0 || strncmp(c, "w ", 2) == 0) {
         write = 1;
@@ -332,6 +545,14 @@ static void run_command(void)
     }
 
     if (quit) {
+        /* With a terminal open, :q closes that window first -- like closing a
+         * split in real vim -- rather than leaving the editor.  It takes a
+         * second :q to actually quit. */
+        if (term.open && !write) {
+            close_terminal();
+            return;
+        }
+
         if (modified && !force) {
             strlcpy(status,
                     "E37: No write since last change (add ! to override)",
@@ -519,8 +740,20 @@ static void command_key(int key)
     }
 }
 
+/* Route a key to the editor according to the current mode. */
+static void dispatch_editor_key(int key)
+{
+    switch (mode) {
+    case MODE_NORMAL:  normal_key(key);  break;
+    case MODE_INSERT:  insert_key(key);  break;
+    case MODE_COMMAND: command_key(key); break;
+    }
+}
+
 int main(int argc, char **argv)
 {
+    int editor_dirty = 1;      /* redraw the split's editor chrome next pass */
+
     buffer_new();
 
     if (argc > 1) {
@@ -544,23 +777,74 @@ int main(int argc, char **argv)
     while (running) {
         clamp_cursor();
         scroll_to_cursor();
-        draw();
+
+        /* --- The simple case: no terminal, block for a key. --- */
+        if (!term.open) {
+            draw_single();
+
+            int key = wgetkey();
+            if (key < 0)
+                break;
+
+            if (mode != MODE_COMMAND)
+                status[0] = '\0';
+            dispatch_editor_key(key);
+            continue;
+        }
+
+        /* --- Split with a live terminal: never block, so both windows keep
+         *     moving.  Redraw the editor chrome only when something changed,
+         *     let the terminal repaint its own changed cells, and poll for a
+         *     key rather than waiting on one. --- */
+        if (editor_dirty) {
+            draw_split_static();
+            editor_dirty = 0;
+        }
+
+        if (!term_pump(&term)) {      /* child exited: close the window */
+            close_terminal();
+            editor_dirty = 1;
+            continue;
+        }
+        term_render(&term);
+        place_cursor();
+
+        if (!wpollin(W_STDIN)) {
+            wyield();                 /* nothing to do; give the child a turn */
+            continue;
+        }
 
         int key = wgetkey();
         if (key < 0)
             break;
 
-        /* Any keystroke clears the last message, so it does not linger over
-         * the status bar forever. */
+        /* Ctrl+W is the window-command prefix: Ctrl+W Ctrl+W (or w/h/l)
+         * switches which window the keyboard talks to. */
+        if (ctrl_w_pending) {
+            ctrl_w_pending = 0;
+            if (key == 0x17 || key == 'w' || key == 'h' || key == 'l')
+                focus = (focus == FOCUS_EDITOR) ? FOCUS_TERM : FOCUS_EDITOR;
+            editor_dirty = 1;         /* status highlight moved */
+            continue;
+        }
+        if (key == 0x17) {            /* Ctrl+W */
+            ctrl_w_pending = 1;
+            continue;
+        }
+
+        if (focus == FOCUS_TERM) {
+            term_input(&term, key);
+            continue;
+        }
+
         if (mode != MODE_COMMAND)
             status[0] = '\0';
-
-        switch (mode) {
-        case MODE_NORMAL:  normal_key(key);  break;
-        case MODE_INSERT:  insert_key(key);  break;
-        case MODE_COMMAND: command_key(key); break;
-        }
+        dispatch_editor_key(key);
+        editor_dirty = 1;             /* a key may have changed the editor */
     }
+
+    if (term.open)
+        term_close(&term);
 
     wconsole_raw(W_CONSOLE_CANONICAL);
     wcls();
