@@ -28,7 +28,7 @@ static int  view_w = W_CONSOLE_WIDTH;
 static int  view_h = TEXT_ROWS;
 
 /* The :term window, and which window the keyboard is talking to. */
-static struct term term;
+static struct wterm term;
 enum { FOCUS_EDITOR = 0, FOCUS_TERM };
 static int  focus;
 static int  ctrl_w_pending;      /* saw Ctrl+W, waiting for the second key */
@@ -271,7 +271,7 @@ static void place_cursor(void)
         wgotoxy(COMMAND_ROW, command_len + 2);
     } else if (term.open && focus == FOCUS_TERM) {
         int r, c;
-        term_cursor(&term, &r, &c);
+        wterm_cursor(&term, &r, &c);
         wgotoxy(r, c);
     } else {
         wgotoxy(cy - row_offset + 1, cx - col_offset + 1);
@@ -401,7 +401,7 @@ static void move_word_back(void)
 static void close_terminal(void)
 {
     if (term.open)
-        term_close(&term);
+        wterm_close(&term);
 
     focus  = FOCUS_EDITOR;
     view_w = W_CONSOLE_WIDTH;
@@ -456,7 +456,7 @@ static void open_terminal(const char *argline)
     view_h = SPLIT_CONTENT_H;
     wcls();
 
-    int r = term_start(&term, path, argv, 1, SPLIT_RIGHT_X,
+    int r = wterm_start(&term, path, argv, 1, SPLIT_RIGHT_X,
                        SPLIT_CONTENT_H, SPLIT_RIGHT_W);
     if (r < 0) {
         view_w = W_CONSOLE_WIDTH;
@@ -801,12 +801,12 @@ int main(int argc, char **argv)
             editor_dirty = 0;
         }
 
-        if (!term_pump(&term)) {      /* child exited: close the window */
+        if (!wterm_pump(&term)) {      /* child exited: close the window */
             close_terminal();
             editor_dirty = 1;
             continue;
         }
-        term_render(&term);
+        wterm_render(&term);
         place_cursor();
 
         if (!wpollin(W_STDIN)) {
@@ -833,7 +833,7 @@ int main(int argc, char **argv)
         }
 
         if (focus == FOCUS_TERM) {
-            term_input(&term, key);
+            wterm_input(&term, key);
             continue;
         }
 
@@ -844,7 +844,7 @@ int main(int argc, char **argv)
     }
 
     if (term.open)
-        term_close(&term);
+        wterm_close(&term);
 
     wconsole_raw(W_CONSOLE_CANONICAL);
     wcls();
