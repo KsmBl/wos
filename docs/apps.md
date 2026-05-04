@@ -704,3 +704,50 @@ is also how checkmate and stalemate are detected: no legal move and in check is
 mate, no legal move and not in check is stalemate.
 
 **Exit status:** 0.
+
+---
+
+# math
+
+```
+math <expression>
+```
+
+Evaluate an arithmetic expression and print the result, after fish's `math`.
+
+```
+root@wos:/home/root# math 2 + 3 * 4
+14
+root@wos:/home/root# math '(1 + 2) / 4'
+0.75
+root@wos:/home/root# math 2 ^ 10
+1024
+root@wos:/home/root# math 'sqrt(2)'
+1.414213
+```
+
+The expression can be one quoted argument or several bare ones — they are
+joined with spaces, so `math 2 + 3` and `math "2 + 3"` are the same. With no
+arguments it reads one line from standard input.
+
+| | |
+|---|---|
+| Operators | `+` `-` `*` `/` `%` `^`, unary `-`, and parentheses |
+| Functions | `sqrt(x)`, `abs(x)` |
+| Precedence | `^` above `* / %` above `+ -`; `^` is right-associative |
+
+## Fixed point, not floating point
+
+WOS user programs are built with no FPU and no SSE, so there is no hardware
+floating point. `math` therefore works in **fixed point**: every value is a
+64-bit integer of millionths, which gives six decimal places — the same
+default fish uses. Multiply and divide need a 128-bit intermediate, computed by
+hand from 64-bit pieces because there is no `libgcc` to supply the compiler's
+128-bit divide.
+
+The result is exact for the six decimals shown, `10 / 3` prints `3.333333`, and
+a whole-number result prints with no decimal point at all. A fractional
+exponent is refused, since fixed point cannot raise to one.
+
+**Exit status:** 0 on success, 1 on a math error (division by zero, `sqrt` of a
+negative number, ...), 2 if there is no expression.
