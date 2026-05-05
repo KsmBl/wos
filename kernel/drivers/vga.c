@@ -15,11 +15,22 @@
 #include "io.h"
 
 #define VGA_WIDTH  80
-#define VGA_HEIGHT 25
+#define VGA_HEIGHT 50            /* 80x50 text mode, via an 8x8 character cell */
 #define VGA_MEMORY ((volatile uint16_t *)0xB8000)
 
 #define CRTC_INDEX 0x3D4
 #define CRTC_DATA  0x3D5
+
+/* The sequencer and graphics-controller port pairs, used only to reach the
+ * font memory in plane 2. */
+#define SEQ_INDEX  0x3C4
+#define SEQ_DATA   0x3C5
+#define GC_INDEX   0x3CE
+#define GC_DATA    0x3CF
+
+/* Character-generator memory: 256 glyphs, 32 bytes apart, at 0xA0000 once the
+ * plane is mapped there. */
+#define FONT_MEMORY ((volatile uint8_t *)0xA0000)
 
 static size_t   cursor_row;
 static size_t   cursor_col;
@@ -80,9 +91,78 @@ void vga_clear(void)
     vga_update_cursor();
 }
 
+/* Map plane 2 (the font memory) flat at 0xA0000 so the glyphs can be read and
+ * written, saving the registers the mapping disturbs.  This is the standard
+ * VGA font-access dance; the values come straight from the hardware manual. */
+static void font_access_begin(uint8_t saved[5])
+{
+    outb(SEQ_INDEX, 2); saved[0] = inb(SEQ_DATA);
+    outb(SEQ_INDEX, 4); saved[1] = inb(SEQ_DATA);
+    outb(GC_INDEX, 4);  saved[2] = inb(GC_DATA);
+    outb(GC_INDEX, 5);  saved[3] = inb(GC_DATA);
+    outb(GC_INDEX, 6);  saved[4] = inb(GC_DATA);
+
+    outb(SEQ_INDEX, 2); outb(SEQ_DATA, 0x04);   /* write to plane 2      */
+    outb(SEQ_INDEX, 4); outb(SEQ_DATA, 0x06);   /* sequential addressing */
+    outb(GC_INDEX, 4);  outb(GC_DATA, 0x02);    /* read from plane 2     */
+    outb(GC_INDEX, 5);  outb(GC_DATA, 0x00);    /* flat, no odd/even     */
+    outb(GC_INDEX, 6);  outb(GC_DATA, 0x04);    /* map at 0xA0000        */
+}
+
+static void font_access_end(const uint8_t saved[5])
+{
+    outb(SEQ_INDEX, 2); outb(SEQ_DATA, saved[0]);
+    outb(SEQ_INDEX, 4); outb(SEQ_DATA, saved[1]);
+    outb(GC_INDEX, 4);  outb(GC_DATA, saved[2]);
+    outb(GC_INDEX, 5);  outb(GC_DATA, saved[3]);
+    outb(GC_INDEX, 6);  outb(GC_DATA, saved[4]);
+}
+
+/* Turn the 8x16 font GRUB left loaded into an 8x8 one, in place.  Each output
+ * row is the OR of two input rows, which keeps thin horizontal strokes from
+ * disappearing when the glyph is squashed to half height.  Deriving the small
+ * font from the large one means no font bitmap has to be shipped in the
+ * kernel. */
+static void vga_shrink_font(void)
+{
+    uint8_t saved[5];
+    font_access_begin(saved);
+
+    for (int g = 0; g < 256; g++) {
+        volatile uint8_t *glyph = FONT_MEMORY + g * 32;
+        uint8_t small[8];
+
+        for (int r = 0; r < 8; r++)
+            small[r] = (uint8_t)(glyph[2 * r] | glyph[2 * r + 1]);
+        for (int r = 0; r < 8; r++)
+            glyph[r] = small[r];
+    }
+
+    font_access_end(saved);
+}
+
+/* Switch the console to 80x50: an 8-pixel character cell over the same 400
+ * scan lines gives fifty rows instead of twenty-five. */
+static void vga_enable_80x50(void)
+{
+    vga_shrink_font();
+
+    /* Maximum Scan Line: character height minus one.  Keep the top three bits
+     * (blanking and line-compare high bits, scan doubling) as they are. */
+    outb(CRTC_INDEX, 0x09);
+    uint8_t max_scan = inb(CRTC_DATA);
+    outb(CRTC_INDEX, 0x09);
+    outb(CRTC_DATA, (uint8_t)((max_scan & 0xE0) | 0x07));
+
+    /* Put the blinking cursor on the last two lines of the shorter cell. */
+    outb(CRTC_INDEX, 0x0A); outb(CRTC_DATA, 0x06);
+    outb(CRTC_INDEX, 0x0B); outb(CRTC_DATA, 0x07);
+}
+
 void vga_init(void)
 {
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    vga_enable_80x50();
     vga_clear();
 }
 

@@ -220,10 +220,11 @@ typedef struct {
 #define W_CONSOLE_CANONICAL 0
 #define W_CONSOLE_RAW       1
 
-/* Console geometry. The VGA text console is a fixed 80x25 and there is no
- * way to ask it, so these are simply what it is. */
+/* Console geometry.  The VGA text console runs in 80x50 mode -- an 8x8
+ * character cell, for twice the rows of the usual 80x25 -- so there is more
+ * room for the editor, the terminals and everything else. */
 #define W_CONSOLE_WIDTH  80
-#define W_CONSOLE_HEIGHT 25
+#define W_CONSOLE_HEIGHT 50
 
 /* Special keys returned by wgetkey().  They start above 0xFF so they cannot
  * collide with an ordinary character. */

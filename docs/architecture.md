@@ -43,6 +43,11 @@ kernel's own address space.
 `kmain` initialises in dependency order, and the order matters:
 
 1. **Console** — serial and VGA, so everything after this can report failure.
+   The VGA console is switched to **80x50** here: the character cell is halved
+   from 8x16 to 8x8, which doubles the rows over the same 400 scan lines. No
+   font bitmap is shipped for it — the 8x8 glyphs are derived at boot by
+   squashing the 8x16 font GRUB already loaded, OR-ing each pair of rows so
+   thin strokes survive.
 2. **GDT and IDT** — nothing can fault safely until the IDT is live.
 3. **PIC, PIT, keyboard** — the PIC must be remapped before interrupts are
    enabled, or a plain IRQ0 arrives looking like a double fault.

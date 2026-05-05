@@ -377,7 +377,7 @@ Prints an ASCII WOS logo beside a summary of the machine.
   \ \      / /  / _ \  / ___|   Kernel: wos-0.1
    \ \ /\ / /  | | | | \___ \   Uptime: 8 seconds
     \ V  V /   | |_| |  ___) |  Shell: whell
-     \_/\_/     \___/  |____/   Terminal: VGA 80x25
+     \_/\_/     \___/  |____/   Terminal: VGA 80x50
                                 CPU: QEMU Virtual CPU version 2.5+
                                 Memory: 5.3M / 255.8M
                                 Disk (/): 406.0K / 64.0M (wfs)
@@ -555,7 +555,7 @@ spawns the program that way, reads its output, and interprets it — text, the
 control characters, and the ANSI escape sequences a full-screen program uses —
 into a grid it paints into the window's corner of the screen. In other words,
 vim contains a small terminal emulator. The program is told the window's size
-through `wconsize()`, so it lays itself out to fit rather than assuming 80x25.
+through `wconsize()`, so it lays itself out to fit rather than assuming a size.
 
 ## What is missing
 
@@ -645,7 +645,7 @@ It exists mainly as a moving thing to watch. Two reasons it earns its place:
   edit in the other (`:term asciiquarium`) and both animate at once, driven by
   the preemptive scheduler. That is the whole demonstration.
 - **It sizes itself to its window.** `wconsize()` tells it how big its terminal
-  is, so it fills the whole 80x25 console or a narrow vim split equally well.
+  is, so it fills the whole 80x50 console or a narrow vim split equally well.
 
 Rendering is double-buffered: each frame is composed into a grid off-screen and
 only the cells that changed from the last frame are actually written. That

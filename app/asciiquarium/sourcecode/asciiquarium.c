@@ -15,10 +15,10 @@
 
 #include <wkernel.h>
 
-#define MAXR 25
-#define MAXC 80
-#define MAX_FISH   8
-#define MAX_BUBBLE 12
+#define MAXR W_CONSOLE_HEIGHT
+#define MAXC W_CONSOLE_WIDTH
+#define MAX_FISH   16
+#define MAX_BUBBLE 20
 
 static int ROWS = 25;
 static int COLS = 80;
