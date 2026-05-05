@@ -19,4 +19,11 @@ void vga_clear(void);
 void vga_set_color(enum vga_color fg, enum vga_color bg);
 void vga_get_cursor(size_t *row, size_t *col);
 
+/* Switch the text mode to `cols` x `rows` characters.  Returns 0, or -1 if
+ * that combination is not one of the supported modes. */
+int  vga_set_mode(int cols, int rows);
+
+/* Report the current text-mode size. */
+void vga_size(int *cols, int *rows);
+
 #endif /* WOS_VGA_H */

@@ -215,17 +215,22 @@ typedef struct {
 #define WSYS_SPAWN_IO   36
 #define WSYS_CONSIZE    37
 #define WSYS_SETSIZE    38
-#define WSYS_MAX        39
+#define WSYS_SETMODE    39
+#define WSYS_MAX        40
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0
 #define W_CONSOLE_RAW       1
 
-/* Console geometry.  The VGA text console runs in 80x50 mode -- an 8x8
- * character cell, for twice the rows of the usual 80x25 -- so there is more
- * room for the editor, the terminals and everything else. */
-#define W_CONSOLE_WIDTH  80
-#define W_CONSOLE_HEIGHT 50
+/* Console geometry.  The text mode can be changed at runtime with wsetmode();
+ * W_CONSOLE_WIDTH/HEIGHT are the size the console boots in (80x50 -- an 8x8
+ * cell, for twice the rows of plain 80x25), and a full-screen program should
+ * call wconsize() to learn the size in force rather than assume these.  The
+ * MAX values bound the largest mode, for sizing fixed buffers. */
+#define W_CONSOLE_WIDTH      80
+#define W_CONSOLE_HEIGHT     50
+#define W_CONSOLE_MAX_WIDTH  80
+#define W_CONSOLE_MAX_HEIGHT 60
 
 /* Special keys returned by wgetkey().  They start above 0xFF so they cannot
  * collide with an ordinary character. */

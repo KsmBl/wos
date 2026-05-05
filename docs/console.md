@@ -1,10 +1,20 @@
 # The console
 
-WOS draws on an 80x50 VGA text console and mirrors everything to COM1, so a
-program's output is identical on screen and on a serial terminal. The console
-runs in 80x50 mode — an 8x8 character cell rather than the usual 8x16 — for
-twice the rows of a standard text screen; see [the boot notes](architecture.md)
-for how that mode is set.
+WOS draws on a VGA text console and mirrors everything to COM1, so a program's
+output is identical on screen and on a serial terminal. It boots in 80x50 — an
+8x8 character cell rather than the usual 8x16, for twice the rows — and the
+mode can be changed at runtime with the [`textmode`](apps.md#textmode) command
+or `wsetmode()`. The supported sizes are 80x25, 80x30, 80x50, 80x60, 40x25 and
+40x50; VGA text modes are not arbitrary, so those are the lot.
+
+The kernel keeps both fonts for this: the 8x16 GRUB loads, captured at boot,
+and an 8x8 derived from it by OR-ing each pair of rows so thin strokes survive
+the squash. Switching modes reprograms the VGA registers from a stored dump and
+reloads whichever font the cell height needs.
+
+A full-screen program should read the size in force with `wconsize()` rather
+than assume one, so it follows a mode change; `W_CONSOLE_MAX_WIDTH` and
+`W_CONSOLE_MAX_HEIGHT` bound the largest mode, for sizing fixed buffers.
 
 Two things make full-screen programs possible: **raw input mode**, so a program
 sees individual keystrokes, and **ANSI escape sequences**, so it can position
@@ -115,7 +125,9 @@ A program that repaints continuously should hide the cursor first, or it
 flickers across the screen during every repaint. It must also restore the
 cursor and the input mode before exiting, since both outlive the process.
 
-`W_CONSOLE_WIDTH` and `W_CONSOLE_HEIGHT` give the console size, fixed at 80 and
-50. A program running in a window rather than on the whole screen — under vim's
-`:term` or `split` — should call `wconsize()` instead, which reports the size of
-that window.
+`W_CONSOLE_WIDTH` and `W_CONSOLE_HEIGHT` are the size the console *boots* in
+(80x50), not a promise it stays there — the mode is changeable, so a program
+that lays itself out should call `wconsize()`, which reports the size actually
+in force. `wconsize()` is also what a program running in a window rather than
+on the whole screen — under vim's `:term` or `split` — must use, since there it
+reports the window's size rather than the console's.

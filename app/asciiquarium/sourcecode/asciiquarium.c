@@ -15,8 +15,8 @@
 
 #include <wkernel.h>
 
-#define MAXR W_CONSOLE_HEIGHT
-#define MAXC W_CONSOLE_WIDTH
+#define MAXR W_CONSOLE_MAX_HEIGHT
+#define MAXC W_CONSOLE_MAX_WIDTH
 #define MAX_FISH   16
 #define MAX_BUBBLE 20
 
