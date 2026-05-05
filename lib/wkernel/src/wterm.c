@@ -1,19 +1,19 @@
-/* term.c -- a small terminal emulator, and the plumbing that runs a child
- * program inside a vim window.
+/* wterm -- a small terminal emulator, and the plumbing that runs a child
+ * program inside a window.  See wterm.h for the model.
  *
- * vim spawns the child (a shell, or asciiquarium, ...) with its stdin and
+ * The host spawns the child (a shell, asciiquarium, ...) with its stdin and
  * stdout wired to pipes through wspawn_io().  Whatever the child writes is fed
  * here byte by byte and interpreted -- printable text, the handful of control
  * characters, and the ANSI CSI sequences a full-screen program uses -- into a
- * grid of cells.  render() then blits the changed cells into the window's
- * corner of the real screen.  Keys travel the other way: term_input() encodes
- * them and writes them to the child's stdin.
+ * grid of cells.  wterm_render() then blits the changed cells into the
+ * window's corner of the real screen.  Keys travel the other way:
+ * wterm_input() encodes them and writes them to the child's stdin.
  *
  * The child believes it owns a screen of exactly `rows` by `cols`, which is
  * what wconsize() tells it, so it lays itself out to fit the window.
  */
 
-#include "vim.h"
+#include "wterm.h"
 
 #define ESC 0x1B
 
@@ -22,7 +22,7 @@ enum { ST_NORMAL = 0, ST_ESC, ST_CSI };
 /* ANSI SGR colour codes 30-37 (and 40-47) are in the same order as the W_*
  * colours, so the code maps straight onto the value with no lookup table. */
 
-static void term_reset_grid(struct term *t)
+static void term_reset_grid(struct wterm *t)
 {
     for (int y = 0; y < t->rows; y++)
         for (int x = 0; x < t->cols; x++) {
@@ -32,7 +32,7 @@ static void term_reset_grid(struct term *t)
         }
 }
 
-static void term_scroll(struct term *t)
+static void term_scroll(struct wterm *t)
 {
     for (int y = 1; y < t->rows; y++)
         for (int x = 0; x < t->cols; x++) {
@@ -49,7 +49,7 @@ static void term_scroll(struct term *t)
     }
 }
 
-static void term_newline(struct term *t)
+static void term_newline(struct wterm *t)
 {
     t->cx = 0;
     if (++t->cy >= t->rows) {
@@ -58,7 +58,7 @@ static void term_newline(struct term *t)
     }
 }
 
-static void term_putc(struct term *t, char c)
+static void term_putc(struct wterm *t, char c)
 {
     if (t->wrap_pending) {
         t->wrap_pending = 0;
@@ -80,7 +80,7 @@ static void term_putc(struct term *t, char c)
         t->cx++;
 }
 
-static void term_erase(struct term *t, int y0, int x0, int y1, int x1)
+static void term_erase(struct wterm *t, int y0, int x0, int y1, int x1)
 {
     for (int y = y0; y <= y1 && y < t->rows; y++) {
         int xs = (y == y0) ? x0 : 0;
@@ -94,7 +94,7 @@ static void term_erase(struct term *t, int y0, int x0, int y1, int x1)
     }
 }
 
-static void term_sgr(struct term *t)
+static void term_sgr(struct wterm *t)
 {
     int n = t->nparam ? t->nparam : 1;   /* a lone "\033[m" means reset */
 
@@ -128,7 +128,7 @@ static void term_sgr(struct term *t)
     }
 }
 
-static void term_csi(struct term *t, char final)
+static void term_csi(struct wterm *t, char final)
 {
     int p0 = (t->nparam > 0) ? t->params[0] : 0;
     int p1 = (t->nparam > 1) ? t->params[1] : 0;
@@ -171,7 +171,7 @@ static void term_csi(struct term *t, char final)
     }
 }
 
-static void term_feed(struct term *t, char c)
+static void term_feed(struct wterm *t, char c)
 {
     switch (t->state) {
     case ST_NORMAL:
@@ -227,13 +227,13 @@ static void term_feed(struct term *t, char c)
  *  Public interface
  * ------------------------------------------------------------------ */
 
-int term_start(struct term *t, const char *path, char *const argv[],
+int wterm_start(struct wterm *t, const char *path, char *const argv[],
                int oy, int ox, int rows, int cols)
 {
     memset(t, 0, sizeof(*t));
 
-    if (rows > TERM_MAX_R) rows = TERM_MAX_R;
-    if (cols > TERM_MAX_C) cols = TERM_MAX_C;
+    if (rows > WTERM_MAX_R) rows = WTERM_MAX_R;
+    if (cols > WTERM_MAX_C) cols = WTERM_MAX_C;
 
     t->rows = rows;
     t->cols = cols;
@@ -274,7 +274,7 @@ int term_start(struct term *t, const char *path, char *const argv[],
     return 0;
 }
 
-int term_pump(struct term *t)
+int wterm_pump(struct wterm *t)
 {
     if (!t->open)
         return 0;
@@ -284,7 +284,7 @@ int term_pump(struct term *t)
         int n = wread(t->out_r, buf, sizeof(buf));
         if (n <= 0) {
             /* End of file: the child has closed its output and exited. */
-            term_close(t);
+            wterm_close(t);
             return 0;
         }
         for (int i = 0; i < n; i++)
@@ -293,7 +293,7 @@ int term_pump(struct term *t)
     return 1;
 }
 
-void term_input(struct term *t, int key)
+void wterm_input(struct wterm *t, int key)
 {
     if (!t->open)
         return;
@@ -326,7 +326,7 @@ void term_input(struct term *t, int key)
         wwrite(t->in_w, seq, (int)strlen(seq));
 }
 
-void term_render(struct term *t)
+void wterm_render(struct wterm *t)
 {
     if (!t->open)
         return;
@@ -373,7 +373,7 @@ void term_render(struct term *t)
     wcolor_reset();
 }
 
-void term_cursor(struct term *t, int *row, int *col)
+void wterm_cursor(struct wterm *t, int *row, int *col)
 {
     int cy = t->cy, cx = t->cx;
     if (cy >= t->rows) cy = t->rows - 1;
@@ -382,7 +382,7 @@ void term_cursor(struct term *t, int *row, int *col)
     *col = t->ox + cx;
 }
 
-void term_close(struct term *t)
+void wterm_close(struct wterm *t)
 {
     if (!t->open)
         return;

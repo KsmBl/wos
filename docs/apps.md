@@ -751,3 +751,45 @@ exponent is refused, since fixed point cannot raise to one.
 
 **Exit status:** 0 on success, 1 on a math error (division by zero, `sqrt` of a
 negative number, ...), 2 if there is no expression.
+
+---
+
+# split
+
+```
+split
+```
+
+Run two terminals side by side -- a tiny terminal multiplexer, in the spirit of
+tmux or screen. Each pane is its own shell.
+
+```
+whell -- the WOS shell.      |whell -- the WOS shell.
+root@wos:/home/root# free    |root@wos:/home/root# pwd
+              total    used  |/home/root
+Mem:         262016   10020  |root@wos:/home/root# _
+root@wos:/home/root#         |
+ left: whell                  right: whell
+```
+
+The keyboard talks to one pane at a time; the highlighted status label shows
+which.
+
+| Key | Effect |
+|---|---|
+| `Ctrl-W Ctrl-W` | switch the keyboard to the other pane (also `Ctrl-W w`) |
+| `Ctrl-W q` | quit, closing both shells |
+
+A pane whose shell exits (`exit`) freezes and its label shows `[exited]`; when
+both have gone, `split` leaves on its own.
+
+Both panes are genuinely separate processes running at the same time. Start a
+long-running program in one -- `asciiquarium`, say -- and type in the other
+while it animates: preemptive multitasking you can watch.
+
+Each terminal is a `wterm` from the shared library, the same emulator vim's
+`:term` uses. `split` just arranges two of them and routes the keyboard between
+them, which is why the two features behave identically. A pane is 40 columns
+wide, so a program that insists on 80 wraps inside it.
+
+**Exit status:** 0.
