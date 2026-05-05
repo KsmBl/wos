@@ -1,7 +1,10 @@
 # The console
 
-WOS draws on an 80x25 VGA text console and mirrors everything to COM1, so a
-program's output is identical on screen and on a serial terminal.
+WOS draws on an 80x50 VGA text console and mirrors everything to COM1, so a
+program's output is identical on screen and on a serial terminal. The console
+runs in 80x50 mode — an 8x8 character cell rather than the usual 8x16 — for
+twice the rows of a standard text screen; see [the boot notes](architecture.md)
+for how that mode is set.
 
 Two things make full-screen programs possible: **raw input mode**, so a program
 sees individual keystrokes, and **ANSI escape sequences**, so it can position
@@ -112,5 +115,7 @@ A program that repaints continuously should hide the cursor first, or it
 flickers across the screen during every repaint. It must also restore the
 cursor and the input mode before exiting, since both outlive the process.
 
-`W_CONSOLE_WIDTH` and `W_CONSOLE_HEIGHT` give the console size. There is no way
-to ask the hardware, so they are fixed at 80 and 25.
+`W_CONSOLE_WIDTH` and `W_CONSOLE_HEIGHT` give the console size, fixed at 80 and
+50. A program running in a window rather than on the whole screen — under vim's
+`:term` or `split` — should call `wconsize()` instead, which reports the size of
+that window.
