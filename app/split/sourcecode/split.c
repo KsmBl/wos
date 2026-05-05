@@ -29,6 +29,7 @@
 static struct wterm pane[2];
 static int  focus;                 /* 0 = left, 1 = right       */
 static int  chrome_dirty = 1;
+static int  single;                /* one pane left, filling the screen */
 
 static int start_pane(int i, int ox, int cols)
 {
@@ -56,6 +57,14 @@ static void draw_field(int row, int col, int width, int fg, int bg,
 
 static void draw_chrome(void)
 {
+    /* Collapsed to one terminal: a single full-width status line, no
+     * separator. */
+    if (single) {
+        draw_field(STATUS_ROW, 1, W_CONSOLE_WIDTH, W_BLACK, W_CYAN,
+                   " whell    (Ctrl-W q to quit)");
+        return;
+    }
+
     /* Separator column. */
     wcolor(W_BLUE | W_BRIGHT, W_DEFAULT);
     for (int row = 1; row <= CONTENT_H; row++) {
@@ -79,13 +88,22 @@ static void draw_chrome(void)
     }
 }
 
-/* Move focus to the other pane if it is still alive. */
-static void refocus_if_dead(void)
+/* When one shell exits, the survivor takes over the whole screen: the split
+ * goes away and the last terminal is shown full size. */
+static void collapse_to_survivor(void)
 {
-    if (!pane[focus].open && pane[!focus].open) {
-        focus = !focus;
-        chrome_dirty = 1;
-    }
+    int s = pane[0].open ? 0 : 1;
+
+    wcls();
+    wterm_resize(&pane[s], CONTENT_H, W_CONSOLE_WIDTH, 1, 1);
+
+    /* Tell the shell its new size so a program it launches next fills the
+     * widened window rather than the old half. */
+    wsetsize(pane[s].pid, CONTENT_H, W_CONSOLE_WIDTH);
+
+    focus = s;
+    single = 1;
+    chrome_dirty = 1;
 }
 
 int main(int argc, char **argv)
@@ -116,14 +134,16 @@ int main(int argc, char **argv)
             if (pane[i].open) {
                 int alive = wterm_pump(&pane[i]);
                 if (!alive)
-                    chrome_dirty = 1;          /* status now says [exited] */
+                    chrome_dirty = 1;
             }
         }
 
         if (!pane[0].open && !pane[1].open)
             break;                              /* both shells gone */
 
-        refocus_if_dead();
+        /* One shell just exited: give the survivor the whole screen. */
+        if (!single && (pane[0].open ^ pane[1].open))
+            collapse_to_survivor();
 
         for (int i = 0; i < 2; i++)
             wterm_render(&pane[i]);

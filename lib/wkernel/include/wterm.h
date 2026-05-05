@@ -63,6 +63,11 @@ int  wterm_start(struct wterm *t, const char *path, char *const argv[],
  * child is still running, 0 if it has exited (the window should close). */
 int  wterm_pump(struct wterm *t);
 
+/* Move and resize the window: change its geometry and screen origin, keeping
+ * whatever is already on the grid.  Forces a full repaint at the new size.
+ * The child is not told -- use wsetsize() for that if it matters. */
+void wterm_resize(struct wterm *t, int rows, int cols, int oy, int ox);
+
 /* Forward one key (an ordinary character or a W_KEY_* code) to the child. */
 void wterm_input(struct wterm *t, int key);
 

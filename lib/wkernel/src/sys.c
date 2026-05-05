@@ -53,6 +53,11 @@ int wconsize(int *rows, int *cols)
     return wsyscall2(WSYS_CONSIZE, (long)rows, (long)cols);
 }
 
+int wsetsize(int pid, int rows, int cols)
+{
+    return wsyscall3(WSYS_SETSIZE, pid, rows, cols);
+}
+
 void wexit(int status)
 {
     wsyscall1(WSYS_EXIT, status);

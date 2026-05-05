@@ -373,6 +373,28 @@ void wterm_render(struct wterm *t)
     wcolor_reset();
 }
 
+void wterm_resize(struct wterm *t, int rows, int cols, int oy, int ox)
+{
+    if (rows > WTERM_MAX_R) rows = WTERM_MAX_R;
+    if (cols > WTERM_MAX_C) cols = WTERM_MAX_C;
+    if (rows < 1) rows = 1;
+    if (cols < 1) cols = 1;
+
+    /* The grid arrays are always full size, so growing the window just exposes
+     * columns and rows that were already there (blank); existing content in
+     * the top-left keeps its place. */
+    t->rows = rows;
+    t->cols = cols;
+    t->oy   = oy;
+    t->ox   = ox;
+
+    if (t->cy >= rows) t->cy = rows - 1;
+    if (t->cx >= cols) t->cx = cols - 1;
+
+    t->shadow_valid = 0;        /* geometry moved: repaint every cell */
+    t->dirty = 1;
+}
+
 void wterm_cursor(struct wterm *t, int *row, int *col)
 {
     int cy = t->cy, cx = t->cx;

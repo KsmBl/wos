@@ -409,6 +409,23 @@ int wspawn_io(const char *path, char *const argv[], const wspawnio_t *io);
 int wconsize(int *rows, int *cols);
 
 /**
+ * Set the terminal size reported to one of your own child processes.
+ *
+ * Affects what wconsize() returns for that child and, through inheritance, for
+ * anything the child later spawns.  Used when a window is resized -- `split`
+ * calls it after collapsing to a single full-screen terminal -- so a program
+ * started afterwards lays itself out to the new size.  You may only set a
+ * process you are the parent of.
+ *
+ * @param pid  A child of the calling process.
+ * @param rows New row count (ignored if <= 0).
+ * @param cols New column count (ignored if <= 0).
+ * @return 0, `-W_ESRCH` if there is no such process, or `-W_EPERM` if it is
+ *         not your child.
+ */
+int wsetsize(int pid, int rows, int cols);
+
+/**
  * Wait for a child process to exit and clean it up.
  *
  * Blocks until a matching child has exited.  Until a child is waited for, its

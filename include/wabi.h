@@ -214,7 +214,8 @@ typedef struct {
 #define WSYS_PIPE       35
 #define WSYS_SPAWN_IO   36
 #define WSYS_CONSIZE    37
-#define WSYS_MAX        38
+#define WSYS_SETSIZE    38
+#define WSYS_MAX        39
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0
