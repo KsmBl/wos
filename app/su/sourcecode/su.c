@@ -44,11 +44,17 @@ int main(int argc, char **argv)
     wsnprintf(home, sizeof(home), "/home/%s", target);
     wchdir(home);
 
-    char *shell_argv[] = { "whell", NULL };
-    int pid = wspawn("/app/whell/launch", shell_argv);
+    /* Run the user's login shell, so `chsh` decides what su gives them.  We
+     * are now that user (wlogin changed our uid), so ask for our own. */
+    char shell[W_SHELL_MAX + 1];
+    if (wgetshell(-1, shell, sizeof(shell)) < 0)
+        strlcpy(shell, "/app/whell/launch", sizeof(shell));
+
+    char *shell_argv[] = { "shell", NULL };
+    int pid = wspawn(shell, shell_argv);
 
     if (pid < 0) {
-        wfprintf(W_STDERR, "su: cannot start a shell: %s\n", wstrerror(-pid));
+        wfprintf(W_STDERR, "su: cannot start %s: %s\n", shell, wstrerror(-pid));
         return 1;
     }
 

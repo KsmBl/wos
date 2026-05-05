@@ -662,6 +662,33 @@ int wuseradd(const char *name, const char *password, unsigned int roles);
 int wsetroles(const char *name, unsigned int roles);
 
 /**
+ * Get a user's login shell -- the program started for them at boot or by su.
+ *
+ * Always yields a usable path, the system default when the user has set none.
+ *
+ * @param uid  User to look up, or negative for the calling user.
+ * @param buf  Receives the shell path.
+ * @param size Size of @p buf.
+ * @return 0, or `-W_EFAULT` if @p buf is not writable.
+ */
+int wgetshell(int uid, char *buf, int size);
+
+/**
+ * Set a user's login shell.
+ *
+ * A user may change their own; root and holders of #W_ROLE_USEREDITOR may
+ * change anyone's. The change takes effect the next time a shell is started
+ * for that user -- their next su, or the next boot for root. An empty string
+ * restores the default shell.
+ *
+ * @param name  User to change.
+ * @param shell Path to the shell executable, e.g. "/app/fish/launch".
+ * @return 0, `-W_ENOENT`, `-W_EPERM` if not permitted, `-W_ENAMETOOLONG`, or
+ *         `-W_EFAULT`.
+ */
+int wsetshell(const char *name, const char *shell);
+
+/**
  * Shut the machine down.
  *
  * Does not return when it succeeds -- the machine powers off. Nothing needs

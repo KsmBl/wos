@@ -1,6 +1,6 @@
 /* The user database, stored under /userconfig.
  *
- *     /userconfig/users              the list:  name:uid:roles
+ *     /userconfig/users              the list:  name:uid:roles[:shell]
  *     /userconfig/<name>/password    that user's password: salt:hash
  *
  * The split matters.  A user with the usereditor role may write /userconfig --
@@ -30,7 +30,10 @@ typedef struct {
     uint32_t roles;
     uint64_t salt;
     uint64_t hash;
+    char     shell[W_SHELL_MAX + 1];   /* login shell, "" means the default */
 } user_entry_t;
+
+#define DEFAULT_SHELL "/app/whell/launch"
 
 static user_entry_t users[W_MAX_USERS];
 static uint32_t     next_uid = 1;
@@ -206,7 +209,7 @@ static int write_file(const char *path, const char *text, uint32_t len)
  * lives in each user's own directory, under a stricter rule. */
 static int save_user_list(void)
 {
-    char   text[W_MAX_USERS * 64];
+    char   text[W_MAX_USERS * 128];
     size_t at = 0;
 
     for (int i = 0; i < W_MAX_USERS; i++) {
@@ -218,6 +221,14 @@ static int save_user_list(void)
         append_u64(text, &at, sizeof(text), users[i].uid);
         text[at++] = ':';
         append_u64(text, &at, sizeof(text), users[i].roles);
+
+        /* The login shell is a fourth field, written only when set so old
+         * three-field lines stay valid and the file stays tidy. */
+        if (users[i].shell[0]) {
+            text[at++] = ':';
+            append_str(text, &at, sizeof(text), users[i].shell);
+        }
+
         text[at++] = '\n';
     }
 
@@ -298,6 +309,16 @@ static void parse_list_line(const char *line)
         return;
     e.roles = (uint32_t)parse_u64(&line);
 
+    /* An optional fourth field is the login shell.  Its absence (an old
+     * three-field line) leaves shell empty, which means the default. */
+    if (*line == ':') {
+        line++;
+        int s = 0;
+        while (*line && *line != '\n' && s < W_SHELL_MAX)
+            e.shell[s++] = *line++;
+        e.shell[s] = '\0';
+    }
+
     for (int i = 0; i < W_MAX_USERS; i++) {
         if (!users[i].used) {
             e.used = true;
@@ -324,7 +345,7 @@ void user_init(void)
         struct wfs_inode in;
 
         if (wfs_read_inode(ino, &in) == 0 && in.size > 0) {
-            char text[W_MAX_USERS * 64];
+            char text[W_MAX_USERS * 128];
             uint32_t want = in.size;
 
             if (want > sizeof(text) - 1)
@@ -489,6 +510,38 @@ int user_set_roles(uint32_t actor, const char *name, uint32_t roles)
         return -W_EPERM;
 
     e->roles = roles;
+    return save_user_list();
+}
+
+/* Copy a user's login shell into `out`, falling back to the default when none
+ * is set.  Always yields a usable path. */
+int user_shell(uint32_t uid, char *out, size_t cap)
+{
+    user_entry_t *e = find_by_uid(uid);
+    const char   *shell = (e && e->shell[0]) ? e->shell : DEFAULT_SHELL;
+
+    strlcpy(out, shell, cap);
+    return 0;
+}
+
+/* Set a user's login shell.  A user may set their own; root and holders of
+ * W_ROLE_USEREDITOR may set anyone's.  An empty shell restores the default. */
+int user_set_shell(uint32_t actor, const char *name, const char *shell)
+{
+    user_entry_t *e = find_by_name(name);
+    if (!e)
+        return -W_ENOENT;
+
+    bool privileged = (actor == W_ROOT_UID) ||
+                      user_has_role(actor, W_ROLE_USEREDITOR);
+
+    if (!privileged && e->uid != actor)
+        return -W_EPERM;
+
+    if (strlen(shell) > W_SHELL_MAX)
+        return -W_ENAMETOOLONG;
+
+    strlcpy(e->shell, shell, sizeof(e->shell));
     return save_user_list();
 }
 
