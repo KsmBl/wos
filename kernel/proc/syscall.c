@@ -393,6 +393,22 @@ static int64_t sys_consize(uint64_t rows_ptr, uint64_t cols_ptr)
     return 0;
 }
 
+/* Change the terminal size reported to one of your own children, so a program
+ * it later spawns lays itself out to a resized window.  A caller may only set
+ * a process it is the parent of. */
+static int64_t sys_setsize(uint64_t pid, uint64_t rows, uint64_t cols)
+{
+    process_t *p = proc_by_pid((int32_t)pid);
+    if (!p)
+        return -W_ESRCH;
+    if (p->parent != proc_current())
+        return -W_EPERM;
+
+    if ((int32_t)rows > 0) p->term_rows = (uint32_t)rows;
+    if ((int32_t)cols > 0) p->term_cols = (uint32_t)cols;
+    return 0;
+}
+
 static int64_t sys_wait(uint64_t pid, uint64_t status_out)
 {
     int64_t status = 0;
@@ -631,6 +647,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_PIPE:      r = sys_pipe(regs->rdi); break;
     case WSYS_SPAWN_IO:  r = sys_spawn_io(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_CONSIZE:   r = sys_consize(regs->rdi, regs->rsi); break;
+    case WSYS_SETSIZE:   r = sys_setsize(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

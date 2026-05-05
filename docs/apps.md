@@ -780,8 +780,14 @@ which.
 | `Ctrl-W Ctrl-W` | switch the keyboard to the other pane (also `Ctrl-W w`) |
 | `Ctrl-W q` | quit, closing both shells |
 
-A pane whose shell exits (`exit`) freezes and its label shows `[exited]`; when
-both have gone, `split` leaves on its own.
+When one shell exits (`exit`), the split goes away and the surviving terminal
+takes over the whole screen — you are left with just that one, full size, and
+it keeps running. When it too exits, `split` leaves.
+
+The survivor really is widened, not just re-centred: `split` resizes its
+emulator to the full width and tells the shell its new size, so a program you
+start afterwards (say `ls`, or `asciiquarium`) uses all 80 columns rather than
+the old half.
 
 Both panes are genuinely separate processes running at the same time. Start a
 long-running program in one -- `asciiquarium`, say -- and type in the other
