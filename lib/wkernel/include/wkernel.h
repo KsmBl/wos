@@ -426,6 +426,23 @@ int wconsize(int *rows, int *cols);
 int wsetsize(int pid, int rows, int cols);
 
 /**
+ * Change the console's text mode to `cols` by `rows` characters.
+ *
+ * The supported modes are 80x25, 80x50, 80x30, 80x60, 40x25 and 40x50 -- VGA
+ * text modes are not arbitrary, so other sizes are refused.  After the switch
+ * the screen is cleared and wconsize() reports the new size, which full-screen
+ * programs read to lay themselves out.
+ *
+ * Only a program attached to the real console may do this; one running in a
+ * pipe or a window gets `-W_EPERM`.
+ *
+ * @param cols Character columns (40 or 80).
+ * @param rows Character rows (25, 30, 50 or 60, as the mode allows).
+ * @return 0, `-W_EINVAL` for an unsupported size, or `-W_EPERM`.
+ */
+int wsetmode(int cols, int rows);
+
+/**
  * Wait for a child process to exit and clean it up.
  *
  * Blocks until a matching child has exited.  Until a child is waited for, its

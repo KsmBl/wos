@@ -14,8 +14,12 @@
 #include "vga.h"
 #include "io.h"
 
-#define VGA_WIDTH  80
-#define VGA_HEIGHT 50            /* 80x50 text mode, via an 8x8 character cell */
+/* The character grid is chosen at runtime by vga_set_mode(); these name the
+ * current size, and cap the largest mode the driver offers. */
+static int vga_w = 80;
+static int vga_h = 50;
+#define VGA_WIDTH  ((size_t)vga_w)
+#define VGA_HEIGHT ((size_t)vga_h)
 #define VGA_MEMORY ((volatile uint16_t *)0xB8000)
 
 #define CRTC_INDEX 0x3D4
@@ -118,52 +122,175 @@ static void font_access_end(const uint8_t saved[5])
     outb(GC_INDEX, 6);  outb(GC_DATA, saved[4]);
 }
 
-/* Turn the 8x16 font GRUB left loaded into an 8x8 one, in place.  Each output
- * row is the OR of two input rows, which keeps thin horizontal strokes from
- * disappearing when the glyph is squashed to half height.  Deriving the small
- * font from the large one means no font bitmap has to be shipped in the
- * kernel. */
-static void vga_shrink_font(void)
+/* Two fonts, captured and derived once at boot: the 8x16 GRUB leaves loaded,
+ * and an 8x8 made from it (each row the OR of two, so thin strokes survive the
+ * squash).  Keeping both means the driver can switch between the tall and
+ * short character cells without shipping a font bitmap. */
+static uint8_t font16[256 * 16];
+static uint8_t font8[256 * 8];
+
+static void vga_read_font16(void)
 {
     uint8_t saved[5];
     font_access_begin(saved);
+    for (int g = 0; g < 256; g++)
+        for (int r = 0; r < 16; r++)
+            font16[g * 16 + r] = FONT_MEMORY[g * 32 + r];
+    font_access_end(saved);
 
-    for (int g = 0; g < 256; g++) {
-        volatile uint8_t *glyph = FONT_MEMORY + g * 32;
-        uint8_t small[8];
-
+    for (int g = 0; g < 256; g++)
         for (int r = 0; r < 8; r++)
-            small[r] = (uint8_t)(glyph[2 * r] | glyph[2 * r + 1]);
-        for (int r = 0; r < 8; r++)
-            glyph[r] = small[r];
-    }
+            font8[g * 8 + r] = (uint8_t)(font16[g * 16 + 2 * r] |
+                                         font16[g * 16 + 2 * r + 1]);
+}
 
+static void vga_load_font(const uint8_t *font, int height)
+{
+    uint8_t saved[5];
+    font_access_begin(saved);
+    for (int g = 0; g < 256; g++)
+        for (int r = 0; r < height; r++)
+            FONT_MEMORY[g * 32 + r] = font[g * height + r];
     font_access_end(saved);
 }
 
-/* Switch the console to 80x50: an 8-pixel character cell over the same 400
- * scan lines gives fifty rows instead of twenty-five. */
-static void vga_enable_80x50(void)
+/* A full register dump for a text mode: misc, then the sequencer, CRTC,
+ * graphics and attribute registers in order.  Programming a whole set is far
+ * more reliable than nudging individual registers between modes. */
+#define REG_MISC 0
+#define REG_SEQ  1              /* 5 registers  */
+#define REG_CRTC 6             /* 25 registers */
+#define REG_GC   31            /* 9 registers  */
+#define REG_AC   40            /* 21 registers */
+#define REG_TOTAL 61
+
+/* 80x25: the standard colour text mode (mode 3h), 720x400, 8x16 cell. */
+static const uint8_t regs_80x25[REG_TOTAL] = {
+    0x67,
+    0x03, 0x00, 0x03, 0x00, 0x02,
+    0x5F, 0x4F, 0x50, 0x82, 0x55, 0x81, 0xBF, 0x1F,
+    0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x00, 0x50,
+    0x9C, 0x0E, 0x8F, 0x28, 0x1F, 0x96, 0xB9, 0xA3,
+    0xFF,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0E, 0x00, 0xFF,
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07,
+    0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
+    0x0C, 0x00, 0x0F, 0x08, 0x00,
+};
+
+/* 40x25: mode 1h.  The sequencer's clock/2 bit halves the columns, and the
+ * CRTC horizontal timing is halved to match. */
+static const uint8_t regs_40x25[REG_TOTAL] = {
+    0x67,
+    0x03, 0x08, 0x03, 0x00, 0x02,
+    0x2D, 0x27, 0x28, 0x90, 0x2B, 0xA0, 0xBF, 0x1F,
+    0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x00, 0xA0,
+    0x9C, 0x0E, 0x8F, 0x14, 0x1F, 0x96, 0xB9, 0xA3,
+    0xFF,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0E, 0x00, 0xFF,
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07,
+    0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
+    0x0C, 0x00, 0x0F, 0x08, 0x00,
+};
+
+/* 80x30 / 80x60: 720x480, so thirty 8x16 rows or sixty 8x8 rows. */
+static const uint8_t regs_80x30[REG_TOTAL] = {
+    0xE3,
+    0x03, 0x00, 0x03, 0x00, 0x02,
+    0x5F, 0x4F, 0x50, 0x82, 0x55, 0x81, 0x0B, 0x3E,
+    0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x00, 0x50,
+    0xEA, 0x0C, 0xDF, 0x28, 0x1F, 0xE7, 0x04, 0xA3,
+    0xFF,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0E, 0x00, 0xFF,
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07,
+    0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
+    0x0C, 0x00, 0x0F, 0x08, 0x00,
+};
+
+static void vga_write_regs(const uint8_t *r)
 {
-    vga_shrink_font();
+    outb(0x3C2, r[REG_MISC]);                       /* miscellaneous output */
 
-    /* Maximum Scan Line: character height minus one.  Keep the top three bits
-     * (blanking and line-compare high bits, scan doubling) as they are. */
-    outb(CRTC_INDEX, 0x09);
-    uint8_t max_scan = inb(CRTC_DATA);
-    outb(CRTC_INDEX, 0x09);
-    outb(CRTC_DATA, (uint8_t)((max_scan & 0xE0) | 0x07));
+    for (int i = 0; i < 5; i++) {                   /* sequencer */
+        outb(SEQ_INDEX, (uint8_t)i);
+        outb(SEQ_DATA, r[REG_SEQ + i]);
+    }
 
-    /* Put the blinking cursor on the last two lines of the shorter cell. */
-    outb(CRTC_INDEX, 0x0A); outb(CRTC_DATA, 0x06);
-    outb(CRTC_INDEX, 0x0B); outb(CRTC_DATA, 0x07);
+    /* Unlock CRTC registers 0-7 by clearing the protect bit. */
+    outb(CRTC_INDEX, 0x11);
+    outb(CRTC_DATA, (uint8_t)(inb(CRTC_DATA) & 0x7F));
+
+    for (int i = 0; i < 25; i++) {                  /* CRTC */
+        outb(CRTC_INDEX, (uint8_t)i);
+        outb(CRTC_DATA, r[REG_CRTC + i]);
+    }
+
+    for (int i = 0; i < 9; i++) {                   /* graphics controller */
+        outb(GC_INDEX, (uint8_t)i);
+        outb(GC_DATA, r[REG_GC + i]);
+    }
+
+    for (int i = 0; i < 21; i++) {                  /* attribute controller */
+        (void)inb(0x3DA);                           /* reset the flip-flop */
+        outb(0x3C0, (uint8_t)i);
+        outb(0x3C0, r[REG_AC + i]);
+    }
+
+    (void)inb(0x3DA);
+    outb(0x3C0, 0x20);                              /* re-enable video output */
+}
+
+static void vga_set_cursor_shape(int height)
+{
+    /* A thin cursor on the last two scan lines of the cell. */
+    outb(CRTC_INDEX, 0x0A); outb(CRTC_DATA, (uint8_t)(height - 2));
+    outb(CRTC_INDEX, 0x0B); outb(CRTC_DATA, (uint8_t)(height - 1));
+}
+
+int vga_set_mode(int cols, int rows)
+{
+    const uint8_t *base;
+    int font_h;
+
+    if (cols == 80 && rows == 25)      { base = regs_80x25; font_h = 16; }
+    else if (cols == 80 && rows == 50) { base = regs_80x25; font_h = 8;  }
+    else if (cols == 40 && rows == 25) { base = regs_40x25; font_h = 16; }
+    else if (cols == 40 && rows == 50) { base = regs_40x25; font_h = 8;  }
+    else if (cols == 80 && rows == 30) { base = regs_80x30; font_h = 16; }
+    else if (cols == 80 && rows == 60) { base = regs_80x30; font_h = 8;  }
+    else
+        return -1;
+
+    vga_write_regs(base);
+
+    if (font_h == 8) {
+        /* Halve the character cell: Maximum Scan Line to 7, preserving the top
+         * three bits the register dump set. */
+        outb(CRTC_INDEX, 0x09);
+        outb(CRTC_DATA, (uint8_t)((inb(CRTC_DATA) & 0xE0) | 0x07));
+        vga_load_font(font8, 8);
+    } else {
+        vga_load_font(font16, 16);
+    }
+    vga_set_cursor_shape(font_h);
+
+    vga_w = cols;
+    vga_h = rows;
+    vga_clear();
+    return 0;
+}
+
+void vga_size(int *cols, int *rows)
+{
+    if (cols) *cols = vga_w;
+    if (rows) *rows = vga_h;
 }
 
 void vga_init(void)
 {
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
-    vga_enable_80x50();
-    vga_clear();
+    vga_read_font16();          /* capture GRUB's font before changing modes */
+    vga_set_mode(80, 50);       /* the default: twice the rows of plain text */
 }
 
 void vga_get_cursor(size_t *row, size_t *col)

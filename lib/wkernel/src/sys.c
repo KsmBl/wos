@@ -58,6 +58,11 @@ int wsetsize(int pid, int rows, int cols)
     return wsyscall3(WSYS_SETSIZE, pid, rows, cols);
 }
 
+int wsetmode(int cols, int rows)
+{
+    return wsyscall2(WSYS_SETMODE, cols, rows);
+}
+
 void wexit(int status)
 {
     wsyscall1(WSYS_EXIT, status);

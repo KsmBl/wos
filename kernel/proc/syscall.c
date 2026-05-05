@@ -22,6 +22,7 @@
 #include "pit.h"
 #include "power.h"
 #include "keyboard.h"
+#include "vga.h"
 #include "user.h"
 #include "string.h"
 #include "kprintf.h"
@@ -388,9 +389,31 @@ static int64_t sys_consize(uint64_t rows_ptr, uint64_t cols_ptr)
         return -W_EFAULT;
 
     process_t *p = proc_current();
-    *(int32_t *)rows_ptr = (int32_t)p->term_rows;
-    *(int32_t *)cols_ptr = (int32_t)p->term_cols;
+
+    /* A process drawing to the real console gets the live text-mode size, so
+     * it follows wsetmode() without anyone having to update a stored value.  A
+     * process in a window reports the size its parent gave it. */
+    if (vfs_stdin_is_console(p)) {
+        int cols, rows;
+        vga_size(&cols, &rows);
+        *(int32_t *)rows_ptr = (int32_t)rows;
+        *(int32_t *)cols_ptr = (int32_t)cols;
+    } else {
+        *(int32_t *)rows_ptr = (int32_t)p->term_rows;
+        *(int32_t *)cols_ptr = (int32_t)p->term_cols;
+    }
     return 0;
+}
+
+/* Change the physical text mode.  Only a process actually attached to the
+ * console may do this -- a program running in a pipe or a window must not
+ * reprogram the hardware out from under whoever owns the screen. */
+static int64_t sys_setmode(uint64_t cols, uint64_t rows)
+{
+    if (!vfs_stdin_is_console(proc_current()))
+        return -W_EPERM;
+
+    return vga_set_mode((int)cols, (int)rows) < 0 ? -W_EINVAL : 0;
 }
 
 /* Change the terminal size reported to one of your own children, so a program
@@ -648,6 +671,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_SPAWN_IO:  r = sys_spawn_io(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_CONSIZE:   r = sys_consize(regs->rdi, regs->rsi); break;
     case WSYS_SETSIZE:   r = sys_setsize(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_SETMODE:   r = sys_setmode(regs->rdi, regs->rsi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

@@ -15,9 +15,9 @@
 
 #include <wkernel.h>
 
-/* A window never exceeds the console, so these bound the grid. */
-#define WTERM_MAX_R W_CONSOLE_HEIGHT
-#define WTERM_MAX_C W_CONSOLE_WIDTH
+/* A window never exceeds the largest console mode, so these bound the grid. */
+#define WTERM_MAX_R W_CONSOLE_MAX_HEIGHT
+#define WTERM_MAX_C W_CONSOLE_MAX_WIDTH
 
 struct wterm {
     int  open;                 /* a child is running in this window       */

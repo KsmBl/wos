@@ -17,14 +17,32 @@
 #include <wkernel.h>
 #include <wterm.h>
 
-/* Layout on the 80x25 console: two panes over a status row, a separator
- * column between them. */
-#define CONTENT_H   (W_CONSOLE_HEIGHT - 1)          /* rows 1..24        */
-#define STATUS_ROW  W_CONSOLE_HEIGHT                 /* row 25            */
-#define LEFT_W      39                               /* cols 1..39        */
-#define SEP_COL     40
-#define RIGHT_X     41                               /* cols 41..80       */
-#define RIGHT_W     (W_CONSOLE_WIDTH - RIGHT_X + 1)  /* 40                */
+/* Layout: two panes over a status row, a separator column between them.  The
+ * sizes are computed from the console size, read at startup, so split follows
+ * whatever text mode is in force. */
+static int con_w = W_CONSOLE_WIDTH;
+static int con_h = W_CONSOLE_HEIGHT;
+static int CONTENT_H;    /* pane height, above the status row */
+static int STATUS_ROW;   /* the bottom status line            */
+static int LEFT_W;       /* left pane width                   */
+static int SEP_COL;      /* separator column                  */
+static int RIGHT_X;      /* first column of the right pane    */
+static int RIGHT_W;      /* right pane width                  */
+
+static void layout_init(void)
+{
+    int rows = 0, cols = 0;
+    if (wconsize(&rows, &cols) == 0 && rows > 0 && cols > 0) {
+        con_h = rows;
+        con_w = cols;
+    }
+    CONTENT_H  = con_h - 1;
+    STATUS_ROW = con_h;
+    LEFT_W     = (con_w - 1) / 2;
+    SEP_COL    = LEFT_W + 1;
+    RIGHT_X    = SEP_COL + 1;
+    RIGHT_W    = con_w - RIGHT_X + 1;
+}
 
 static struct wterm pane[2];
 static int  focus;                 /* 0 = left, 1 = right       */
@@ -44,7 +62,7 @@ static void draw_field(int row, int col, int width, int fg, int bg,
     wgotoxy(row, col);
     wcolor(fg, bg);
 
-    char out[W_CONSOLE_WIDTH + 1];
+    char out[W_CONSOLE_MAX_WIDTH + 1];
     int  n = 0;
     for (; text[n] && n < width; n++)
         out[n] = text[n];
@@ -60,7 +78,7 @@ static void draw_chrome(void)
     /* Collapsed to one terminal: a single full-width status line, no
      * separator. */
     if (single) {
-        draw_field(STATUS_ROW, 1, W_CONSOLE_WIDTH, W_BLACK, W_CYAN,
+        draw_field(STATUS_ROW, 1, con_w, W_BLACK, W_CYAN,
                    " whell    (Ctrl-W q to quit)");
         return;
     }
@@ -95,11 +113,11 @@ static void collapse_to_survivor(void)
     int s = pane[0].open ? 0 : 1;
 
     wcls();
-    wterm_resize(&pane[s], CONTENT_H, W_CONSOLE_WIDTH, 1, 1);
+    wterm_resize(&pane[s], CONTENT_H, con_w, 1, 1);
 
     /* Tell the shell its new size so a program it launches next fills the
      * widened window rather than the old half. */
-    wsetsize(pane[s].pid, CONTENT_H, W_CONSOLE_WIDTH);
+    wsetsize(pane[s].pid, CONTENT_H, con_w);
 
     focus = s;
     single = 1;
@@ -108,6 +126,8 @@ static void collapse_to_survivor(void)
 
 int main(int argc, char **argv)
 {
+    layout_init();              /* size the panes to the current text mode */
+
     int prev = wconsole_raw(W_CONSOLE_RAW);
     wcursor(1);
     wcolor_reset();

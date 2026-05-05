@@ -21,28 +21,52 @@ static char status[128];
 static char command[128];
 static int  command_len;
 
+/* The console size, read once at startup with wconsize() so the editor follows
+ * whatever text mode is in force rather than assuming one. */
+static int  con_w = W_CONSOLE_WIDTH;
+static int  con_h = W_CONSOLE_HEIGHT;
+static int  text_rows;           /* con_h - 1: the rows the buffer occupies */
+
+/* The split geometry, all derived from the console size in layout_init().  The
+ * editor keeps the left half, a separator column follows, then the terminal;
+ * the row below both holds the status lines and the very bottom row the shared
+ * command line. */
+static int  sp_left_w;           /* editor width in a split      */
+static int  sp_sep_col;          /* the separator column         */
+static int  sp_right_x;          /* first terminal column        */
+static int  sp_right_w;          /* terminal width               */
+static int  sp_content_h;        /* window height above status   */
+static int  sp_status_row;       /* the per-window status line   */
+static int  cmd_row;             /* the shared command line      */
+
+static void layout_init(void)
+{
+    int rows = 0, cols = 0;
+    if (wconsize(&rows, &cols) == 0 && rows > 0 && cols > 0) {
+        con_h = rows;
+        con_w = cols;
+    }
+    text_rows     = con_h - 1;
+    sp_left_w     = (con_w - 1) / 2;
+    sp_sep_col    = sp_left_w + 1;
+    sp_right_x    = sp_sep_col + 1;
+    sp_right_w    = con_w - sp_right_x + 1;
+    sp_content_h  = con_h - 2;
+    sp_status_row = con_h - 1;
+    cmd_row       = con_h;
+}
+
 /* The size of the editor's view of the buffer.  With no terminal open this is
  * the whole screen above the status line; when :term splits the window it
- * shrinks to the left half. */
-static int  view_w = W_CONSOLE_WIDTH;
-static int  view_h = TEXT_ROWS;
+ * shrinks to the left half.  Set in main() once the console size is known. */
+static int  view_w;
+static int  view_h;
 
 /* The :term window, and which window the keyboard is talking to. */
 static struct wterm term;
 enum { FOCUS_EDITOR = 0, FOCUS_TERM };
 static int  focus;
 static int  ctrl_w_pending;      /* saw Ctrl+W, waiting for the second key */
-
-/* The split geometry.  The left column is the editor, then a separator, then
- * the terminal; the row below both is each window's status line, and the very
- * bottom row is the shared command line. */
-#define SPLIT_LEFT_W   39
-#define SPLIT_SEP_COL  (SPLIT_LEFT_W + 1)         /* column 40 */
-#define SPLIT_RIGHT_X  (SPLIT_SEP_COL + 1)        /* column 41 */
-#define SPLIT_RIGHT_W  (W_CONSOLE_WIDTH - SPLIT_RIGHT_X + 1)
-#define SPLIT_CONTENT_H (W_CONSOLE_HEIGHT - 2)    /* rows 1..23 */
-#define SPLIT_STATUS_ROW (W_CONSOLE_HEIGHT - 1)   /* row 24     */
-#define COMMAND_ROW      W_CONSOLE_HEIGHT         /* row 25     */
 
 static int current_length(void)
 {
@@ -88,7 +112,7 @@ static void scroll_to_cursor(void)
 
 static void draw_status(void)
 {
-    wgotoxy(W_CONSOLE_HEIGHT, 1);
+    wgotoxy(con_h, 1);
 
     if (mode == MODE_COMMAND) {
         wcolor_reset();
@@ -112,7 +136,7 @@ static void draw_status(void)
     wsnprintf(right, sizeof(right), " %d,%d   %d lines ",
               cy + 1, cx + 1, line_count);
 
-    int pad = W_CONSOLE_WIDTH - (int)strlen(left) - (int)strlen(right);
+    int pad = con_w - (int)strlen(left) - (int)strlen(right);
 
     wprintf("%s", left);
     for (int i = 0; i < pad; i++)
@@ -122,7 +146,7 @@ static void draw_status(void)
 
     /* A message, when there is one, replaces the bar on the next redraw. */
     if (status[0]) {
-        wgotoxy(W_CONSOLE_HEIGHT, 1);
+        wgotoxy(con_h, 1);
         wcolor_reset();
         wprintf("%s", status);
         wclear_line();
@@ -131,7 +155,7 @@ static void draw_status(void)
 
 static void draw_single(void)
 {
-    for (int row = 0; row < TEXT_ROWS; row++) {
+    for (int row = 0; row < text_rows; row++) {
         int at = row_offset + row;
 
         wgotoxy(row + 1, 1);
@@ -148,11 +172,11 @@ static void draw_single(void)
             if (col_offset < len) {
                 /* Clip to the screen by copying; wprintf has no precision
                  * specifier, only a width. */
-                char shown[W_CONSOLE_WIDTH + 1];
+                char shown[con_w + 1];
                 int  n = len - col_offset;
 
-                if (n > W_CONSOLE_WIDTH)
-                    n = W_CONSOLE_WIDTH;
+                if (n > con_w)
+                    n = con_w;
 
                 memcpy(shown, text + col_offset, (wsize_t)n);
                 shown[n] = '\0';
@@ -167,7 +191,7 @@ static void draw_single(void)
 
     /* Leave the cursor where the user expects to type. */
     if (mode == MODE_COMMAND)
-        wgotoxy(W_CONSOLE_HEIGHT, command_len + 2);
+        wgotoxy(con_h, command_len + 2);
     else
         wgotoxy(cy - row_offset + 1, cx - col_offset + 1);
 }
@@ -183,7 +207,7 @@ static void draw_field(int row, int col, int width, const char *text)
     for (; text[n] && n < width; n++)
         ;
 
-    char out[W_CONSOLE_WIDTH + 1];
+    char out[con_w + 1];
     memcpy(out, text, (wsize_t)n);
     for (int i = n; i < width; i++)
         out[i] = ' ';
@@ -194,9 +218,9 @@ static void draw_field(int row, int col, int width, const char *text)
 /* The editor's text, confined to the left window of a split. */
 static void draw_split_editor(void)
 {
-    for (int row = 0; row < SPLIT_CONTENT_H; row++) {
+    for (int row = 0; row < sp_content_h; row++) {
         int at = row_offset + row;
-        char linebuf[SPLIT_LEFT_W + 1];
+        char linebuf[sp_left_w + 1];
 
         if (at >= line_count) {
             linebuf[0] = '~';
@@ -208,15 +232,15 @@ static void draw_split_editor(void)
 
             if (col_offset < len) {
                 n = len - col_offset;
-                if (n > SPLIT_LEFT_W)
-                    n = SPLIT_LEFT_W;
+                if (n > sp_left_w)
+                    n = sp_left_w;
                 memcpy(linebuf, text + col_offset, (wsize_t)n);
             }
             linebuf[n] = '\0';
         }
 
         wcolor_reset();
-        draw_field(row + 1, 1, SPLIT_LEFT_W, linebuf);
+        draw_field(row + 1, 1, sp_left_w, linebuf);
     }
 }
 
@@ -225,24 +249,24 @@ static void draw_split_chrome(void)
 {
     /* Separator. */
     wcolor(W_BLUE | W_BRIGHT, W_DEFAULT);
-    for (int row = 1; row <= SPLIT_STATUS_ROW; row++) {
-        wgotoxy(row, SPLIT_SEP_COL);
+    for (int row = 1; row <= sp_status_row; row++) {
+        wgotoxy(row, sp_sep_col);
         wprintf("|");
     }
     wcolor_reset();
 
     /* Left status: the file, highlighted when the editor has focus. */
-    char left[SPLIT_LEFT_W + 1];
+    char left[sp_left_w + 1];
     wsnprintf(left, sizeof(left), " %s%s",
               filename[0] ? filename : "[No Name]", modified ? " [+]" : "");
     if (focus == FOCUS_EDITOR) wcolor(W_BLACK, W_CYAN); else wcolor(W_WHITE, W_BLUE);
-    draw_field(SPLIT_STATUS_ROW, 1, SPLIT_LEFT_W, left);
+    draw_field(sp_status_row, 1, sp_left_w, left);
 
     /* Right status: the terminal, highlighted when it has focus. */
-    char right[SPLIT_RIGHT_W + 1];
+    char right[sp_right_w + 1];
     wsnprintf(right, sizeof(right), " %s", term.open ? "terminal" : "(closed)");
     if (focus == FOCUS_TERM) wcolor(W_BLACK, W_CYAN); else wcolor(W_WHITE, W_BLUE);
-    draw_field(SPLIT_STATUS_ROW, SPLIT_RIGHT_X, SPLIT_RIGHT_W, right);
+    draw_field(sp_status_row, sp_right_x, sp_right_w, right);
     wcolor_reset();
 }
 
@@ -255,7 +279,7 @@ static void draw_split_static(void)
     draw_split_chrome();
 
     /* The command line, shared across the bottom. */
-    wgotoxy(COMMAND_ROW, 1);
+    wgotoxy(cmd_row, 1);
     wcolor_reset();
     if (mode == MODE_COMMAND)
         wprintf(":%s", command);
@@ -268,7 +292,7 @@ static void draw_split_static(void)
 static void place_cursor(void)
 {
     if (mode == MODE_COMMAND) {
-        wgotoxy(COMMAND_ROW, command_len + 2);
+        wgotoxy(cmd_row, command_len + 2);
     } else if (term.open && focus == FOCUS_TERM) {
         int r, c;
         wterm_cursor(&term, &r, &c);
@@ -404,8 +428,8 @@ static void close_terminal(void)
         wterm_close(&term);
 
     focus  = FOCUS_EDITOR;
-    view_w = W_CONSOLE_WIDTH;
-    view_h = TEXT_ROWS;
+    view_w = con_w;
+    view_h = text_rows;
     wcls();                          /* wipe the split before the editor redraws */
     strlcpy(status, "terminal closed", sizeof(status));
 }
@@ -452,15 +476,15 @@ static void open_terminal(const char *argline)
     }
 
     /* Shrink the editor to the left half first, so its cursor stays visible. */
-    view_w = SPLIT_LEFT_W;
-    view_h = SPLIT_CONTENT_H;
+    view_w = sp_left_w;
+    view_h = sp_content_h;
     wcls();
 
-    int r = wterm_start(&term, path, argv, 1, SPLIT_RIGHT_X,
-                       SPLIT_CONTENT_H, SPLIT_RIGHT_W);
+    int r = wterm_start(&term, path, argv, 1, sp_right_x,
+                       sp_content_h, sp_right_w);
     if (r < 0) {
-        view_w = W_CONSOLE_WIDTH;
-        view_h = TEXT_ROWS;
+        view_w = con_w;
+        view_h = text_rows;
         wcls();
         wsnprintf(status, sizeof(status),
                   "E: cannot start terminal: %s", wstrerror(-r));
@@ -613,10 +637,10 @@ static void normal_key(int key)
     case 'w': move_word_forward(); break;
     case 'b': move_word_back();    break;
 
-    case 0x04: cy += TEXT_ROWS / 2; break;    /* Ctrl+D */
-    case 0x15: cy -= TEXT_ROWS / 2; break;    /* Ctrl+U */
-    case W_KEY_PGDN: cy += TEXT_ROWS; break;
-    case W_KEY_PGUP: cy -= TEXT_ROWS; break;
+    case 0x04: cy += text_rows / 2; break;    /* Ctrl+D */
+    case 0x15: cy -= text_rows / 2; break;    /* Ctrl+U */
+    case W_KEY_PGDN: cy += text_rows; break;
+    case W_KEY_PGUP: cy -= text_rows; break;
 
     case 'i': mode = MODE_INSERT; break;
     case 'a': mode = MODE_INSERT; cx++; break;
@@ -753,6 +777,12 @@ static void dispatch_editor_key(int key)
 int main(int argc, char **argv)
 {
     int editor_dirty = 1;      /* redraw the split's editor chrome next pass */
+
+    /* Learn the console size before drawing anything, so the layout matches
+     * whatever text mode is in force. */
+    layout_init();
+    view_w = con_w;
+    view_h = text_rows;
 
     buffer_new();
 

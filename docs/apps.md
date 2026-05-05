@@ -799,3 +799,45 @@ them, which is why the two features behave identically. A pane is 40 columns
 wide, so a program that insists on 80 wraps inside it.
 
 **Exit status:** 0.
+
+---
+
+# textmode
+
+```
+textmode [<cols> <rows>]
+```
+
+Show or change the console's character grid. With no arguments it prints the
+current size and the choices; with two, it switches.
+
+```
+root@wos:/home/root# textmode
+Current text mode: 80x50
+
+Available modes (use: textmode <cols> <rows>):
+  80 25
+  80 30
+  80 50   (current)
+  80 60
+  40 25
+  40 50
+root@wos:/home/root# textmode 80 25
+Text mode is now 80x25.
+```
+
+VGA text modes are not arbitrary. The columns come from the dot clock — 80, or
+40 for double-width characters — and the rows from the character-cell height
+(8 or 16 pixels) over 400 or 480 scan lines. That gives the six combinations
+above; anything else is refused.
+
+Switching reprograms the VGA registers and reloads the font: the 8x16 one GRUB
+supplied for the tall cells, or the 8x8 derived from it for the short ones (see
+[the console notes](console.md)). The screen is cleared in the process.
+
+Programs that draw to the whole screen — the editor, `split`, `asciiquarium` —
+read the size with `wconsize()`, so they lay themselves out to whatever mode is
+set. Start them after switching and they fit. (Line-oriented tools like `ls`
+still assume 80 columns for their column layout, which only shows at 40.)
+
+**Exit status:** 0, 1 for an unsupported size, 2 for a usage error.
