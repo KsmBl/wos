@@ -29,6 +29,7 @@ which is the price of having no shared libraries.
 | [`whoami`](#whoami) | print the current user and what it may do |
 | [`passwd`](#passwd) | change a password |
 | [`su`](#su) | start a shell as another user |
+| [`chsh`](#chsh) | change a user's login shell |
 | [`adduser`](#adduser) | create a user, asking for a password |
 | [`edituser`](#edituser) | add or remove roles |
 
@@ -841,3 +842,49 @@ set. Start them after switching and they fit. (Line-oriented tools like `ls`
 still assume 80 columns for their column layout, which only shows at 40.)
 
 **Exit status:** 0, 1 for an unsupported size, 2 for a usage error.
+
+---
+
+# chsh
+
+```
+chsh                     show the current shell and the choices
+chsh <shell>             set your own login shell
+chsh -u <user> <shell>   set another user's login shell
+```
+
+Change a user's **login shell** — the one started for them when the machine
+boots (for root) or when someone `su`s to them. After Unix's `chsh`.
+
+```
+root@wos:/home/root# chsh
+Current shell: /app/whell/launch
+
+Available shells (chsh <name>):
+  whell    /app/whell/launch
+  fish     /app/fish/launch
+root@wos:/home/root# chsh fish
+Shell for root is now /app/fish/launch.
+It takes effect the next time a shell starts for root (su, or the next boot).
+```
+
+A shell is named by app — `whell`, `fish` — which maps to `/app/<name>/launch`,
+or by an explicit path. It must be an existing executable; a bad login shell
+would leave the account unusable, so `chsh` refuses one that is not there.
+
+| Who | May change |
+|---|---|
+| any user | their own shell |
+| root, or a `usereditor` | anyone's, with `-u <user>` |
+
+The setting is stored as a fourth field on the user's line in
+`/userconfig/users` (`name:uid:roles:shell`) and so survives a reboot. An empty
+shell — `chsh ""` — restores the default, `whell`.
+
+The change applies the **next** time a shell starts for that user, not to one
+already running: `su` reads it when it launches, and the kernel reads root's
+when it starts or restarts the boot shell. So after `chsh fish`, either `su
+root` or exiting the boot shell brings up fish.
+
+**Exit status:** 0, 1 on error (unknown user, not permitted, no such
+executable), 2 for a usage error.

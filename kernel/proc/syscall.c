@@ -615,6 +615,38 @@ static int64_t sys_setroles(uint64_t name, uint64_t roles)
     return user_set_roles(proc_current()->uid, namebuf, (uint32_t)roles);
 }
 
+static int64_t sys_getshell(uint64_t uid, uint64_t buf, uint32_t size)
+{
+    if (size == 0 || !user_range_ok((void *)buf, size, true))
+        return -W_EFAULT;
+
+    /* A negative uid means "whoever is asking". */
+    uint32_t want = ((int64_t)uid < 0) ? proc_current()->uid : (uint32_t)uid;
+
+    char path[W_SHELL_MAX + 1];
+    int  r = user_shell(want, path, sizeof(path));
+    if (r < 0)
+        return r;
+
+    strlcpy((char *)buf, path, size);
+    return 0;
+}
+
+static int64_t sys_setshell(uint64_t name, uint64_t shell)
+{
+    char namebuf[W_NAME_LEN + 1];
+    char shellbuf[W_SHELL_MAX + 1];
+
+    int r = copy_string_from_user((const char *)name, namebuf, sizeof(namebuf));
+    if (r < 0)
+        return r;
+    r = copy_string_from_user((const char *)shell, shellbuf, sizeof(shellbuf));
+    if (r < 0)
+        return r;
+
+    return user_set_shell(proc_current()->uid, namebuf, shellbuf);
+}
+
 static int64_t sys_shutdown(void)
 {
     /* There is no user or permission model in WOS, so any process may do
@@ -672,6 +704,8 @@ static void syscall_handler(regs_t *regs)
     case WSYS_CONSIZE:   r = sys_consize(regs->rdi, regs->rsi); break;
     case WSYS_SETSIZE:   r = sys_setsize(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_SETMODE:   r = sys_setmode(regs->rdi, regs->rsi); break;
+    case WSYS_GETSHELL:  r = sys_getshell(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_SETSHELL:  r = sys_setshell(regs->rdi, regs->rsi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

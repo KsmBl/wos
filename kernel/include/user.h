@@ -64,4 +64,10 @@ int user_set_roles(uint32_t actor, const char *name, uint32_t roles);
 /* True if `uid` may act with `role`. Root always may. */
 bool user_has_role(uint32_t uid, uint32_t role);
 
+/* Get a user's login shell (always a usable path -- the default if unset), or
+ * set it.  A user may set their own; root and W_ROLE_USEREDITOR may set any.
+ * user_set_shell returns 0, -W_ENOENT, -W_EPERM or -W_ENAMETOOLONG. */
+int user_shell(uint32_t uid, char *out, size_t cap);
+int user_set_shell(uint32_t actor, const char *name, const char *shell);
+
 #endif /* WOS_USER_H */

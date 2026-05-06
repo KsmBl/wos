@@ -148,6 +148,7 @@ typedef struct {
 
 #define W_NAME_LEN 31              /* longest user name */
 #define W_MAX_USERS 32
+#define W_SHELL_MAX 63             /* longest login-shell path */
 
 /* Roles are a bitmask, so a user can hold several. */
 #define W_ROLE_APPEDITOR  (1u << 0)  /* may write under /app                  */
@@ -216,7 +217,9 @@ typedef struct {
 #define WSYS_CONSIZE    37
 #define WSYS_SETSIZE    38
 #define WSYS_SETMODE    39
-#define WSYS_MAX        40
+#define WSYS_GETSHELL   40
+#define WSYS_SETSHELL   41
+#define WSYS_MAX        42
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

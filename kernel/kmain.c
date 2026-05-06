@@ -24,6 +24,7 @@
 #include "proc.h"
 #include "sched.h"
 #include "selftest.h"
+#include "string.h"
 #include "io.h"
 
 extern uint8_t __kernel_start[];
@@ -171,9 +172,16 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
  * halt rather than a blocking wait. */
 static void run_shell(void)
 {
-    const char *shell = "/app/whell/launch";
-    char       *argv[] = { "whell", NULL };
-    uint32_t    ino;
+    /* The boot shell is root's login shell, so `chsh` changes what starts
+     * here.  It is re-read on each (re)launch, and falls back to whell if the
+     * configured one has gone missing. */
+    char     shell[W_SHELL_MAX + 1];
+    char    *argv[] = { "shell", NULL };
+    uint32_t ino;
+
+    user_shell(W_ROOT_UID, shell, sizeof(shell));
+    if (wfs_lookup(shell, &ino) != 0)
+        strlcpy(shell, "/app/whell/launch", sizeof(shell));
 
     if (wfs_lookup(shell, &ino) != 0) {
         kprintf("\n[kernel] %s is missing; nothing to run.\n", shell);
@@ -192,8 +200,13 @@ static void run_shell(void)
         if (p && p->exited) {
             int32_t status = 0;
             proc_wait(pid, &status);     /* already exited, so returns at once */
-            kprintf("\n[kernel] whell exited with status %d; restarting it\n",
-                    status);
+
+            user_shell(W_ROOT_UID, shell, sizeof(shell));
+            if (wfs_lookup(shell, &ino) != 0)
+                strlcpy(shell, "/app/whell/launch", sizeof(shell));
+
+            kprintf("\n[kernel] the shell exited with status %d; restarting %s\n",
+                    status, shell);
             pid = proc_spawn(shell, argv, NULL);
             if (pid < 0)
                 panic("cannot restart the shell (error %d)", -pid);

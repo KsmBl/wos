@@ -93,7 +93,7 @@ Root holds no roles and needs none: every check short-circuits on uid 0.
 The user database lives under `/userconfig`:
 
 ```
-/userconfig/users              the list of accounts:  name:uid:roles
+/userconfig/users              the list of accounts:  name:uid:roles[:shell]
 /userconfig/alice/password     alice's password:      salt:hash
 /userconfig/bob/password       bob's password
 ```
@@ -186,8 +186,15 @@ that password to anything first, so asking would be theatre.
 | `whoami [-v]` | print the current user; `-v` explains the roles and write access |
 | `passwd [user]` | change your own password, or another's if permitted |
 | `su [user]` | start a shell as another user (default `root`) |
+| `chsh [shell]`, `chsh -u <user> <shell>` | change a login shell; your own, or anyone's with `-u` if permitted |
 | `adduser [-a] [-u] <name>` | create a user, asking for a password; `-a` grants appeditor, `-u` usereditor |
 | `edituser <name> [+role] [-role]` | add or remove roles; with no change, prints what they hold |
+
+Each user has a **login shell** — the program started for them at boot (root)
+or by `su`. It is a fourth field on their line in `/userconfig/users`
+(`name:uid:roles:shell`), defaulting to `whell`, and is changed with
+[`chsh`](apps.md#chsh). Unlike the password, it is not a secret, so it lives in
+the list rather than a protected file.
 
 `adduser` also creates `/home/<name>` and `/userconfig/<name>/password`. Names
 become part of a path, so `/`, `:`, `.` and newlines are refused.

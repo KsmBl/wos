@@ -147,6 +147,16 @@ int wsetroles(const char *name, unsigned int roles)
     return (int)wsyscall2(WSYS_SETROLES, (long)name, (long)roles);
 }
 
+int wgetshell(int uid, char *buf, int size)
+{
+    return (int)wsyscall3(WSYS_GETSHELL, uid, (long)buf, size);
+}
+
+int wsetshell(const char *name, const char *shell)
+{
+    return (int)wsyscall2(WSYS_SETSHELL, (long)name, (long)shell);
+}
+
 int wshutdown(void)
 {
     /* Only comes back if the kernel could not power the machine off, and even
