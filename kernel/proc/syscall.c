@@ -23,6 +23,7 @@
 #include "power.h"
 #include "keyboard.h"
 #include "vga.h"
+#include "net.h"
 #include "user.h"
 #include "string.h"
 #include "kprintf.h"
@@ -615,6 +616,21 @@ static int64_t sys_setroles(uint64_t name, uint64_t roles)
     return user_set_roles(proc_current()->uid, namebuf, (uint32_t)roles);
 }
 
+/* Send one ICMP echo to `dst` (network order) and wait for the reply.  The
+ * echo id is the caller's pid, so replies to different processes do not get
+ * confused.  Returns the round-trip time in microseconds, or a negative
+ * error. */
+static int64_t sys_ping(uint64_t dst, uint64_t seq, uint64_t timeout_ms)
+{
+    uint16_t id = (uint16_t)proc_current()->pid;
+    uint32_t rtt = 0;
+
+    int r = net_ping((uint32_t)dst, id, (uint16_t)seq, (uint32_t)timeout_ms, &rtt);
+    if (r < 0)
+        return r;
+    return (int64_t)rtt;
+}
+
 static int64_t sys_getshell(uint64_t uid, uint64_t buf, uint32_t size)
 {
     if (size == 0 || !user_range_ok((void *)buf, size, true))
@@ -706,6 +722,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_SETMODE:   r = sys_setmode(regs->rdi, regs->rsi); break;
     case WSYS_GETSHELL:  r = sys_getshell(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_SETSHELL:  r = sys_setshell(regs->rdi, regs->rsi); break;
+    case WSYS_PING:      r = sys_ping(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

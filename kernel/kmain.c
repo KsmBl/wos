@@ -20,6 +20,7 @@
 #include "paging.h"
 #include "ata.h"
 #include "wfs_kernel.h"
+#include "net.h"
 #include "user.h"
 #include "proc.h"
 #include "sched.h"
@@ -149,6 +150,8 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
         kprintf("wfs    : mounted, %s of %s free\n",
                 fmt_bytes(info.free_bytes), fmt_bytes(info.total_bytes));
     }
+
+    net_init();
 
     user_init();
 

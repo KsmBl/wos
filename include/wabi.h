@@ -27,6 +27,7 @@
 #define W_ENOENT         2   /* no such file or directory          */
 #define W_ESRCH          3   /* no such process                    */
 #define W_EIO            5   /* disk or device error               */
+#define W_ENODEV        19   /* no such device (e.g. no network card) */
 #define W_E2BIG          7   /* argument list too long             */
 #define W_ENOEXEC        8   /* not a valid executable             */
 #define W_EBADF          9   /* bad file descriptor                */
@@ -49,6 +50,8 @@
 #define W_ENOSYS        38   /* no such syscall                    */
 #define W_ENOTEMPTY     39   /* directory not empty                */
 #define W_EFBIG         27   /* file too large for this filesystem */
+#define W_ETIMEDOUT    110   /* operation timed out                */
+#define W_EHOSTUNREACH 113   /* no route/ARP to the host           */
 
 /* ------------------------------------------------------------------ *
  *  Files and directories
@@ -219,7 +222,8 @@ typedef struct {
 #define WSYS_SETMODE    39
 #define WSYS_GETSHELL   40
 #define WSYS_SETSHELL   41
-#define WSYS_MAX        42
+#define WSYS_PING       42
+#define WSYS_MAX        43
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

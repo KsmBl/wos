@@ -54,8 +54,10 @@ kernel's own address space.
 4. **Memory** — frame allocator, kernel heap, paging. Deliberately after
    interrupts, so a fault here is reported instead of triple-faulting.
 5. **Disk** — ATA probe, then mount the filesystem.
-6. **Processes** — process table, scheduler, syscall gate.
-7. **Self-tests**, then the shell.
+6. **Network** — find the RTL8139 and configure the IPv4 stack, if a card is
+   present (see [`docs/networking.md`](networking.md)).
+7. **Processes** — process table, scheduler, syscall gate.
+8. **Self-tests**, then the shell.
 
 ## Memory layout
 
