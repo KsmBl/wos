@@ -10,7 +10,7 @@ the shell process. `ls`, `cat`, `free` and the rest are ordinary programs, so
 `whell` and `fish` run exactly the same ones.
 
 Each is statically linked against `libwkernel.a`, so a program is around 50 KiB
-whatever it does. Seventeen of them come to about 1.2 MiB on a 64 MiB disk,
+whatever it does. The couple of dozen here come to a few MiB on a 64 MiB disk,
 which is the price of having no shared libraries.
 
 | Command | What it does |
@@ -25,6 +25,7 @@ which is the price of having no shared libraries.
 | [`mkdir`](#mkdir) | create directories |
 | [`rm`](#rm) | remove files and directories |
 | [`clear`](#clear) | clear the screen |
+| [`ping`](#ping) | send ICMP echo requests to a host |
 | [`shutdown`](#shutdown) | power the machine off |
 | [`whoami`](#whoami) | print the current user and what it may do |
 | [`passwd`](#passwd) | change a password |
@@ -888,3 +889,43 @@ root` or exiting the boot shell brings up fish.
 
 **Exit status:** 0, 1 on error (unknown user, not permitted, no such
 executable), 2 for a usage error.
+
+---
+
+# ping
+
+```
+ping <ip>            send four echo requests
+ping -c <n> <ip>     send n (0 keeps going until interrupted)
+```
+
+Send ICMP echo requests to a host and time the replies, over WOS's small IPv4
+stack (see [`docs/networking.md`](networking.md)).
+
+```
+root@wos:/home/root# ping -c 2 10.0.2.2
+PING 10.0.2.2 32 bytes of data.
+32 bytes from 10.0.2.2: icmp_seq=1 time=0.121 ms
+32 bytes from 10.0.2.2: icmp_seq=2 time=0.027 ms
+
+--- 10.0.2.2 ping statistics ---
+2 packets transmitted, 2 received, 0% packet loss
+```
+
+Addresses are **dotted-decimal only** — there is no DNS. On QEMU's user-mode
+network the reliable targets are the gateway `10.0.2.2` (answers locally, sub-
+millisecond) and, if the host allows unprivileged ICMP, real addresses beyond
+it like `8.8.8.8`, which route through the gateway and come back in tens of
+milliseconds.
+
+Round-trip time is measured with the CPU's timestamp counter, calibrated
+against the timer at boot, so it resolves well below a millisecond.
+
+| Reply | Meaning |
+|---|---|
+| `32 bytes from ...` | an echo reply came back; `time=` is the round trip |
+| `host unreachable (no ARP reply)` | the next hop never answered ARP |
+| `Request timed out` | no reply within a second |
+| `ping: no network card` | the kernel found no RTL8139 |
+
+**Exit status:** 0 if any reply was received, 1 if none, 2 for a usage error.

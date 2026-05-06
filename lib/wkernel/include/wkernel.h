@@ -689,6 +689,26 @@ int wgetshell(int uid, char *buf, int size);
 int wsetshell(const char *name, const char *shell);
 
 /**
+ * Send one ICMP echo request and wait for the reply -- the primitive `ping` is
+ * built on.
+ *
+ * WOS has a small IPv4 stack over an RTL8139 card and QEMU's user-mode
+ * network, configured as 10.0.2.15 with the gateway at 10.0.2.2. This resolves
+ * the next hop with ARP, sends the echo, and waits up to @p timeout_ms for the
+ * matching reply.
+ *
+ * @param ip         Destination, a network-order address (build it with the
+ *                   octets in order: `a | b<<8 | c<<16 | d<<24`).
+ * @param seq        Sequence number to put in the echo, echoed back in the
+ *                   reply.
+ * @param timeout_ms How long to wait for the reply.
+ * @return The round-trip time in microseconds (>= 0), or a negative error:
+ *         `-W_ENODEV` if there is no network card, `-W_EHOSTUNREACH` if the
+ *         next hop could not be resolved, `-W_ETIMEDOUT` if no reply came.
+ */
+int wping(unsigned int ip, int seq, int timeout_ms);
+
+/**
  * Shut the machine down.
  *
  * Does not return when it succeeds -- the machine powers off. Nothing needs

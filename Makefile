@@ -193,9 +193,12 @@ $(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(ROOTFS_SRC) $(APP_SRC)
 	$(MKWFS) $@ $(DISK_MB) $(ROOTFS)
 
 QEMU := qemu-system-x86_64
+# An RTL8139 on QEMU's user-mode (SLIRP) network gives the guest 10.0.2.15 with
+# a gateway at 10.0.2.2 that answers ARP and ping -- what the net stack targets.
 QEMU_FLAGS := -m 256M \
               -cdrom $(ISO) \
               -drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
+              -netdev user,id=net0 -device rtl8139,netdev=net0 \
               -boot d -no-reboot
 
 run: all

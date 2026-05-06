@@ -157,6 +157,11 @@ int wsetshell(const char *name, const char *shell)
     return (int)wsyscall2(WSYS_SETSHELL, (long)name, (long)shell);
 }
 
+int wping(unsigned int ip, int seq, int timeout_ms)
+{
+    return (int)wsyscall3(WSYS_PING, (long)ip, seq, timeout_ms);
+}
+
 int wshutdown(void)
 {
     /* Only comes back if the kernel could not power the machine off, and even
