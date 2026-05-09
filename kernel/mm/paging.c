@@ -222,6 +222,30 @@ bool paging_user_can_access(addrspace_t *as, uint64_t virt, bool need_write)
 addrspace_t *paging_kernel_space(void) { return &kernel_space; }
 addrspace_t *paging_current(void)      { return current_space; }
 
+/* Identity-map a 2 MiB region into the kernel address space with a huge page.
+ * Used for a device aperture -- the linear framebuffer -- that lives above the
+ * 1 GiB the boot tables already cover.  `virt` and `phys` must be 2 MiB
+ * aligned. */
+bool paging_map_huge(uint64_t virt, uint64_t phys, uint64_t flags)
+{
+    uint64_t *pdpt = next_level(kernel_space.pml4, PML4_INDEX(virt), true,
+                                flags, &kernel_space);
+    if (!pdpt)
+        return false;
+
+    uint64_t *pd = next_level(pdpt, PDPT_INDEX(virt), true, flags,
+                              &kernel_space);
+    if (!pd)
+        return false;
+
+    pd[PD_INDEX(virt)] = (phys & ~0x1FFFFFUL)
+                       | (flags & PTE_WRITE) | PTE_HUGE | PTE_PRESENT;
+
+    if (&kernel_space == current_space)
+        invlpg(virt);
+    return true;
+}
+
 void paging_switch(addrspace_t *as)
 {
     current_space = as;

@@ -9,6 +9,7 @@
 #include "multiboot.h"
 #include "kprintf.h"
 #include "vga.h"
+#include "fbcon.h"
 #include "serial.h"
 #include "gdt.h"
 #include "isr.h"
@@ -135,6 +136,14 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     paging_init();
     kprintf("paging : enabled, low %s identity mapped\n",
             fmt_bytes(LOW_MEMORY_LIMIT));
+
+    /* Move the console onto a linear framebuffer for crisp text at real
+     * resolutions.  Needs paging (to map the aperture) and PCI, both up now.
+     * Falls back to VGA text mode if there is no framebuffer. */
+    if (fbcon_init(80, 25))
+        kprintf("video  : framebuffer console, 80x25 (640x400), 8x16 font\n");
+    else
+        kputs("video  : no framebuffer; staying in VGA text mode\n");
 
     if (ata_init()) {
         uint32_t sectors = ata_sector_count();

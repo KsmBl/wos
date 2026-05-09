@@ -811,38 +811,36 @@ textmode [<cols> <rows>]
 ```
 
 Show or change the console's character grid. With no arguments it prints the
-current size and the choices; with two, it switches.
+current size and some presets; with two, it switches.
 
 ```
 root@wos:/home/root# textmode
-Current text mode: 80x50
+Current text mode: 80x25
 
-Available modes (use: textmode <cols> <rows>):
-  80 25
-  80 30
-  80 50   (current)
-  80 60
-  40 25
-  40 50
-root@wos:/home/root# textmode 80 25
-Text mode is now 80x25.
+Some sizes (use: textmode <cols> <rows>; 40x25 up to 240x75):
+  80 25  (640x400 px)   (current)
+  100 37  (800x592 px)
+  120 40  (960x640 px)
+  128 48  (1024x768 px)
+  160 50  (1280x800 px)
+  200 60  (1600x960 px)
+root@wos:/home/root# textmode 160 50
+Text mode is now 160x50.
 ```
 
-VGA text modes are not arbitrary. The columns come from the dot clock — 80, or
-40 for double-width characters — and the rows from the character-cell height
-(8 or 16 pixels) over 400 or 480 scan lines. That gives the six combinations
-above; anything else is refused.
-
-Switching reprograms the VGA registers and reloads the font: the 8x16 one GRUB
-supplied for the tall cells, or the 8x8 derived from it for the short ones (see
-[the console notes](console.md)). The screen is cleared in the process.
+The console is a linear framebuffer rendering an 8x16 font (see
+[the console notes](console.md)), so the grid is not tied to a handful of VGA
+text modes — it can be **almost any size**, `cols*8` by `rows*16` pixels, from
+40x25 up to 240x75. Switching reprograms the display resolution and clears the
+screen. Because the font is drawn at native resolution, high-density grids like
+160x50 stay crisp instead of blocky.
 
 Programs that draw to the whole screen — the editor, `split`, `asciiquarium` —
-read the size with `wconsize()`, so they lay themselves out to whatever mode is
+read the size with `wconsize()`, so they lay themselves out to whatever grid is
 set. Start them after switching and they fit. (Line-oriented tools like `ls`
-still assume 80 columns for their column layout, which only shows at 40.)
+still assume 80 columns for their column layout.)
 
-**Exit status:** 0, 1 for an unsupported size, 2 for a usage error.
+**Exit status:** 0, 2 for a usage error.
 
 ---
 

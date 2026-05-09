@@ -7,12 +7,18 @@
 
 #include "kprintf.h"
 #include "vga.h"
+#include "fbcon.h"
 #include "serial.h"
 #include "io.h"
 
 void kputc(char c)
 {
-    vga_putc(c);
+    /* Early boot draws to VGA text mode; once the framebuffer console is up it
+     * takes over.  Serial gets every byte throughout. */
+    if (fbcon_active())
+        fbcon_putc(c);
+    else
+        vga_putc(c);
     serial_putc(c);
 }
 

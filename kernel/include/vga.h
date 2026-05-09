@@ -26,4 +26,7 @@ int  vga_set_mode(int cols, int rows);
 /* Report the current text-mode size. */
 void vga_size(int *cols, int *rows);
 
+/* The 8x16 font captured from the card, 256 glyphs of 16 bytes. */
+const uint8_t *vga_font16(void);
+
 #endif /* WOS_VGA_H */

@@ -63,6 +63,10 @@ bool paging_map(addrspace_t *as, uint64_t virt, uint64_t phys, uint64_t flags);
  * cleared, which requires `as` to be the current address space. */
 bool paging_map_alloc(addrspace_t *as, uint64_t virt, uint64_t flags, bool zero);
 
+/* Identity-map one 2 MiB huge page into the kernel space (for the framebuffer
+ * aperture above the boot identity map).  `virt`/`phys` must be 2 MiB aligned. */
+bool paging_map_huge(uint64_t virt, uint64_t phys, uint64_t flags);
+
 /* Unmap a page and release its frame. */
 void paging_unmap(addrspace_t *as, uint64_t virt);
 

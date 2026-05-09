@@ -12,6 +12,7 @@
  */
 
 #include "vga.h"
+#include "fbcon.h"
 #include "io.h"
 
 /* The character grid is chosen at runtime by vga_set_mode(); these name the
@@ -249,6 +250,12 @@ static void vga_set_cursor_shape(int height)
 
 int vga_set_mode(int cols, int rows)
 {
+    /* Once the framebuffer console owns the screen, a mode change is a
+     * framebuffer resolution change; the VGA text register tables below are
+     * only for the brief early-boot window before that. */
+    if (fbcon_active())
+        return fbcon_set_mode(cols, rows);
+
     const uint8_t *base;
     int font_h;
 
@@ -282,15 +289,23 @@ int vga_set_mode(int cols, int rows)
 
 void vga_size(int *cols, int *rows)
 {
+    if (fbcon_active()) {
+        fbcon_size(cols, rows);
+        return;
+    }
     if (cols) *cols = vga_w;
     if (rows) *rows = vga_h;
 }
+
+/* The 8x16 glyph bitmaps captured from the card at boot, so the framebuffer
+ * console can render the same font without shipping one. */
+const uint8_t *vga_font16(void) { return font16; }
 
 void vga_init(void)
 {
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
     vga_read_font16();          /* capture GRUB's font before changing modes */
-    vga_set_mode(80, 50);       /* the default: twice the rows of plain text */
+    vga_set_mode(80, 25);       /* early boot; the framebuffer takes over soon */
 }
 
 void vga_get_cursor(size_t *row, size_t *col)

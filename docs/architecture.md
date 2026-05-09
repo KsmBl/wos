@@ -42,17 +42,16 @@ kernel's own address space.
 
 `kmain` initialises in dependency order, and the order matters:
 
-1. **Console** — serial and VGA, so everything after this can report failure.
-   The VGA console is switched to **80x50** here: the character cell is halved
-   from 8x16 to 8x8, which doubles the rows over the same 400 scan lines. No
-   font bitmap is shipped for it — the 8x8 glyphs are derived at boot by
-   squashing the 8x16 font GRUB already loaded, OR-ing each pair of rows so
-   thin strokes survive.
+1. **Console** — serial and VGA text mode, so the first lines can report
+   failure. The authentic 8x16 font is captured from VGA plane 2 here, before
+   later steps switch the console to a framebuffer.
 2. **GDT and IDT** — nothing can fault safely until the IDT is live.
 3. **PIC, PIT, keyboard** — the PIC must be remapped before interrupts are
    enabled, or a plain IRQ0 arrives looking like a double fault.
 4. **Memory** — frame allocator, kernel heap, paging. Deliberately after
-   interrupts, so a fault here is reported instead of triple-faulting.
+   interrupts, so a fault here is reported instead of triple-faulting. Once
+   paging is up the console moves onto a linear framebuffer (see
+   [`docs/console.md`](console.md)) for crisp text at real resolutions.
 5. **Disk** — ATA probe, then mount the filesystem.
 6. **Network** — find the RTL8139 and configure the IPv4 stack, if a card is
    present (see [`docs/networking.md`](networking.md)).
