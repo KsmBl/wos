@@ -33,4 +33,16 @@ uint32_t net_gateway_ip(void);
 int net_ping(uint32_t dst, uint16_t id, uint16_t seq, uint32_t timeout_ms,
              uint32_t *rtt_us);
 
+/* Resolve a host name (or a dotted-decimal address) to a network-order
+ * address.  Returns 0, -W_ENODEV, -W_EHOSTUNREACH or -W_EINVAL. */
+int net_resolve(const char *host, uint32_t *ip);
+
+/* A tiny client TCP.  net_tcp_open connects and returns a handle (0..3);
+ * send/recv move bytes (recv returns 0 at the peer's end of file); close tears
+ * the connection down.  All block, polling the card, up to internal timeouts. */
+int  net_tcp_open(uint32_t ip, uint16_t port);
+int  net_tcp_send(int handle, const void *data, uint32_t len);
+int  net_tcp_recv(int handle, void *buf, uint32_t len);
+void net_tcp_close(int handle);
+
 #endif /* WOS_NET_H */

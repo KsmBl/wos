@@ -631,6 +631,53 @@ static int64_t sys_ping(uint64_t dst, uint64_t seq, uint64_t timeout_ms)
     return (int64_t)rtt;
 }
 
+/* Resolve a host name to a network-order address, returned through `ip_out`. */
+static int64_t sys_resolve(uint64_t host, uint64_t ip_out)
+{
+    char namebuf[256];
+    int  r = copy_string_from_user((const char *)host, namebuf, sizeof(namebuf));
+    if (r < 0)
+        return r;
+    if (!user_range_ok((void *)ip_out, sizeof(uint32_t), true))
+        return -W_EFAULT;
+
+    uint32_t ip = 0;
+    r = net_resolve(namebuf, &ip);
+    if (r < 0)
+        return r;
+    *(uint32_t *)ip_out = ip;
+    return 0;
+}
+
+static int64_t sys_tcp_open(uint64_t ip, uint64_t port)
+{
+    return net_tcp_open((uint32_t)ip, (uint16_t)port);
+}
+
+static int64_t sys_tcp_send(uint64_t handle, uint64_t buf, uint32_t len)
+{
+    if (len > MAX_IO_SIZE)
+        len = MAX_IO_SIZE;
+    if (!user_range_ok((const void *)buf, len, false))
+        return -W_EFAULT;
+    return net_tcp_send((int)handle, (const void *)buf, len);
+}
+
+static int64_t sys_tcp_recv(uint64_t handle, uint64_t buf, uint32_t len)
+{
+    if (len > MAX_IO_SIZE)
+        len = MAX_IO_SIZE;
+    if (!user_range_ok((void *)buf, len, true))
+        return -W_EFAULT;
+    return net_tcp_recv((int)handle, (void *)buf, len);
+}
+
+static int64_t sys_tcp_close(uint64_t handle)
+{
+    net_tcp_close((int)handle);
+    return 0;
+}
+
 static int64_t sys_getshell(uint64_t uid, uint64_t buf, uint32_t size)
 {
     if (size == 0 || !user_range_ok((void *)buf, size, true))
@@ -723,6 +770,11 @@ static void syscall_handler(regs_t *regs)
     case WSYS_GETSHELL:  r = sys_getshell(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_SETSHELL:  r = sys_setshell(regs->rdi, regs->rsi); break;
     case WSYS_PING:      r = sys_ping(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_RESOLVE:   r = sys_resolve(regs->rdi, regs->rsi); break;
+    case WSYS_TCP_OPEN:  r = sys_tcp_open(regs->rdi, regs->rsi); break;
+    case WSYS_TCP_SEND:  r = sys_tcp_send(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_TCP_RECV:  r = sys_tcp_recv(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_TCP_CLOSE: r = sys_tcp_close(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

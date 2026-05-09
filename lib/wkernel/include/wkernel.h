@@ -709,6 +709,72 @@ int wsetshell(const char *name, const char *shell);
 int wping(unsigned int ip, int seq, int timeout_ms);
 
 /**
+ * Resolve a host name to a network-order address.
+ *
+ * A dotted-decimal string is parsed directly; anything else is looked up over
+ * DNS. `ip` receives the address in the same network-order form ping and the
+ * TCP calls expect.
+ *
+ * @return 0, `-W_ENODEV`, `-W_EHOSTUNREACH` (no answer) or `-W_EINVAL`.
+ */
+int wresolve(const char *host, unsigned int *ip);
+
+/**
+ * Open a TCP connection to `ip` (network order) on `port`.
+ *
+ * Blocks through the handshake. WOS's TCP is a small client only -- no
+ * listening sockets -- so this is how a program reaches a server.
+ *
+ * @return A connection handle (>= 0) for the other TCP calls, or a negative
+ *         error: `-W_ECONNREFUSED`, `-W_ETIMEDOUT`, `-W_EMFILE`, `-W_ENODEV`.
+ */
+int wtcp_open(unsigned int ip, int port);
+
+/**
+ * Send bytes on a TCP connection. Blocks until they are acknowledged.
+ * @return The number sent, or a negative error (`-W_ECONNRESET`, ...).
+ */
+int wtcp_send(int handle, const void *data, int len);
+
+/**
+ * Receive bytes from a TCP connection. Blocks until some arrive.
+ * @return The number read, 0 at the peer's end of file, or a negative error.
+ */
+int wtcp_recv(int handle, void *buf, int len);
+
+/**
+ * Close a TCP connection.
+ */
+void wtcp_close(int handle);
+
+/**
+ * The result of an HTTP GET.  `raw` is the whole response and must be freed;
+ * `body` and `location` point into it.
+ */
+typedef struct {
+    int   status;              /* HTTP status code, 0 if unparsed        */
+    char *raw;                 /* the whole response; free() this        */
+    int   raw_len;
+    char *body;                /* start of the body, within raw          */
+    int   body_len;
+    char  location[512];       /* a redirect target, empty if none       */
+} whttp_t;
+
+/**
+ * Split a URL into host, port and path.  https:// returns -2 (no TLS);
+ * malformed returns -1.
+ */
+int whttp_parse_url(const char *url, char *host, int host_size,
+                    int *port, char *path, int path_size);
+
+/**
+ * Fetch a URL over HTTP.  Resolves the host, connects, sends a GET and reads
+ * the whole response into `out->raw` (which the caller frees).  Returns 0, a
+ * negative W_E* code, or -2 for an https URL.
+ */
+int whttp_get(const char *url, whttp_t *out);
+
+/**
  * Shut the machine down.
  *
  * Does not return when it succeeds -- the machine powers off. Nothing needs
@@ -914,6 +980,7 @@ char   *strcpy(char *dst, const char *src);
 char   *strcat(char *dst, const char *src);
 char   *strchr(const char *s, int c);
 char   *strrchr(const char *s, int c);
+char   *strstr(const char *haystack, const char *needle);
 
 /**
  * Copy a string, always NUL-terminating and never overrunning.

@@ -162,6 +162,31 @@ int wping(unsigned int ip, int seq, int timeout_ms)
     return (int)wsyscall3(WSYS_PING, (long)ip, seq, timeout_ms);
 }
 
+int wresolve(const char *host, unsigned int *ip)
+{
+    return (int)wsyscall2(WSYS_RESOLVE, (long)host, (long)ip);
+}
+
+int wtcp_open(unsigned int ip, int port)
+{
+    return (int)wsyscall2(WSYS_TCP_OPEN, (long)ip, port);
+}
+
+int wtcp_send(int handle, const void *data, int len)
+{
+    return (int)wsyscall3(WSYS_TCP_SEND, handle, (long)data, len);
+}
+
+int wtcp_recv(int handle, void *buf, int len)
+{
+    return (int)wsyscall3(WSYS_TCP_RECV, handle, (long)buf, len);
+}
+
+void wtcp_close(int handle)
+{
+    wsyscall1(WSYS_TCP_CLOSE, handle);
+}
+
 int wshutdown(void)
 {
     /* Only comes back if the kernel could not power the machine off, and even
