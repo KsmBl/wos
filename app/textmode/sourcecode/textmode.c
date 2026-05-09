@@ -1,18 +1,18 @@
 /* textmode -- show or change the console's character grid.
  *
- *   textmode                 print the current size and the choices
- *   textmode <cols> <rows>   switch to that mode, e.g. `textmode 80 25`
+ *   textmode                 print the current size and some presets
+ *   textmode <cols> <rows>   switch to that grid, e.g. `textmode 160 50`
  *
- * VGA text modes are not arbitrary: the columns come from the dot clock (40 or
- * 80) and the rows from the character-cell height and the number of scan
- * lines, so only a handful of sizes exist.  wsetmode() refuses the rest.
+ * The console is a linear framebuffer rendering an 8x16 font, so the grid can
+ * be almost any size: cols*8 by rows*16 pixels, from 40x25 up to 240x75.
  */
 
 #include <wkernel.h>
 
+/* A few useful presets to suggest; any size in range works. */
 static const struct { int cols, rows; } modes[] = {
-    { 80, 25 }, { 80, 30 }, { 80, 50 }, { 80, 60 },
-    { 40, 25 }, { 40, 50 },
+    { 80, 25 }, { 100, 37 }, { 120, 40 }, { 128, 48 },
+    { 160, 50 }, { 200, 60 },
 };
 
 static void list_modes(void)
@@ -21,9 +21,10 @@ static void list_modes(void)
     wconsize(&rows, &cols);
     wprintf("Current text mode: %dx%d\n\n", cols, rows);
 
-    wprintf("Available modes (use: textmode <cols> <rows>):\n");
+    wprintf("Some sizes (use: textmode <cols> <rows>; 40x25 up to 240x75):\n");
     for (unsigned i = 0; i < sizeof(modes) / sizeof(modes[0]); i++)
-        wprintf("  %d %d%s\n", modes[i].cols, modes[i].rows,
+        wprintf("  %d %d  (%dx%d px)%s\n", modes[i].cols, modes[i].rows,
+                modes[i].cols * 8, modes[i].rows * 16,
                 (modes[i].cols == cols && modes[i].rows == rows) ? "   (current)" : "");
 }
 

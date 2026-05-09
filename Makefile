@@ -199,6 +199,7 @@ QEMU_FLAGS := -m 256M \
               -cdrom $(ISO) \
               -drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
               -netdev user,id=net0 -device rtl8139,netdev=net0 \
+              -vga std \
               -boot d -no-reboot
 
 run: all

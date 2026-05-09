@@ -1,20 +1,39 @@
 # The console
 
-WOS draws on a VGA text console and mirrors everything to COM1, so a program's
-output is identical on screen and on a serial terminal. It boots in 80x50 — an
-8x8 character cell rather than the usual 8x16, for twice the rows — and the
-mode can be changed at runtime with the [`textmode`](apps.md#textmode) command
-or `wsetmode()`. The supported sizes are 80x25, 80x30, 80x50, 80x60, 40x25 and
-40x50; VGA text modes are not arbitrary, so those are the lot.
+WOS draws on a **linear-framebuffer console** and mirrors everything to COM1,
+so a program's output is identical on screen and on a serial terminal. It boots
+at 80x25 and the grid can be changed at runtime with the
+[`textmode`](apps.md#textmode) command or `wsetmode()` — almost any size from
+40x25 up to 240x75, `160x50` included.
 
-The kernel keeps both fonts for this: the 8x16 GRUB loads, captured at boot,
-and an 8x8 derived from it by OR-ing each pair of rows so thin strokes survive
-the squash. Switching modes reprograms the VGA registers from a stored dump and
-reloads whichever font the cell height needs.
+## Why a framebuffer, not VGA text mode
+
+VGA text mode tops out near 80 columns, and its taller modes (80x50, 80x60)
+squash an 8x8 font into a small area that the display then stretches — blocky
+and ugly. So after boot the console moves onto a linear framebuffer instead:
+
+- The card is QEMU's standard VGA in its **Bochs VBE** mode, set through the
+  `0x1CE`/`0x1CF` dispi registers to a 32-bit-per-pixel resolution. No BIOS
+  call, no GRUB framebuffer request.
+- The kernel renders the **8x16 font itself**, glyph by glyph. The font is the
+  authentic one, captured from VGA plane 2 at boot while still in text mode,
+  before the switch — so no bitmap is shipped.
+- Each grid is `cols*8` by `rows*16` pixels: 80x25 is 640x400, **160x50 is
+  1280x800**. The display shows exactly that resolution, so text is crisp at
+  any density rather than scaled.
+
+The framebuffer aperture (the card's PCI BAR, at `0xFD000000`) is mapped into
+an unused virtual hole in the low gigabyte, which lives in the kernel page
+directory *every* address space shares — so the kernel can draw to the screen
+whichever process is currently scheduled.
+
+Early boot, before paging and PCI are up, still uses VGA text mode for its
+first few lines; `kputc` switches to the framebuffer once it is ready. Serial
+gets every byte throughout.
 
 A full-screen program should read the size in force with `wconsize()` rather
 than assume one, so it follows a mode change; `W_CONSOLE_MAX_WIDTH` and
-`W_CONSOLE_MAX_HEIGHT` bound the largest mode, for sizing fixed buffers.
+`W_CONSOLE_MAX_HEIGHT` bound the largest grid, for sizing fixed buffers.
 
 Two things make full-screen programs possible: **raw input mode**, so a program
 sees individual keystrokes, and **ANSI escape sequences**, so it can position

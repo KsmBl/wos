@@ -131,7 +131,7 @@ rm -f "$LOG" "$PPM"
 emit_script "$@" | timeout "$LIMIT" qemu-system-x86_64 -m 256M \
     -cdrom build/wos.iso \
     -drive file=build/wos.img,format=raw,if=ide,index=0,media=disk \
-    -netdev user,id=net0 -device rtl8139,netdev=net0 \
+    -netdev user,id=net0 -device rtl8139,netdev=net0 -vga std \
     -boot d -no-reboot \
     -serial "file:$LOG" -display none -monitor stdio >/dev/null 2>&1 || true
 
