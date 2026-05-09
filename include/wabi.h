@@ -50,7 +50,9 @@
 #define W_ENOSYS        38   /* no such syscall                    */
 #define W_ENOTEMPTY     39   /* directory not empty                */
 #define W_EFBIG         27   /* file too large for this filesystem */
+#define W_ECONNRESET   104   /* connection reset by the peer       */
 #define W_ETIMEDOUT    110   /* operation timed out                */
+#define W_ECONNREFUSED 111   /* connection refused                 */
 #define W_EHOSTUNREACH 113   /* no route/ARP to the host           */
 
 /* ------------------------------------------------------------------ *
@@ -223,7 +225,12 @@ typedef struct {
 #define WSYS_GETSHELL   40
 #define WSYS_SETSHELL   41
 #define WSYS_PING       42
-#define WSYS_MAX        43
+#define WSYS_RESOLVE    43
+#define WSYS_TCP_OPEN   44
+#define WSYS_TCP_SEND   45
+#define WSYS_TCP_RECV   46
+#define WSYS_TCP_CLOSE  47
+#define WSYS_MAX        48
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

@@ -1,10 +1,11 @@
 # Networking
 
-WOS has just enough of a network to run [`ping`](apps.md#ping): a driver for
-one card and a small IPv4 stack — Ethernet, ARP, IPv4 and ICMP echo. There is
-no TCP, no UDP, no sockets and no DNS. It exists to answer one question — is the
-machine on the network and can it reach a host — and to be a foundation to
-build the rest on.
+WOS has a small but real IPv4 stack: a driver for one card, then Ethernet, ARP,
+IPv4, ICMP (for [`ping`](apps.md#ping)), UDP (for DNS), and a client
+**TCP** — enough to resolve a host name and fetch a web page over HTTP, which
+[`curl`](apps.md#curl), [`wget`](apps.md#wget) and [`lynx`](apps.md#lynx) do.
+There is no TLS, no server side, and no general socket API; it is a client that
+reaches out, not a host that listens.
 
 ## The card: RTL8139
 
@@ -26,7 +27,8 @@ PCI NIC there is: a handful of I/O registers and two ring buffers.
 
 ## The stack
 
-`kernel/net/net.c` is the whole of it, under 350 lines:
+`kernel/net/net.c` is the whole of it. Every inbound frame goes through one
+dispatcher (`net_poll`), which the blocking calls spin on while they wait:
 
 - **Ethernet** framing — destination and source MAC, an ethertype, the payload.
 - **ARP** — a small cache, resolving an IPv4 address to a MAC by broadcasting a
@@ -35,6 +37,19 @@ PCI NIC there is: a handful of I/O registers and two ring buffers.
   one routing decision that matters: a destination on our subnet is reached
   directly, anything else goes to the gateway.
 - **ICMP** — echo request out, echo reply matched back by id and sequence.
+- **UDP** — send and receive datagrams; used for DNS.
+- **DNS** — build an A-record query, send it to the resolver, parse the answer.
+- **TCP** (client) — the real work: a three-way handshake, sequence and
+  acknowledgement numbers, a receive ring with an advertised window, in-order
+  reassembly (out-of-order segments earn a duplicate ACK so the peer resends),
+  retransmission of the SYN and of unacknowledged data, and a FIN teardown.
+  The checksum covers the usual pseudo-header. It is a client only — no
+  listening — which is all a browser needs.
+
+One subtlety worth recording: these calls busy-poll the card from inside a
+syscall, which is entered with interrupts off. They re-enable interrupts
+(`net_poll` does an `sti`), or the timer would never tick and every millisecond
+deadline would wait forever — the bug that first made TCP hang.
 
 ## Configuration
 
@@ -66,23 +81,33 @@ calibrated against the PIT at boot to get ticks-per-microsecond. That resolves
 a local round trip of a few tens of microseconds, far finer than the 10 ms
 timer alone could.
 
-## The one call
+## The calls applications use
 
-Applications reach all of this through a single syscall, `wping()`:
+Rather than a full socket API, the kernel exposes a few purpose-built calls:
 
 ```c
-int rtt_us = wping(ip, seq, timeout_ms);   /* >= 0 microseconds, or -errno */
+int rtt_us = wping(ip, seq, timeout_ms);      /* ICMP echo, microseconds   */
+int rc     = wresolve(host, &ip);             /* DNS, or a dotted address   */
+
+int h = wtcp_open(ip, port);                  /* connect                    */
+    wtcp_send(h, buf, len);                   /* send, blocks until acked   */
+    wtcp_recv(h, buf, len);                   /* recv, 0 at end of file     */
+    wtcp_close(h);
 ```
 
-The kernel resolves the next hop, sends the echo, waits for the reply and
-returns the round-trip time. There is no general socket API yet — `ping` is the
-only thing that needs the network, so the network exposes exactly `ping`. A
-sockets layer, and UDP and TCP beneath it, is the direction to grow.
+On top of those, `libwkernel` has a tiny HTTP client, `whttp_get(url, &resp)`,
+which resolves the host, connects, sends a GET and reads the whole HTTP/1.0
+response into one buffer — the shared engine behind `curl`, `wget` and `lynx`.
 
 ## What is missing
 
-No TCP or UDP, no sockets, no DNS, no DHCP (the address is hard-coded), no
-IPv6, and no second card. The driver polls, so nothing happens on the network
-unless a program is actively waiting on it. Each is a deliberate stop short of a
-real stack — the point here was a working `ping`, and the smallest thing that
-makes it real.
+- **No TLS.** Plain HTTP only, so `https://` is refused. This is the big one —
+  a great deal of the web now insists on HTTPS.
+- **No server side.** TCP connects out; it does not listen. No sockets API in
+  the Unix sense, no `bind`/`accept`.
+- **A minimal TCP.** No congestion control, no window scaling, no selective
+  ACK, and out-of-order segments are dropped rather than buffered. Correct and
+  enough for request/response over a low-loss path; not a stack for a server.
+- **No DHCP** (the address is hard-coded to SLIRP's), **no IPv6**, one card.
+- The driver **polls**, so nothing happens on the network unless a program is
+  actively waiting on it.

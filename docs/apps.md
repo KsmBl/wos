@@ -26,6 +26,9 @@ which is the price of having no shared libraries.
 | [`rm`](#rm) | remove files and directories |
 | [`clear`](#clear) | clear the screen |
 | [`ping`](#ping) | send ICMP echo requests to a host |
+| [`curl`](#curl) | fetch a URL and print it |
+| [`wget`](#wget) | download a URL to a file |
+| [`lynx`](#lynx) | browse the web as text |
 | [`shutdown`](#shutdown) | power the machine off |
 | [`whoami`](#whoami) | print the current user and what it may do |
 | [`passwd`](#passwd) | change a password |
@@ -927,3 +930,88 @@ against the timer at boot, so it resolves well below a millisecond.
 | `ping: no network card` | the kernel found no RTL8139 |
 
 **Exit status:** 0 if any reply was received, 1 if none, 2 for a usage error.
+
+---
+
+# curl
+
+```
+curl <url>        print the body
+curl -i <url>     print headers and body
+curl -I <url>     print headers only
+```
+
+Fetch a URL over HTTP and print it.
+
+```
+root@wos:/home/root# curl http://example.com
+<!doctype html><html ...><h1>Example Domain</h1><p>This domain is for use in
+documentation examples ...</p></html>
+```
+
+HTTP only — `https://` is refused, because WOS has no TLS. The host may be a
+name (resolved over DNS) or a dotted address. See
+[`docs/networking.md`](networking.md) for the stack underneath.
+
+**Exit status:** 0 for a 2xx/3xx response, 1 otherwise or on a network error,
+2 for a usage error.
+
+---
+
+# wget
+
+```
+wget <url>            save to the file named in the URL (or index.html)
+wget -O <file> <url>  save to <file>
+```
+
+Download a URL to a file, following up to a few HTTP redirects.
+
+```
+root@wos:/home/root# wget http://example.com
+Connecting to http://example.com ...
+Saved 559 bytes to index.html
+```
+
+The output name is the last path component of the URL, or `index.html` when the
+path is empty. HTTP only.
+
+**Exit status:** 0 on success, 1 on error, 2 for a usage error.
+
+---
+
+# lynx
+
+```
+lynx <url>
+```
+
+Browse the web as text. `lynx` fetches a page, renders the HTML — dropping tags
+and scripts, decoding entities, wrapping text and numbering links — and shows
+it in a full-screen pager.
+
+```
+Example Domain
+
+This domain is for use in documentation examples without needing permission.
+Avoid use in operations.
+
+Learn more [1]
+ http://example.com  (1 links)  [num]=follow g=go b=back q=quit
+```
+
+| Key | Action |
+|---|---|
+| Up / Down, `j` / `k` | scroll a line |
+| Space, PgDn | scroll a page |
+| a number then Enter | follow that link |
+| `g` | type a new URL to open |
+| `b` | back to the previous page |
+| `q` | quit |
+
+A WOS-native browser in the spirit of lynx, not a build of it: no CSS, no
+JavaScript, no forms, and HTTP only. It renders the *text* of the web, which for
+a great many pages is what you came for. A link to an `https://` page reports
+that WOS cannot fetch it.
+
+**Exit status:** 0.
