@@ -25,6 +25,7 @@ which is the price of having no shared libraries.
 | [`mkdir`](#mkdir) | create directories |
 | [`rm`](#rm) | remove files and directories |
 | [`clear`](#clear) | clear the screen |
+| [`time`](#time) | show or set the clock |
 | [`ping`](#ping) | send ICMP echo requests to a host |
 | [`curl`](#curl) | fetch a URL and print it |
 | [`wget`](#wget) | download a URL to a file |
@@ -1015,3 +1016,34 @@ a great many pages is what you came for. A link to an `https://` page reports
 that WOS cannot fetch it.
 
 **Exit status:** 0.
+
+---
+
+# time
+
+```
+time                        show the current date and time
+time HH:MM[:SS]             set the time of day, keeping the date
+time YYYY-MM-DD HH:MM[:SS]  set the whole date and time
+```
+
+Show or set the wall clock.
+
+```
+root@wos:/home/root# time
+Monday August 3 2026, 13:26:19
+root@wos:/home/root# time 12:34:56
+Clock set to: Monday August 3 2026, 12:34:56
+```
+
+The clock is the CMOS real-time clock, read and written through the 0x70/0x71
+ports. Under QEMU it starts from the host's time, which is why a fresh boot
+already knows the date; the weekday is computed from the date rather than read
+from the chip, since that register is not always trustworthy.
+
+Setting the clock is **root only** — it is a system-wide setting — so an
+ordinary user gets "only root may set the clock". A change lasts until the VM
+resets, when QEMU seeds the emulated clock from the host again.
+
+**Exit status:** 0, 1 on error (not root, cannot read the clock), 2 for a bad
+argument.

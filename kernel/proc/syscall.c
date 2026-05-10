@@ -24,6 +24,7 @@
 #include "keyboard.h"
 #include "vga.h"
 #include "net.h"
+#include "rtc.h"
 #include "user.h"
 #include "string.h"
 #include "kprintf.h"
@@ -678,6 +679,25 @@ static int64_t sys_tcp_close(uint64_t handle)
     return 0;
 }
 
+static int64_t sys_time_get(uint64_t out)
+{
+    if (!user_range_ok((void *)out, sizeof(wtime_t), true))
+        return -W_EFAULT;
+    rtc_read((wtime_t *)out);
+    return 0;
+}
+
+/* Setting the clock is system-wide, so it is root-only. */
+static int64_t sys_time_set(uint64_t in)
+{
+    if (proc_current()->uid != W_ROOT_UID)
+        return -W_EPERM;
+    if (!user_range_ok((void *)in, sizeof(wtime_t), false))
+        return -W_EFAULT;
+    rtc_set((const wtime_t *)in);
+    return 0;
+}
+
 static int64_t sys_getshell(uint64_t uid, uint64_t buf, uint32_t size)
 {
     if (size == 0 || !user_range_ok((void *)buf, size, true))
@@ -775,6 +795,8 @@ static void syscall_handler(regs_t *regs)
     case WSYS_TCP_SEND:  r = sys_tcp_send(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_TCP_RECV:  r = sys_tcp_recv(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_TCP_CLOSE: r = sys_tcp_close(regs->rdi); break;
+    case WSYS_TIME_GET:  r = sys_time_get(regs->rdi); break;
+    case WSYS_TIME_SET:  r = sys_time_set(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

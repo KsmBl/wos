@@ -748,6 +748,18 @@ int wtcp_recv(int handle, void *buf, int len);
 void wtcp_close(int handle);
 
 /**
+ * Read the wall-clock date and time from the real-time clock.
+ * @return 0, or `-W_EFAULT` if @p out is not writable.
+ */
+int wtime_get(wtime_t *out);
+
+/**
+ * Set the wall-clock date and time.  System-wide, so root only.
+ * @return 0, `-W_EPERM` if not root, or `-W_EFAULT`.
+ */
+int wtime_set(const wtime_t *t);
+
+/**
  * The result of an HTTP GET.  `raw` is the whole response and must be freed;
  * `body` and `location` point into it.
  */
