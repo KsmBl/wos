@@ -138,8 +138,11 @@ int main(int argc, char **argv)
     strlcpy(values[rows++], "whell", 64);
 
     keys[rows] = "Terminal";
-    wsnprintf(values[rows++], 64, "VGA %dx%d",
-              W_CONSOLE_WIDTH, W_CONSOLE_HEIGHT);
+    {
+        int tr = 0, tc = 0;
+        wconsize(&tr, &tc);
+        wsnprintf(values[rows++], 64, "framebuffer %dx%d", tc, tr);
+    }
 
     keys[rows] = "CPU";
     strlcpy(values[rows++], cpu, 64);

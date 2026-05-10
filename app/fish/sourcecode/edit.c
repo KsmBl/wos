@@ -460,11 +460,13 @@ int fish_read_line(char *buf, int size)
                 }
             } else if (matches > 1) {
                 wprintf("\n");
+                int trows = 0, tcols = W_CONSOLE_WIDTH;
+                wconsize(&trows, &tcols);
                 int column = 0;
                 for (int i = 0; i < matches; i++) {
                     int width = (int)strlen(match_names[i]) +
                                 (match_is_dir[i] ? 1 : 0);
-                    if (column + width + 2 > W_CONSOLE_WIDTH) {
+                    if (column + width + 2 > tcols) {
                         wprintf("\n");
                         column = 0;
                     }

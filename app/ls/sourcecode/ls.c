@@ -75,7 +75,13 @@ static void print_columns(const struct entry *e, int count)
     }
 
     wsize_t column = widest + 2;
-    int per_line = (int)(W_CONSOLE_WIDTH / column);
+
+    /* Use however wide the console actually is, so the columns fill the screen
+     * at any resolution. */
+    int rows = 0, cols = W_CONSOLE_WIDTH;
+    wconsize(&rows, &cols);
+
+    int per_line = (int)(cols / column);
     if (per_line < 1)
         per_line = 1;
 

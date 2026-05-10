@@ -84,12 +84,15 @@ static void complete_line(char *buf, int *len, int size)
 
     wputs("\n");
 
+    int rows = 0, term_w = W_CONSOLE_WIDTH;
+    wconsize(&rows, &term_w);
+
     int column = 0;
     for (int i = 0; i < matches; i++) {
         const char *name = whell_completion_name(i);
         int width = (int)strlen(name) + (whell_completion_is_dir(i) ? 1 : 0);
 
-        if (column + width + 2 > W_CONSOLE_WIDTH) {
+        if (column + width + 2 > term_w) {
             wputs("\n");
             column = 0;
         }
