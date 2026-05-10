@@ -19,6 +19,10 @@ static wprocmem_t procs[MAX_PROCS];
 static int        proc_count;
 static int        selected;
 
+/* The console size, read at startup so htop fills whatever resolution is set
+ * rather than assuming 80x25. */
+static int cols = 80, rows = 25;
+
 /* Express used/total out of `out_of`, in 32-bit arithmetic only.
  *
  * WOS links no libgcc, so there is no 64-bit division to fall back on: the
@@ -95,7 +99,7 @@ static void draw_uptime(void)
 {
     unsigned total = wuptime_ms() / 1000u;
 
-    wgotoxy(1, W_CONSOLE_WIDTH - 20);
+    wgotoxy(1, cols - 20);
     wcolor(W_BLACK, W_CYAN);
     wprintf(" Uptime %02u:%02u:%02u ",
             total / 3600u, (total % 3600u) / 60u, total % 60u);
@@ -149,11 +153,11 @@ static void draw_process_table(void)
             "THR");
     /* The heading row is 71 characters wide; pad it out so the reverse-video
      * bar reaches the edge of the screen. */
-    for (int i = 0; i < W_CONSOLE_WIDTH - 71; i++)
+    for (int i = 0; i < cols - 71; i++)
         wprintf(" ");
     wcolor_reset();
 
-    for (int i = 0; i < proc_count && i < W_CONSOLE_HEIGHT - 11; i++) {
+    for (int i = 0; i < proc_count && i < rows - 11; i++) {
         wgotoxy(9 + i, 1);
 
         if (i == selected)
@@ -172,7 +176,7 @@ static void draw_process_table(void)
         if (i == selected) {
             /* Pad the highlight to the full width so the selected row reads
              * as a bar rather than as coloured text. */
-            for (int c = 0; c < W_CONSOLE_WIDTH - 71; c++)
+            for (int c = 0; c < cols - 71; c++)
                 wprintf(" ");
         }
 
@@ -181,7 +185,7 @@ static void draw_process_table(void)
     }
 
     /* Blank out rows left behind by a process that has since exited. */
-    for (int i = proc_count; i < W_CONSOLE_HEIGHT - 11; i++) {
+    for (int i = proc_count; i < rows - 11; i++) {
         wgotoxy(9 + i, 1);
         wclear_line();
     }
@@ -189,7 +193,7 @@ static void draw_process_table(void)
 
 static void draw_footer(void)
 {
-    wgotoxy(W_CONSOLE_HEIGHT, 1);
+    wgotoxy(rows, 1);
     wcolor(W_BLACK, W_CYAN);
     wprintf(" up/dn ");
     wcolor(W_WHITE, W_BLACK);
@@ -227,6 +231,10 @@ static void redraw(void)
 int main(int argc, char **argv)
 {
     int running = 1;
+
+    wconsize(&rows, &cols);
+    if (cols < 72) cols = 72;      /* the table needs a minimum width */
+    if (rows < 14) rows = 14;
 
     wconsole_raw(W_CONSOLE_RAW);
     wcursor(0);
