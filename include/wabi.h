@@ -169,6 +169,16 @@ typedef struct {
     char     name[W_NAME_LEN + 1];
 } wuser_t;
 
+/* Wall-clock date and time, from the CMOS real-time clock. */
+typedef struct {
+    int32_t year;      /* full year, e.g. 2026 */
+    int32_t month;     /* 1-12                 */
+    int32_t day;       /* 1-31                 */
+    int32_t hour;      /* 0-23                 */
+    int32_t minute;    /* 0-59                 */
+    int32_t second;    /* 0-59                 */
+} wtime_t;
+
 /* Passed to wspawn_io(): the descriptors a child's stdin and stdout should be
  * wired to, and the terminal size it should report from wconsize().  `in_fd`
  * must be the read end of a pipe in the caller and `out_fd` the write end. */
@@ -230,7 +240,9 @@ typedef struct {
 #define WSYS_TCP_SEND   45
 #define WSYS_TCP_RECV   46
 #define WSYS_TCP_CLOSE  47
-#define WSYS_MAX        48
+#define WSYS_TIME_GET   48
+#define WSYS_TIME_SET   49
+#define WSYS_MAX        50
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

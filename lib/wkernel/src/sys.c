@@ -187,6 +187,16 @@ void wtcp_close(int handle)
     wsyscall1(WSYS_TCP_CLOSE, handle);
 }
 
+int wtime_get(wtime_t *out)
+{
+    return (int)wsyscall1(WSYS_TIME_GET, (long)out);
+}
+
+int wtime_set(const wtime_t *t)
+{
+    return (int)wsyscall1(WSYS_TIME_SET, (long)t);
+}
+
 int wshutdown(void)
 {
     /* Only comes back if the kernel could not power the machine off, and even

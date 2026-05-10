@@ -22,6 +22,7 @@
 #include "ata.h"
 #include "wfs_kernel.h"
 #include "net.h"
+#include "rtc.h"
 #include "user.h"
 #include "proc.h"
 #include "sched.h"
@@ -161,6 +162,13 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     }
 
     net_init();
+
+    {
+        wtime_t now;
+        rtc_read(&now);
+        kprintf("clock  : %d-%02d-%02d %02d:%02d:%02d (from the RTC)\n",
+                now.year, now.month, now.day, now.hour, now.minute, now.second);
+    }
 
     user_init();
 
