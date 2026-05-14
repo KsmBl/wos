@@ -3,6 +3,7 @@
 #include "pmm.h"
 #include "kheap.h"
 #include "kprintf.h"
+#include "fbcon.h"
 
 extern uint8_t __kernel_start[];
 extern uint8_t __kernel_end[];
@@ -94,6 +95,108 @@ static uint64_t highest_address(const struct multiboot_info *mbi)
     return highest;
 }
 
+/* True if [start, start+len) touches [lo, hi). */
+static bool overlaps(uint64_t start, uint64_t len, uint64_t lo, uint64_t hi)
+{
+    return hi > lo && start < hi && lo < start + len;
+}
+
+/* The next address at or after `addr` that is clear of everything which must
+ * survive being booted: the kernel, the modules, and the structures the
+ * bootloader built to describe them.  Returns `addr` itself when it is already
+ * clear.
+ *
+ * The boot information is the reason this exists.  GRUB builds it below the
+ * kernel, out of the way; the UEFI loader allocates it from the firmware, which
+ * puts it wherever it likes -- in practice directly above the filesystem image,
+ * which is exactly where a bitmap placed "after the last module" would go.  The
+ * bitmap would then overwrite the memory map it is about to read. */
+static uint64_t clear_of_boot_data(const struct multiboot_info *mbi,
+                                   uint64_t addr, uint64_t len)
+{
+    for (;;) {
+        uint64_t moved = addr;
+
+        if (overlaps(addr, len, (uint64_t)__kernel_start, (uint64_t)__kernel_end))
+            moved = (uint64_t)__kernel_end;
+
+        if (overlaps(addr, len, (uint64_t)mbi, (uint64_t)mbi + sizeof(*mbi)))
+            moved = (uint64_t)mbi + sizeof(*mbi);
+
+        if (mbi->flags & MB_FLAG_MMAP)
+            if (overlaps(addr, len, mbi->mmap_addr,
+                         (uint64_t)mbi->mmap_addr + mbi->mmap_length))
+                moved = (uint64_t)mbi->mmap_addr + mbi->mmap_length;
+
+        if (mbi->flags & MB_FLAG_MODS) {
+            const struct multiboot_module *mods =
+                (const struct multiboot_module *)(uintptr_t)mbi->mods_addr;
+            uint64_t mods_bytes = (uint64_t)mbi->mods_count * sizeof(*mods);
+
+            if (overlaps(addr, len, mbi->mods_addr, mbi->mods_addr + mods_bytes))
+                moved = (uint64_t)mbi->mods_addr + mods_bytes;
+
+            for (uint32_t i = 0; i < mbi->mods_count; i++)
+                if (overlaps(addr, len, mods[i].mod_start, mods[i].mod_end))
+                    moved = mods[i].mod_end;
+        }
+
+        if (moved == addr)
+            return addr;
+
+        /* Something moved it, so start again: the new position may run into
+         * the next thing along. */
+        addr = ALIGN_UP(moved, PAGE_SIZE);
+    }
+}
+
+/* Somewhere to put `len` bytes of the kernel's own bookkeeping: inside one
+ * region the firmware calls available, clear of everything already there, and
+ * below the framebuffer window, which shadows the identity map above it.
+ * Returns 0 when the machine has nowhere that fits. */
+static uint64_t find_span(const struct multiboot_info *mbi, uint64_t len)
+{
+    uint64_t ceiling = FBCON_APERTURE;
+
+    if (!(mbi->flags & MB_FLAG_MMAP))
+        return clear_of_boot_data(mbi, ALIGN_UP((uint64_t)__kernel_end, PAGE_SIZE),
+                                  len);
+
+    uintptr_t cur = mbi->mmap_addr;
+    uintptr_t end = mbi->mmap_addr + mbi->mmap_length;
+
+    while (cur < end) {
+        const struct multiboot_mmap_entry *e =
+            (const struct multiboot_mmap_entry *)cur;
+        cur += e->size + sizeof(uint32_t);
+
+        if (e->type != MB_MEMORY_AVAILABLE || (e->addr >> 32))
+            continue;
+
+        uint64_t region_end = e->addr + e->len;
+        if (region_end > ceiling)
+            region_end = ceiling;
+
+        /* Never below the kernel: the low megabyte and the space the kernel
+         * occupies are spoken for. */
+        uint64_t addr = e->addr;
+        if (addr < (uint64_t)__kernel_end)
+            addr = (uint64_t)__kernel_end;
+        addr = ALIGN_UP(addr, PAGE_SIZE);
+
+        /* Stepping past one obstruction can land on another, or push the span
+         * out of this region entirely, in which case the region is finished. */
+        while (addr + len <= region_end) {
+            uint64_t clear = clear_of_boot_data(mbi, addr, len);
+            if (clear == addr)
+                return addr;
+            addr = clear;
+        }
+    }
+
+    return 0;
+}
+
 void pmm_init(const struct multiboot_info *mbi)
 {
     uint64_t highest = highest_address(mbi);
@@ -102,8 +205,21 @@ void pmm_init(const struct multiboot_info *mbi)
     bitmap_frames = total_frames;
     bitmap_words  = ALIGN_UP(total_frames, 64) / 64;
 
-    /* The bitmap lives immediately after the kernel image. */
-    bitmap = (uint64_t *)ALIGN_UP((uint64_t)__kernel_end, PAGE_SIZE);
+    /* The bitmap and the heap go together into the first gap large enough to
+     * hold both, which is a search rather than an address because everything
+     * around them was placed by the bootloader: the kernel image, a 64 MiB
+     * filesystem module, and the block describing them.  Writing the bitmap
+     * over any of those destroys what the rest of this function is about to
+     * read, or what the shell is about to mount. */
+    uint64_t bitmap_bytes = ALIGN_UP(bitmap_words * sizeof(uint64_t), PAGE_SIZE);
+    uint64_t span = find_span(mbi, bitmap_bytes + KHEAP_SIZE);
+
+    if (!span)
+        panic("no room for a %s frame bitmap and a %s heap below %p",
+              fmt_bytes(bitmap_bytes), fmt_bytes(KHEAP_SIZE),
+              (void *)FBCON_APERTURE);
+
+    bitmap = (uint64_t *)span;
 
     /* Start with everything used, then punch out the regions the firmware
      * reported as available. Anything the map does not mention stays used,
@@ -127,20 +243,39 @@ void pmm_init(const struct multiboot_info *mbi)
         }
     }
 
-    /* Now take back everything that must never be handed out. */
-    uint64_t bitmap_end = (uint64_t)bitmap + bitmap_words * sizeof(uint64_t);
+    /* Now take back everything that must never be handed out.  The heap follows
+     * the bitmap, both inside the span found for them. */
+    heap_base = (uint64_t)bitmap + bitmap_bytes;
 
     pmm_reserve_range(0, 0x100000);                     /* BIOS, VGA, IVT   */
-    pmm_reserve_range((uint64_t)__kernel_start, bitmap_end);
+    pmm_reserve_range((uint64_t)__kernel_start, (uint64_t)__kernel_end);
+    pmm_reserve_range(span, heap_base + KHEAP_SIZE);
 
-    /* Carve the kernel heap arena out of the identity-mapped region. */
-    heap_base = ALIGN_UP(bitmap_end, PAGE_SIZE);
-    pmm_reserve_range(heap_base, heap_base + KHEAP_SIZE);
+    /* The modules, and the block describing them.  GRUB leaves all of it below
+     * 1 MiB, already reserved above; the UEFI loader gets it from the firmware,
+     * which puts it in ordinary memory that would otherwise be handed straight
+     * back out -- and the filesystem is still mounted from a module long after
+     * this runs. */
+    pmm_reserve_range((uint64_t)mbi, (uint64_t)mbi + sizeof(*mbi));
+
+    if (mbi->flags & MB_FLAG_MMAP)
+        pmm_reserve_range(mbi->mmap_addr, mbi->mmap_addr + mbi->mmap_length);
+
+    if (mbi->flags & MB_FLAG_MODS) {
+        const struct multiboot_module *mods =
+            (const struct multiboot_module *)(uintptr_t)mbi->mods_addr;
+
+        pmm_reserve_range(mbi->mods_addr,
+                          mbi->mods_addr + mbi->mods_count * sizeof(*mods));
+
+        for (uint32_t i = 0; i < mbi->mods_count; i++)
+            pmm_reserve_range(mods[i].mod_start, mods[i].mod_end);
+    }
 
     reserved_frames = used_frames;
 
-    if (heap_base + KHEAP_SIZE > LOW_MEMORY_LIMIT)
-        panic("kernel heap does not fit in the identity-mapped region");
+    if (heap_base + KHEAP_SIZE > FBCON_APERTURE)
+        panic("kernel heap does not fit below the framebuffer window");
 }
 
 static uint64_t alloc_scan(uint64_t start_frame, uint64_t end_frame,
