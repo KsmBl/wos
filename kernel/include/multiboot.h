@@ -13,6 +13,20 @@
 #define MB_FLAG_CMDLINE (1 << 2)
 #define MB_FLAG_MODS    (1 << 3)
 #define MB_FLAG_MMAP    (1 << 6)   /* mmap_addr / mmap_length valid */
+#define MB_FLAG_VBE     (1 << 11)
+#define MB_FLAG_FRAMEBUFFER (1 << 12)  /* framebuffer_* valid */
+
+/* Not Multiboot: WOS's own UEFI loader sets this to say it filled in `rsdp`.
+ * The firmware hands the ACPI tables to a UEFI application through its
+ * configuration table and leaves nothing to find in low memory, so a UEFI boot
+ * cannot locate them the way a BIOS boot does.  GRUB never sets this bit, and
+ * the specification leaves the high bits free. */
+#define MB_FLAG_WOS_RSDP (1u << 31)
+
+/* Values for multiboot_info.framebuffer_type */
+#define MB_FRAMEBUFFER_INDEXED 0
+#define MB_FRAMEBUFFER_RGB     1
+#define MB_FRAMEBUFFER_EGA     2
 
 /* Values for multiboot_mmap_entry.type */
 #define MB_MEMORY_AVAILABLE 1
@@ -57,6 +71,22 @@ struct multiboot_info {
     uint16_t vbe_interface_seg;
     uint16_t vbe_interface_off;
     uint16_t vbe_interface_len;
+
+    /* Present when MB_FLAG_FRAMEBUFFER is set, which the kernel asks for
+     * through the video fields of its Multiboot header.  On real hardware this
+     * is the only description of the display it gets. */
+    uint64_t framebuffer_addr;
+    uint32_t framebuffer_pitch;      /* bytes per scan line */
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint8_t  framebuffer_bpp;
+    uint8_t  framebuffer_type;
+    uint8_t  color_info[6];
+
+    /* Past the end of the Multiboot structure, and only there when
+     * MB_FLAG_WOS_RSDP says so: the physical address of the ACPI root pointer.
+     * See the flag. */
+    uint64_t rsdp;
 } __attribute__((packed));
 
 #endif /* WOS_MULTIBOOT_H */
