@@ -1,16 +1,17 @@
 /* Machine power-off.
  *
- * Doing this properly means parsing the ACPI tables to find the PM1a control
- * block and the S5 sleep type the firmware wants.  WOS has no ACPI parser, so
- * it writes the values the common emulators are known to use instead.  Each is
- * harmless where it is not recognised: the address decodes to nothing and the
- * write is dropped.
+ * The real way is ACPI: the tables say where the chipset's power management
+ * block is and which sleep type means "off", and acpi.c reads both at boot.
+ * That is the only thing that works on real hardware.
  *
- * On real hardware none of these will match and the machine simply halts,
- * which is why the fallback prints the message an operator needs.
+ * The fixed addresses below are kept for the emulators, several of which
+ * recognise a write to a known port without any of the tables being consulted,
+ * and two of which WOS is developed on.  Each is harmless where it is not
+ * recognised: the address decodes to nothing and the write is dropped.
  */
 
 #include "power.h"
+#include "acpi.h"
 #include "io.h"
 #include "kprintf.h"
 
@@ -45,6 +46,14 @@ void power_off(void)
      * consistent at all times. */
 
     __asm__ volatile("cli");
+
+    /* What the machine itself says to do, when it said anything. */
+    if (acpi_can_power_off()) {
+        acpi_power_off();
+
+        for (volatile uint32_t i = 0; i < 20000000u; i++)
+            ;
+    }
 
     /* QEMU 2.0 and later, both i440fx and q35: the PIIX4/ICH9 ACPI PM base is
      * at 0x600, so PM1a_CNT is at offset 4. */
