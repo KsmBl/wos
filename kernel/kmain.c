@@ -20,9 +20,13 @@
 #include "kheap.h"
 #include "paging.h"
 #include "ata.h"
+#include "ramdisk.h"
+#include "usbdisk.h"
 #include "wfs_kernel.h"
+#include "ramfs.h"
 #include "net.h"
 #include "rtc.h"
+#include "acpi.h"
 #include "user.h"
 #include "proc.h"
 #include "sched.h"
@@ -78,9 +82,46 @@ static uint64_t print_memory_map(const struct multiboot_info *mbi)
     return usable;
 }
 
+/* Hand the first Multiboot module to the RAM disk driver.  grub.cfg loads the
+ * filesystem image as the only module, so there is no need to match on the
+ * command line string. */
+static bool mount_boot_module(const struct multiboot_info *mbi)
+{
+    if (!(mbi->flags & MB_FLAG_MODS) || mbi->mods_count == 0)
+        return false;
+
+    const struct multiboot_module *mod =
+        (const struct multiboot_module *)(uintptr_t)mbi->mods_addr;
+
+    if (mod->mod_end <= mod->mod_start)
+        return false;
+
+    if (!ramdisk_init(mod->mod_start, mod->mod_end - mod->mod_start)) {
+        kprintf("ramdisk: unusable boot module at %p - %p\n",
+                (void *)(uintptr_t)mod->mod_start,
+                (void *)(uintptr_t)mod->mod_end);
+        return false;
+    }
+    return true;
+}
+
 void kmain(uint32_t magic, struct multiboot_info *mbi)
 {
     serial_init();
+
+    /* Before vga_init(), deliberately.  On a UEFI boot this is the only
+     * console there will ever be -- VGA text mode does not exist, everything
+     * printed before the framebuffer is running would go nowhere, and a kernel
+     * that stopped early would look like a machine that never started.  Coming
+     * up first also stops vga_init() from touching the legacy hardware, which
+     * on a UEFI machine can take the display away from the mode the firmware
+     * is scanning out.
+     *
+     * It needs no allocator and no paging: the loader described the
+     * framebuffer, and the boot page tables can reach it. */
+    if (magic == MULTIBOOT_BOOTLOADER_MAGIC && (mbi->flags & MB_FLAG_FRAMEBUFFER))
+        fbcon_init_boot(mbi, 0, 0);
+
     vga_init();
 
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
@@ -127,6 +168,7 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     /* Memory comes up after interrupts so a fault during initialisation is
      * reported rather than silently rebooting the machine. */
     pmm_init(mbi);
+    fbcon_reserve_aperture();
     kprintf("pmm    : %s usable in %lu frames\n",
             fmt_bytes(pmm_total_bytes()), pmm_total_bytes() / PAGE_SIZE);
 
@@ -138,13 +180,50 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     kprintf("paging : enabled, low %s identity mapped\n",
             fmt_bytes(LOW_MEMORY_LIMIT));
 
+    /* Needs the heap (tables are copied out of physical memory) and paging (on
+     * most machines they live above the identity map). */
+    acpi_init(mbi);
+    {
+        uint16_t port, sleep_type;
+        acpi_power_info(&port, &sleep_type);
+
+        if (port)
+            kprintf("acpi   : soft-off through PM1a at 0x%x, sleep type %u\n",
+                    port, sleep_type);
+        else
+            kputs("acpi   : no soft-off found; the machine can only halt\n");
+    }
+
     /* Move the console onto a linear framebuffer for crisp text at real
      * resolutions.  Needs paging (to map the aperture) and PCI, both up now.
-     * Falls back to VGA text mode if there is no framebuffer. */
-    if (fbcon_init(80, 25))
-        kprintf("video  : framebuffer console, 80x25 (640x400), 8x16 font\n");
-    else
+     *
+     * QEMU's card comes first because its resolution can be changed at
+     * runtime, which is what the textmode app does.  On anything else the
+     * display is the one GRUB set up and described in the Multiboot info: a
+     * fixed mode, but the only one real hardware offers -- and after a UEFI
+     * boot the only console at all, since VGA text mode is gone. */
+    int fbw, fbh;
+    if (fbcon_active()) {
+        /* Already running: the bootloader's framebuffer was taken before the
+         * first line of this log was printed. */
+        int c, r;
+        fbcon_size(&c, &r);
+        fbcon_resolution(&fbw, &fbh);
+        kprintf("video  : bootloader framebuffer, %dx%d (%dx%d), 8x16 font\n",
+                c, r, fbw, fbh);
+    } else if (fbcon_init(80, 25)) {
+        fbcon_resolution(&fbw, &fbh);
+        kprintf("video  : framebuffer console, 80x25 (%dx%d), 8x16 font\n",
+                fbw, fbh);
+    } else if (fbcon_init_boot(mbi, 0, 0)) {   /* 0: fill the screen */
+        int c, r;
+        fbcon_size(&c, &r);
+        fbcon_resolution(&fbw, &fbh);
+        kprintf("video  : bootloader framebuffer, %dx%d (%dx%d), 8x16 font\n",
+                c, r, fbw, fbh);
+    } else {
         kputs("video  : no framebuffer; staying in VGA text mode\n");
+    }
 
     if (ata_init()) {
         uint32_t sectors = ata_sector_count();
@@ -154,12 +233,42 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
         kputs("ata    : no drive on the primary bus\n");
     }
 
+    if (usbdisk_init()) {
+        uint32_t count = usbdisk_sector_count();
+        kprintf("usb    : %s, %u sectors (%s)\n",
+                usbdisk_name(), count, fmt_bytes((uint64_t)count * 512));
+    } else {
+        kputs("usb    : no mass storage device\n");
+    }
+
+    /* A filesystem the bootloader loaded into memory, for machines whose boot
+     * device the kernel has no driver for.  pmm_init() has already fenced the
+     * module off, so it is safe to keep using it in place. */
+    if (mount_boot_module(mbi)) {
+        uint32_t sectors = ramdisk_sector_count();
+        kprintf("ramdisk: boot module, %u sectors (%s)\n",
+                sectors, fmt_bytes((uint64_t)sectors * 512));
+    }
+
     if (wfs_mount()) {
         wdiskinfo_t info;
         wfs_statfs(&info);
-        kprintf("wfs    : mounted, %s of %s free\n",
+        const char *where = "from the disk";
+        switch (wfs_source()) {
+        case WFS_SOURCE_USB:     where = "from the USB device"; break;
+        case WFS_SOURCE_RAMDISK: where = "in RAM (changes are not saved)"; break;
+        default: break;
+        }
+
+        kprintf("wfs    : mounted %s, %s of %s free\n", where,
                 fmt_bytes(info.free_bytes), fmt_bytes(info.total_bytes));
     }
+
+    /* Scratch space in memory, mounted over the empty directory of the same
+     * name on the disk.  It starts with nothing in it and takes only what is
+     * put there. */
+    ramfs_init();
+    kprintf("ramfs  : %s in memory, growing as it is used\n", RAMFS_MOUNT);
 
     net_init();
 
@@ -179,6 +288,7 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     selftest_interrupts();
     selftest_memory();
     selftest_filesystem();
+    selftest_ramdisk();
     selftest_processes();
 
     run_shell();
