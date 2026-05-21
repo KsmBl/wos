@@ -12,10 +12,27 @@
 #include "wfs.h"
 #include "wabi.h"
 
-/* Read the superblock and validate the volume. Returns false if there is no
- * disk or it does not hold a WFS filesystem. */
+/* Where a mounted volume was found. */
+typedef enum {
+    WFS_SOURCE_NONE = 0,
+    WFS_SOURCE_ATA,
+    WFS_SOURCE_USB,
+    WFS_SOURCE_RAMDISK,
+} wfs_source_t;
+
+/* Find and validate the volume: an ATA disk first, then a USB one, then the
+ * image the bootloader loaded into memory.  On a real device it may be a
+ * partition rather than the whole disk, which is how a USB stick carries both
+ * the loader's FAT partition and this filesystem.  False if none of them holds
+ * a WFS volume. */
 bool wfs_mount(void);
 bool wfs_mounted(void);
+
+wfs_source_t wfs_source(void);
+
+/* True when the mounted volume is the copy in memory, i.e. changes are not
+ * persistent. */
+bool wfs_on_ramdisk(void);
 
 /* Resolve an absolute path to an inode number. */
 int wfs_lookup(const char *path, uint32_t *ino_out);
