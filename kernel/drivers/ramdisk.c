@@ -2,6 +2,7 @@
 
 #include "ramdisk.h"
 #include "paging.h"
+#include "pmm.h"
 #include "string.h"
 
 #define SECTOR_BYTES 512u
@@ -29,6 +30,20 @@ bool ramdisk_init(uint64_t phys, uint64_t bytes)
 bool ramdisk_present(void) { return base != NULL; }
 
 uint32_t ramdisk_sector_count(void) { return sectors; }
+
+uint64_t ramdisk_bytes(void) { return (uint64_t)sectors * SECTOR_BYTES; }
+
+void ramdisk_release(void)
+{
+    if (!base)
+        return;
+
+    pmm_release_range((uint64_t)(uintptr_t)base,
+                      (uint64_t)(uintptr_t)base + ramdisk_bytes());
+
+    base    = NULL;
+    sectors = 0;
+}
 
 /* Both directions need the same bounds check; `count` is a uint8_t, so the
  * sum cannot overflow a uint32_t. */

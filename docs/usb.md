@@ -57,6 +57,11 @@ The first two keep what is written to them. The third is a copy: everything
 works normally — every application is there, since they live in the image — but
 nothing written survives the reboot.
 
+When one of the first two wins, the copy in memory is freed: on a 16 MiB image
+that is 16 MiB of RAM holding a second copy of what is already on the disk,
+reserved for the whole boot and never read again.  The log says so --
+`ramdisk: released 16 MiB; the volume is on a real device`.
+
 The RAM copy exists because it needs no driver at all. It is loaded before the
 kernel starts, by GRUB as a Multiboot module on BIOS or by the UEFI loader
 reading `\boot\wos.img` off the volume, which is what keeps a machine bootable

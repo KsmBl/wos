@@ -58,6 +58,19 @@ void pmm_reserve_range(uint64_t start, uint64_t end)
         mark_used(a / PAGE_SIZE);
 }
 
+void pmm_release_range(uint64_t start, uint64_t end)
+{
+    uint64_t before = used_frames;
+
+    for (uint64_t a = ALIGN_UP(start, PAGE_SIZE); a + PAGE_SIZE <= end;
+         a += PAGE_SIZE)
+        mark_free(a / PAGE_SIZE);
+
+    uint64_t freed = before - used_frames;
+
+    reserved_frames = reserved_frames > freed ? reserved_frames - freed : 0;
+}
+
 static void free_range(uint64_t start, uint64_t end)
 {
     /* Only whole frames fully inside the region are usable. */

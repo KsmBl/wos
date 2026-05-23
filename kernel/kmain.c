@@ -270,6 +270,17 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     ramfs_init();
     kprintf("ramfs  : %s in memory, growing as it is used\n", RAMFS_MOUNT);
 
+    /* The bootloader's copy of the filesystem is only needed on a machine
+     * whose disk the kernel cannot read.  When one turned out to be readable,
+     * this is tens of megabytes of memory holding a second copy of what is on
+     * it, reserved for the life of the boot and never read again. */
+    if (wfs_mounted() && !wfs_on_ramdisk() && ramdisk_present()) {
+        uint64_t freed = ramdisk_bytes();
+        ramdisk_release();
+        kprintf("ramdisk: released %s; the volume is on a real device\n",
+                fmt_bytes(freed));
+    }
+
     net_init();
 
     {

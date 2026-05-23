@@ -1,9 +1,8 @@
 /* RAM disk: a WFS volume the bootloader loaded into memory.
  *
- * On a machine with no drive the ATA driver can reach -- booting off a USB
- * stick, which needs a USB host controller and a mass-storage driver this
- * kernel does not have -- GRUB loads build/wos.img as a Multiboot module and
- * the filesystem is mounted straight out of RAM instead.
+ * On a machine no disk driver here can reach -- a USB stick behind a hub, or an
+ * old controller that is neither ATA nor xHCI -- the bootloader loads
+ * build/wos.img into memory and the filesystem is mounted straight out of it.
  *
  * It presents the same 512-byte sector interface as ata.h, so wfs.c talks to
  * either without caring which it got.  Writes land in memory and are lost at
@@ -23,6 +22,14 @@ bool ramdisk_init(uint64_t phys, uint64_t bytes);
 bool ramdisk_present(void);
 
 uint32_t ramdisk_sector_count(void);
+
+/* Bytes of memory it occupies. */
+uint64_t ramdisk_bytes(void);
+
+/* Give the memory back and forget the disk.  For when the volume turned out to
+ * be on a real device after all, and this copy of it is just a duplicate of
+ * what is on the disk taking up tens of megabytes. */
+void ramdisk_release(void);
 
 /* Read/write `count` sectors starting at LBA `lba`.  Return false when the
  * request runs past the end of the disk. */
