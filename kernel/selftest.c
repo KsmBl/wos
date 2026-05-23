@@ -1,6 +1,10 @@
-/* Boot-time self-tests. */
+/* Boot-time self-tests.  Built out entirely by `make SELFTEST=0`; see
+ * selftest.h, which then declares them away. */
 
 #include "selftest.h"
+
+#ifndef WOS_NO_SELFTEST
+
 #include "kprintf.h"
 #include "pit.h"
 #include "pmm.h"
@@ -8,6 +12,7 @@
 #include "paging.h"
 #include "ata.h"
 #include "wfs_kernel.h"
+#include "ramfs.h"
 #include "proc.h"
 #include "sched.h"
 #include "string.h"
@@ -383,6 +388,67 @@ void selftest_filesystem(void)
     kputs("-- filesystem self-test passed --\n");
 }
 
+/* The RAM disk: that it holds what is written to it, and that what it holds is
+ * exactly what is in it -- pages taken as a file grows and given back when it
+ * goes away, with nothing kept in reserve. */
+void selftest_ramdisk(void)
+{
+    static uint8_t pattern[4096];
+    static uint8_t readback[4096];
+    const uint32_t pages = 10;
+    const uint32_t size  = pages * sizeof(pattern);
+
+    kputs("\n-- RAM disk self-test --\n");
+    failures = 0;
+
+    for (uint32_t i = 0; i < sizeof(pattern); i++)
+        pattern[i] = (uint8_t)(i * 7 + 1);
+
+    uint64_t empty = pmm_free_bytes();
+    kprintf("  free   : %s before anything is written to %s\n",
+            fmt_bytes(empty), RAMFS_MOUNT);
+
+    uint32_t ino = 0;
+    check(ramfs_create("/ramdisk/selftest.bin", WFS_TYPE_FILE, &ino) == 0,
+          "a file can be created");
+
+    uint32_t written = 0;
+    for (uint32_t i = 0; i < pages; i++) {
+        int n = ramfs_write(ino, i * sizeof(pattern), pattern, sizeof(pattern));
+        if (n > 0)
+            written += (uint32_t)n;
+    }
+    check(written == size, "40 KiB of it can be written");
+
+    bool identical = true;
+    for (uint32_t i = 0; i < pages; i++) {
+        if (ramfs_read(ino, i * sizeof(readback), readback, sizeof(readback))
+                != (int)sizeof(readback) ||
+            memcmp(readback, pattern, sizeof(readback)) != 0)
+            identical = false;
+    }
+    check(identical, "it reads back byte for byte");
+
+    struct wfs_inode in;
+    check(ramfs_read_inode(ino, &in) == 0 && in.size == size,
+          "its size is what was written");
+
+    uint64_t held = empty - pmm_free_bytes();
+    kprintf("  held   : %s for a %s file\n", fmt_bytes(held), fmt_bytes(size));
+    check(held == size, "it took exactly the memory the file needs");
+
+    check(ramfs_read(ino, size, readback, sizeof(readback)) == 0,
+          "reading past the end returns nothing");
+
+    check(ramfs_unlink("/ramdisk/selftest.bin") == 0, "it can be deleted");
+    check(ramfs_lookup("/ramdisk/selftest.bin", NULL) < 0, "and is then gone");
+    check(pmm_free_bytes() == empty, "every page it held came back");
+
+    if (failures)
+        panic("%u RAM disk self-test failure(s)", failures);
+    kputs("-- RAM disk self-test passed --\n");
+}
+
 void selftest_processes(void)
 {
     kputs("\n-- process self-test --\n");
@@ -473,3 +539,5 @@ void selftest_page_fault(void)
 
     panic("the null page was writable -- it should not have been");
 }
+
+#endif /* WOS_NO_SELFTEST */

@@ -4,6 +4,7 @@
 #include "proc.h"
 #include "pipe.h"
 #include "wfs_kernel.h"
+#include "ramfs.h"
 #include "keyboard.h"
 #include "kheap.h"
 #include "string.h"
@@ -56,6 +57,58 @@ void vfs_inherit_stdio(struct process *child, struct process *parent)
         if (src->type == FD_PIPE)
             pipe_ref(src->pipe, src->write_end);
     }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Which filesystem
+ *
+ *  There are two: the disk, and /ramdisk, which is held in memory and is gone
+ *  at the next boot.  A path decides between them, and a descriptor remembers
+ *  what its path decided, because the inode numbers of the two mean nothing to
+ *  each other.  Everything below this point goes through these.
+ * ------------------------------------------------------------------ */
+
+static int fs_lookup(const char *abs, uint32_t *ino)
+{
+    return ramfs_owns(abs) ? ramfs_lookup(abs, ino) : wfs_lookup(abs, ino);
+}
+
+static int fs_create(const char *abs, uint16_t type, uint32_t *ino)
+{
+    return ramfs_owns(abs) ? ramfs_create(abs, type, ino)
+                           : wfs_create(abs, type, ino);
+}
+
+static int fs_unlink(const char *abs)
+{
+    return ramfs_owns(abs) ? ramfs_unlink(abs) : wfs_unlink(abs);
+}
+
+static int fs_read_inode(bool ram, uint32_t ino, struct wfs_inode *out)
+{
+    return ram ? ramfs_read_inode(ino, out) : wfs_read_inode(ino, out);
+}
+
+static int fs_read(bool ram, uint32_t ino, uint32_t off, void *buf, uint32_t len)
+{
+    return ram ? ramfs_read(ino, off, buf, len) : wfs_read(ino, off, buf, len);
+}
+
+static int fs_write(bool ram, uint32_t ino, uint32_t off, const void *buf,
+                    uint32_t len)
+{
+    return ram ? ramfs_write(ino, off, buf, len)
+               : wfs_write(ino, off, buf, len);
+}
+
+static int fs_truncate(bool ram, uint32_t ino)
+{
+    return ram ? ramfs_truncate(ino) : wfs_truncate(ino);
+}
+
+static int fs_readdir(bool ram, uint32_t ino, uint32_t index, wdirent_t *out)
+{
+    return ram ? ramfs_readdir(ino, index, out) : wfs_readdir(ino, index, out);
 }
 
 static file_t *fd_get(struct process *p, int fd)
@@ -380,11 +433,12 @@ int vfs_open(struct process *p, const char *path, uint32_t flags)
             return -W_EACCES;
     }
 
+    bool ram = ramfs_owns(abs);
     uint32_t ino;
-    r = wfs_lookup(abs, &ino);
+    r = fs_lookup(abs, &ino);
 
     if (r == -W_ENOENT && (flags & W_O_CREAT)) {
-        r = wfs_create(abs, WFS_TYPE_FILE, &ino);
+        r = fs_create(abs, WFS_TYPE_FILE, &ino);
         if (r < 0)
             return r;
     } else if (r < 0) {
@@ -392,7 +446,7 @@ int vfs_open(struct process *p, const char *path, uint32_t flags)
     }
 
     struct wfs_inode in;
-    r = wfs_read_inode(ino, &in);
+    r = fs_read_inode(ram, ino, &in);
     if (r < 0)
         return r;
 
@@ -404,7 +458,7 @@ int vfs_open(struct process *p, const char *path, uint32_t flags)
         return fd;
 
     if ((flags & W_O_TRUNC) && in.type == WFS_TYPE_FILE) {
-        r = wfs_truncate(ino);
+        r = fs_truncate(ram, ino);
         if (r < 0)
             return r;
         in.size = 0;
@@ -412,6 +466,7 @@ int vfs_open(struct process *p, const char *path, uint32_t flags)
 
     p->fds[fd].type   = (in.type == WFS_TYPE_DIR) ? FD_DIR : FD_FILE;
     p->fds[fd].ino    = ino;
+    p->fds[fd].ram    = ram;
     p->fds[fd].flags  = flags;
     p->fds[fd].offset = (flags & W_O_APPEND) ? in.size : 0;
 
@@ -445,7 +500,7 @@ int vfs_read(struct process *p, int fd, void *buf, uint32_t len)
     if ((f->flags & W_O_ACCMODE) == W_O_WRONLY)
         return -W_EACCES;
 
-    int n = wfs_read(f->ino, f->offset, buf, len);
+    int n = fs_read(f->ram, f->ino, f->offset, buf, len);
     if (n > 0)
         f->offset += (uint32_t)n;
     return n;
@@ -472,11 +527,11 @@ int vfs_write(struct process *p, int fd, const void *buf, uint32_t len)
      * have extended the file since this one was opened. */
     if (f->flags & W_O_APPEND) {
         struct wfs_inode in;
-        if (wfs_read_inode(f->ino, &in) == 0)
+        if (fs_read_inode(f->ram, f->ino, &in) == 0)
             f->offset = in.size;
     }
 
-    int n = wfs_write(f->ino, f->offset, buf, len);
+    int n = fs_write(f->ram, f->ino, f->offset, buf, len);
     if (n > 0)
         f->offset += (uint32_t)n;
     return n;
@@ -491,7 +546,7 @@ int vfs_lseek(struct process *p, int fd, int32_t offset, int whence)
         return -W_ESPIPE;
 
     struct wfs_inode in;
-    int r = wfs_read_inode(f->ino, &in);
+    int r = fs_read_inode(f->ram, f->ino, &in);
     if (r < 0)
         return r;
 
@@ -523,12 +578,12 @@ int vfs_stat(struct process *p, const char *path, wstat_t *out)
         return -W_EACCES;
 
     uint32_t ino;
-    r = wfs_lookup(abs, &ino);
+    r = fs_lookup(abs, &ino);
     if (r < 0)
         return r;
 
     struct wfs_inode in;
-    r = wfs_read_inode(ino, &in);
+    r = fs_read_inode(ramfs_owns(abs), ino, &in);
     if (r < 0)
         return r;
 
@@ -547,18 +602,18 @@ int vfs_unlink(struct process *p, const char *path)
         return r;
 
     uint32_t ino;
-    r = wfs_lookup(abs, &ino);
+    r = fs_lookup(abs, &ino);
     if (r < 0)
         return r;
 
     struct wfs_inode in;
-    r = wfs_read_inode(ino, &in);
+    r = fs_read_inode(ramfs_owns(abs), ino, &in);
     if (r < 0)
         return r;
     if (in.type == WFS_TYPE_DIR)
         return -W_EISDIR;
 
-    return wfs_unlink(abs);
+    return fs_unlink(abs);
 }
 
 int vfs_mkdir(struct process *p, const char *path)
@@ -568,7 +623,7 @@ int vfs_mkdir(struct process *p, const char *path)
     if (r < 0)
         return r;
 
-    return wfs_create(abs, WFS_TYPE_DIR, NULL);
+    return fs_create(abs, WFS_TYPE_DIR, NULL);
 }
 
 int vfs_rmdir(struct process *p, const char *path)
@@ -579,18 +634,18 @@ int vfs_rmdir(struct process *p, const char *path)
         return r;
 
     uint32_t ino;
-    r = wfs_lookup(abs, &ino);
+    r = fs_lookup(abs, &ino);
     if (r < 0)
         return r;
 
     struct wfs_inode in;
-    r = wfs_read_inode(ino, &in);
+    r = fs_read_inode(ramfs_owns(abs), ino, &in);
     if (r < 0)
         return r;
     if (in.type != WFS_TYPE_DIR)
         return -W_ENOTDIR;
 
-    return wfs_unlink(abs);
+    return fs_unlink(abs);
 }
 
 int vfs_opendir(struct process *p, const char *path)
@@ -604,12 +659,12 @@ int vfs_opendir(struct process *p, const char *path)
         return -W_EACCES;
 
     uint32_t ino;
-    r = wfs_lookup(abs, &ino);
+    r = fs_lookup(abs, &ino);
     if (r < 0)
         return r;
 
     struct wfs_inode in;
-    r = wfs_read_inode(ino, &in);
+    r = fs_read_inode(ramfs_owns(abs), ino, &in);
     if (r < 0)
         return r;
     if (in.type != WFS_TYPE_DIR)
@@ -621,6 +676,7 @@ int vfs_opendir(struct process *p, const char *path)
 
     p->fds[fd].type   = FD_DIR;
     p->fds[fd].ino    = ino;
+    p->fds[fd].ram    = ramfs_owns(abs);
     p->fds[fd].offset = 0;         /* entry index, not a byte offset */
     p->fds[fd].flags  = W_O_RDONLY;
 
@@ -635,7 +691,7 @@ int vfs_readdir(struct process *p, int fd, wdirent_t *out)
     if (f->type != FD_DIR)
         return -W_ENOTDIR;
 
-    int r = wfs_readdir(f->ino, f->offset, out);
+    int r = fs_readdir(f->ram, f->ino, f->offset, out);
     if (r == 1)
         f->offset++;
     return r;
@@ -654,12 +710,12 @@ int vfs_chdir(struct process *p, const char *path)
         return -W_EACCES;
 
     uint32_t ino;
-    r = wfs_lookup(abs, &ino);
+    r = fs_lookup(abs, &ino);
     if (r < 0)
         return r;
 
     struct wfs_inode in;
-    r = wfs_read_inode(ino, &in);
+    r = fs_read_inode(ramfs_owns(abs), ino, &in);
     if (r < 0)
         return r;
     if (in.type != WFS_TYPE_DIR)
@@ -691,13 +747,14 @@ int vfs_read_file(struct process *p, const char *path, void **data_out,
     if (!may_read(p, abs))
         return -W_EACCES;
 
+    bool ram = ramfs_owns(abs);
     uint32_t ino;
-    r = wfs_lookup(abs, &ino);
+    r = fs_lookup(abs, &ino);
     if (r < 0)
         return r;
 
     struct wfs_inode in;
-    r = wfs_read_inode(ino, &in);
+    r = fs_read_inode(ram, ino, &in);
     if (r < 0)
         return r;
     if (in.type != WFS_TYPE_FILE)
@@ -709,7 +766,7 @@ int vfs_read_file(struct process *p, const char *path, void **data_out,
     if (!buf)
         return -W_ENOMEM;
 
-    r = wfs_read(ino, 0, buf, in.size);
+    r = fs_read(ram, ino, 0, buf, in.size);
     if (r != (int)in.size) {
         kfree(buf);
         return (r < 0) ? r : -W_EIO;

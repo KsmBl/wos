@@ -22,6 +22,22 @@
 .set MB_MAGIC,    0x1BADB002
 .set MB_CHECKSUM, -(MB_MAGIC + MB_FLAGS)
 
+/* Note what is *not* requested here: the video flag (bit 2), which would ask
+ * GRUB to set a mode and report the framebuffer's address.  Asking makes the
+ * mode switch mandatory -- GRUB aborts the boot with
+ *
+ *     error: video/video.c:grub_video_set_mode:782:no suitable video mode found
+ *
+ * on any machine where it cannot deliver one, which includes plain BIOS
+ * machines whose GRUB has no video driver loaded for the text mode it is
+ * already displaying.  Not asking leaves the console exactly as the firmware
+ * set it up, which is what this kernel wants anyway: it captures its 8x16 font
+ * from the card's text-mode font memory, and that memory holds pixels rather
+ * than glyphs once anything has switched to graphics.
+ *
+ * GRUB still fills the framebuffer fields in on its own where it has no text
+ * mode to leave us in (a UEFI boot), and fbcon_init_boot() uses them if it
+ * finds them. */
 .section .multiboot, "a"
 .align 4
     .long MB_MAGIC
@@ -44,6 +60,7 @@ stack_bottom:
     .skip 16384
 .global __boot_stack_top
 __boot_stack_top:
+.global stack_top
 stack_top:
 
 saved_magic: .skip 4
@@ -58,6 +75,8 @@ gdt64:
     .quad 0x00AF9A000000FFFF          /* 0x08 kernel code, 64-bit (L bit)  */
     .quad 0x00CF92000000FFFF          /* 0x10 kernel data                  */
 gdt64_end:
+/* Exported: linuxboot.S loads the same GDT from its own 64-bit entry. */
+.global gdt64_pointer
 gdt64_pointer:
     .word gdt64_end - gdt64 - 1
     .quad gdt64
@@ -89,7 +108,11 @@ _start:
     lgdt gdt64_pointer
     ljmp $0x08, $long_mode_entry
 
-/* CPUID exists if bit 21 of EFLAGS can be flipped. */
+/* CPUID exists if bit 21 of EFLAGS can be flipped.
+ *
+ * The three routines below are shared with linuxboot.S, which needs the same
+ * machine brought up the same way after its own entry path. */
+.global check_cpuid
 check_cpuid:
     pushfl
     popl %eax
@@ -106,6 +129,7 @@ check_cpuid:
     ret
 
 /* Extended leaf 0x80000001, EDX bit 29, is the long mode feature bit. */
+.global check_long_mode
 check_long_mode:
     movl $0x80000000, %eax
     cpuid
@@ -124,6 +148,7 @@ check_long_mode:
  * 512 page tables 4 KiB pages would need.  The kernel, the frame bitmap, the
  * heap and every page table it later allocates all live inside this window,
  * so the kernel can always reach them through the identity map. */
+.global build_page_tables
 build_page_tables:
     movl $boot_pdpt, %eax
     orl  $0x03, %eax                  /* present | writable */
@@ -146,6 +171,7 @@ build_page_tables:
     jne 1b
     ret
 
+.global enter_long_mode
 enter_long_mode:
     movl $boot_pml4, %eax
     movl %eax, %cr3

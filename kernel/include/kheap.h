@@ -9,8 +9,16 @@
 #include "types.h"
 
 /* Size of the arena carved out by pmm_init(). Large enough to hold process
- * control blocks, kernel stacks, file buffers and a whole executable image. */
-#define KHEAP_SIZE (8UL * 1024UL * 1024UL)
+ * control blocks, kernel stacks, file buffers and a whole executable image.
+ *
+ * `make KHEAP_MB=4` sets it from the build (see config.mk); 8 MiB is what it is
+ * without one.  It comes out of RAM for the whole life of the boot, which is
+ * worth knowing on a machine with little of it. */
+#ifndef KHEAP_MB
+#define KHEAP_MB 8
+#endif
+
+#define KHEAP_SIZE ((uint64_t)KHEAP_MB * 1024UL * 1024UL)
 
 void kheap_init(uint64_t base, uint64_t size);
 

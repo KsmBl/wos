@@ -4,9 +4,8 @@
 #include "vga.h"
 #include "pci.h"
 #include "paging.h"
+#include "pmm.h"
 #include "io.h"
-#include "string.h"
-#include "kprintf.h"
 
 /* ------------------------------------------------------------------ *
  *  The display: QEMU's Bochs VBE, programmed through the dispi ports
@@ -30,10 +29,23 @@
 #define FONT_W 8
 #define FONT_H 16
 
-/* Where the framebuffer aperture is mapped: an unused virtual hole in the low
- * gigabyte (768 MiB, above the machine's RAM), so it sits in the shared kernel
- * page directory and is visible in every address space. */
-#define FB_VIRT 0x30000000UL
+/* Where the framebuffer aperture is mapped.  It has to live in the low
+ * gigabyte: that is the one page directory every address space shares, so a
+ * mapping there is reachable no matter which process's CR3 is loaded when the
+ * kernel prints.  Mapping it higher would leave it invisible inside every
+ * process.
+ *
+ * Being inside the identity map means the window shadows whatever RAM sits at
+ * the same physical address on a machine with more than 768 MiB, so
+ * map_aperture() reserves that range from the frame allocator.  QEMU with the
+ * usual 256 MiB has no RAM up there at all and the reservation costs nothing.
+ */
+/* Declared in fbcon.h, where the frame allocator can see them too: it has to
+ * keep its bitmap and the kernel heap out of the window for the same reason
+ * uefi/stub.c keeps everything it hands over below it.  Anything left inside
+ * would be shadowed by the framebuffer and read back as pixels. */
+#define FB_VIRT   FBCON_APERTURE
+#define FB_WINDOW FBCON_APERTURE_SIZE
 
 /* The largest grid we will build, bounding the fixed backing store.  240x75 at
  * 8x16 is 1920x1200, which fits QEMU's default 16 MiB of video memory. */
@@ -42,6 +54,7 @@
 
 static volatile uint32_t *fb;        /* the linear framebuffer          */
 static uint64_t fb_phys;
+static uint64_t fb_window;           /* bytes of it mapped, and reserved */
 static uint32_t fb_stride;           /* pixels per row                  */
 static int      px_w, px_h;          /* framebuffer size in pixels      */
 
@@ -53,11 +66,23 @@ static bool active;
 static char    cell_ch[MAX_ROWS][MAX_COLS];
 static uint8_t cell_at[MAX_ROWS][MAX_COLS];   /* VGA attribute byte      */
 
+/* What is currently on the glass, which after a scroll is not what the backing
+ * store says any more.  Keeping it lets the repaint touch only the cells that
+ * actually differ, instead of writing every pixel of the screen back to a
+ * device that is slow to write and slower to read. */
+static char    shown_ch[MAX_ROWS][MAX_COLS];
+static uint8_t shown_at[MAX_ROWS][MAX_COLS];
+
 static int     cur_row, cur_col;
 static uint8_t attr = 0x07;          /* light grey on black             */
 static bool    wrap_pending;
 static bool    cursor_visible = true;
 static int     drawn_row = -1, drawn_col = -1;
+
+/* True when the bootloader handed us the framebuffer.  Then the resolution is
+ * whatever it set and cannot be changed from here: there is no hardware
+ * interface behind it, only the mode the firmware left the card in. */
+static bool    fixed_mode;
 
 /* The 16 VGA colours as 0x00RRGGBB. */
 static const uint32_t palette[16] = {
@@ -94,6 +119,17 @@ static void dispi_set_res(int w, int h)
  *  Pixel and glyph drawing
  * ------------------------------------------------------------------ */
 
+/* Push out whatever is sitting in the write-combining buffers.
+ *
+ * Combined writes reach the card when a buffer fills or something evicts it,
+ * which for a console means the last few characters typed could sit in the CPU
+ * and not on the screen until the next output came along.  One fence at the end
+ * of a character costs nothing next to the five hundred stores that drew it. */
+static inline void flush_writes(void)
+{
+    __asm__ volatile("sfence" ::: "memory");
+}
+
 static void fill_rect(int x, int y, int w, int h, uint32_t rgb)
 {
     for (int yy = y; yy < y + h && yy < px_h; yy++) {
@@ -120,6 +156,19 @@ static void draw_cell(int row, int col)
         for (int gx = 0; gx < FONT_W; gx++)
             line[gx] = (bits & (0x80 >> gx)) ? fg : bg;
     }
+
+    shown_ch[row][col] = c;
+    shown_at[row][col] = a;
+}
+
+/* Bring the glass back into agreement with the backing store. */
+static void redraw_changed(void)
+{
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            if (cell_ch[r][c] != shown_ch[r][c] ||
+                cell_at[r][c] != shown_at[r][c])
+                draw_cell(r, c);
 }
 
 static void put_cell(int row, int col, char c, uint8_t a)
@@ -153,18 +202,33 @@ static void clear_all(void)
 {
     for (int r = 0; r < rows; r++)
         for (int c = 0; c < cols; c++) {
-            cell_ch[r][c] = ' ';
-            cell_at[r][c] = attr;
+            cell_ch[r][c] = shown_ch[r][c] = ' ';
+            cell_at[r][c] = shown_at[r][c] = attr;
         }
+    /* One sweep of the whole screen in the background colour, which is what
+     * every one of those cells now looks like. */
     fill_rect(0, 0, px_w, px_h, palette[(attr >> 4) & 0x0F]);
     cur_row = cur_col = 0;
     wrap_pending = false;
     drawn_row = drawn_col = -1;
 }
 
+/* Scroll by one row.
+ *
+ * The pixels are not moved.  Moving them means reading the framebuffer back,
+ * and a framebuffer is memory that is fast to write and desperately slow to
+ * read -- writes are posted and combined, reads are round trips to a device
+ * across PCIe, one per access, with nothing to hide the latency.  Copying a
+ * 1280x800 screen up a line that way took seconds on real hardware and repainted
+ * visibly while it did.
+ *
+ * So the move happens in the backing store, which is ordinary cached memory,
+ * and the glass is brought back into agreement with it afterwards -- a cell at
+ * a time, skipping the ones that already show what they should.  Scrolling text
+ * leaves most of the screen's right-hand side blank in both pictures, so a
+ * good half of the work usually disappears there. */
 static void scroll(void)
 {
-    /* Shift the backing store up one row... */
     for (int r = 1; r < rows; r++)
         for (int c = 0; c < cols; c++) {
             cell_ch[r - 1][c] = cell_ch[r][c];
@@ -175,11 +239,7 @@ static void scroll(void)
         cell_at[rows - 1][c] = attr;
     }
 
-    /* ...and the pixels, then clear the new bottom line. */
-    uint32_t row_px = (uint32_t)FONT_H * fb_stride;
-    memmove((void *)fb, (void *)(fb + row_px),
-            (size_t)(rows - 1) * FONT_H * fb_stride * 4);
-    fill_rect(0, (rows - 1) * FONT_H, px_w, FONT_H, palette[(attr >> 4) & 0x0F]);
+    redraw_changed();
 }
 
 static void newline(void)
@@ -312,6 +372,7 @@ void fbcon_putc(char c)
 
     if (consume_escape(c)) {
         draw_cursor();
+        flush_writes();
         return;
     }
 
@@ -337,6 +398,7 @@ void fbcon_putc(char c)
     }
 
     draw_cursor();
+    flush_writes();
 }
 
 /* ------------------------------------------------------------------ *
@@ -353,40 +415,159 @@ void fbcon_size(int *c, int *r)
 
 int fbcon_set_mode(int c, int r)
 {
+    /* On a framebuffer whose size is fixed, asking for nothing in particular
+     * means filling the screen: there is no resolution to change to match a
+     * grid, so the grid is made to match the resolution. */
+    if (fixed_mode && c <= 0 && r <= 0) {
+        c = px_w / FONT_W;
+        r = px_h / FONT_H;
+    }
+
     if (c < 40)  c = 40;
     if (r < 25)  r = 25;
     if (c > MAX_COLS) c = MAX_COLS;
     if (r > MAX_ROWS) r = MAX_ROWS;
 
+    if (fixed_mode) {
+        /* Never more than the resolution the bootloader chose can hold. */
+        if (c > px_w / FONT_W) c = px_w / FONT_W;
+        if (r > px_h / FONT_H) r = px_h / FONT_H;
+    }
+
     cols = c;
     rows = r;
-    dispi_set_res(c * FONT_W, r * FONT_H);
+    if (!fixed_mode)
+        dispi_set_res(c * FONT_W, r * FONT_H);
     attr = 0x07;
     clear_all();
     return 0;
 }
 
+/* Map `bytes` of the framebuffer into the shared low-gigabyte window, rounded
+ * up to whole 2 MiB pages.
+ *
+ * Every byte mapped costs a byte of RAM, because the window sits inside the
+ * identity map and hides the memory at the same physical address, which then
+ * has to be kept from the frame allocator.  So the window is sized to the
+ * display: a fixed mode gets exactly what it needs, and only the one card whose
+ * resolution can change at runtime gets the full 16 MiB that the largest mode
+ * would want.
+ *
+ * This runs before paging_init() on a UEFI boot -- the console has to be up
+ * before the rest of the kernel starts printing, because there is no text mode
+ * behind it to catch the output -- so it goes through the boot page tables
+ * when the real ones are not built yet. */
+static void map_aperture(uint64_t phys, uint64_t bytes)
+{
+    if (bytes > FB_WINDOW)
+        bytes = FB_WINDOW;
+    fb_window = (bytes + 0x1FFFFF) & ~0x1FFFFFUL;
+
+    /* Write-combining, or the console is unusable on real hardware: an uncached
+     * store to a PCIe device is a round trip the CPU waits for, and a screen is
+     * a million of them.  On the emulators the framebuffer is host memory and
+     * the difference is invisible, which is why this went unnoticed for so
+     * long.  A CPU without PAT keeps the uncached mapping and still works. */
+    uint64_t flags = PTE_WRITE;
+    if (paging_enable_write_combining())
+        flags |= PTE_WC;
+
+    for (uint64_t off = 0; off < fb_window; off += 0x200000) {
+        if (paging_ready())
+            paging_map_huge(FB_VIRT + off, phys + off, flags);
+        else
+            paging_map_huge_early(FB_VIRT + off, phys + off, flags);
+    }
+
+    fb_phys = phys;
+    fb = (volatile uint32_t *)FB_VIRT;
+}
+
+/* The window overwrites the identity mapping of the physical addresses it
+ * covers, so those frames must never also be handed out as ordinary RAM.  The
+ * allocator does not exist when the mapping is made on the UEFI path, so this
+ * is a separate step the caller makes once it does. */
+void fbcon_reserve_aperture(void)
+{
+    if (active)
+        pmm_reserve_range(FB_VIRT, FB_VIRT + fb_window);
+}
+
 bool fbcon_init(int c, int r)
 {
+    if (!vga_font16_valid())
+        return false;
+
     pci_device_t dev = pci_find(0x1234, 0x1111);   /* QEMU standard VGA */
     if (!dev.found)
         return false;
 
-    fb_phys = dev.bar0 & ~0xFUL;
-    if (!fb_phys)
+    uint64_t phys = dev.bar0 & ~0xFUL;
+    if (!phys)
         return false;
 
-    /* Map the aperture at a fixed virtual address in the low gigabyte -- an
-     * unused hole above RAM.  That region lives in the kernel page directory
-     * every address space shares, so the framebuffer is reachable no matter
-     * which process's CR3 is loaded when the kernel prints; mapping it high
-     * instead would leave it invisible inside every process.  16 MiB of 2 MiB
-     * pages covers any resolution we offer. */
-    for (uint64_t off = 0; off < 16u * 1024 * 1024; off += 0x200000)
-        paging_map_huge(FB_VIRT + off, fb_phys + off, PTE_WRITE);
-    fb = (volatile uint32_t *)FB_VIRT;
+    /* The whole window: this card's resolution changes at runtime, and the
+     * largest mode the console will set has to be mapped before it is asked
+     * for. */
+    map_aperture(phys, FB_WINDOW);
 
     active = true;
+    fixed_mode = false;
     fbcon_set_mode(c, r);
     return true;
+}
+
+bool fbcon_init_boot(const struct multiboot_info *mbi, int c, int r)
+{
+    /* Nothing to draw with.  This is why the Multiboot header asks for a text
+     * mode rather than a linear one: the font has to survive the handover. */
+    if (!vga_font16_valid())
+        return false;
+
+    if (!(mbi->flags & MB_FLAG_FRAMEBUFFER))
+        return false;
+
+    /* Type 1 is a linear RGB framebuffer; type 2 means the bootloader left the
+     * card in EGA text mode, which vga.c already drives. */
+    if (mbi->framebuffer_type != MB_FRAMEBUFFER_RGB)
+        return false;
+
+    /* Only 32 bits per pixel: every glyph here is drawn as uint32_t writes,
+     * and a 24- or 16-bit mode would need its own pixel path.  GRUB is asked
+     * for 32bpp in grub.cfg and in the Multiboot header, so this is the mode
+     * we get in practice. */
+    if (mbi->framebuffer_bpp != 32 || !mbi->framebuffer_addr)
+        return false;
+
+    uint64_t addr   = mbi->framebuffer_addr;
+    uint32_t pitch  = mbi->framebuffer_pitch;
+    uint32_t width  = mbi->framebuffer_width;
+    uint32_t height = mbi->framebuffer_height;
+
+    if (width < FONT_W || height < FONT_H || pitch < width * 4)
+        return false;
+
+    /* Only what the aperture window can cover may be drawn on; a taller mode
+     * is used down to the rows that fit rather than faulting past the end. */
+    if ((uint64_t)pitch * height > FB_WINDOW)
+        height = (uint32_t)(FB_WINDOW / pitch);
+
+    /* This resolution is the one the firmware set and the only one there will
+     * be, so the window need be no larger than the picture. */
+    map_aperture(addr, (uint64_t)pitch * height);
+
+    px_w      = (int)width;
+    px_h      = (int)height;
+    fb_stride = pitch / 4;            /* 32bpp, so 4 bytes per pixel */
+
+    active     = true;
+    fixed_mode = true;
+    fbcon_set_mode(c, r);
+    return true;
+}
+
+void fbcon_resolution(int *w, int *h)
+{
+    if (w) *w = px_w;
+    if (h) *h = px_h;
 }

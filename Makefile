@@ -6,15 +6,31 @@
 #   make debug    boot stopped, waiting for gdb on :1234
 #   make clean    remove build/
 #
+# Build settings live in config.mk -- edit that file, or override any of them
+# for one build on the command line:
+#
+#   make SELFTEST=0    build without the boot-time self-tests
+#   make DISK_MB=16    build a smaller filesystem image
+#   make config        print what is currently set
+#
 # No cross-compiler is required: the host gcc builds 64-bit freestanding code
 # with -m64, and GAS handles the assembly, so there is no dependency on nasm.
+
+# Settings, and their defaults if the file is missing.  config.mk uses ?=, so
+# anything given on the command line still wins over it.
+-include config.mk
+
+SELFTEST ?= 1
+DISK_MB  ?= 64
+KHEAP_MB ?= 8
+QEMU_MEM ?= 256M
+TIMEOUT  ?= 12
 
 BUILD    := build
 ISODIR   := $(BUILD)/isodir
 KERNEL   := $(BUILD)/kernel.elf
 ISO      := $(BUILD)/wos.iso
 DISK     := $(BUILD)/wos.img
-DISK_MB  := 64
 
 CC      := gcc
 LD      := ld
@@ -36,7 +52,10 @@ CFLAGS := -m64 -std=gnu11 -ffreestanding -O2 -g \
           -fno-pie -fno-pic -fno-stack-protector -fno-builtin \
           -fno-asynchronous-unwind-tables -fno-omit-frame-pointer \
           -mcmodel=small -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
-          -DWOS_KERNEL -Ikernel/include -Iinclude
+          -DWOS_KERNEL -DKHEAP_MB=$(KHEAP_MB) -Ikernel/include -Iinclude
+ifeq ($(SELFTEST),0)
+CFLAGS += -DWOS_NO_SELFTEST
+endif
 ASFLAGS := -m64 -g -Ikernel/include -Iinclude
 LDFLAGS := -m elf_x86_64 -nostdlib -no-pie -z noexecstack -n
 
@@ -47,17 +66,46 @@ KSRC_S := $(shell find kernel -name '*.S' | sort)
 KOBJ   := $(patsubst %.c,$(BUILD)/%.o,$(KSRC_C)) $(patsubst %.S,$(BUILD)/%.asm.o,$(KSRC_S))
 KDEP   := $(KOBJ:.o=.d)
 
-.PHONY: all kernel lib apps iso disk run run-nox log debug clean
+.PHONY: all kernel lib apps efi iso disk run run-nox log debug clean config
 
 all: iso disk
 
 kernel: $(KERNEL)
 
-$(BUILD)/%.o: %.c
+# What the next build will use, and where each value came from -- editing
+# config.mk and forgetting to save it looks exactly like a build that ignored
+# you, and this is how to tell the difference.
+config:
+	@echo "settings (config.mk, overridable on the command line)"
+	@echo "  SELFTEST = $(SELFTEST)   $(if $(filter 0,$(SELFTEST)),no boot-time self-tests,self-tests run at boot)"
+	@echo "  DISK_MB  = $(DISK_MB)   filesystem image size"
+	@echo "  KHEAP_MB = $(KHEAP_MB)   kernel heap arena"
+	@echo "  QEMU_MEM = $(QEMU_MEM)   memory for make run / make log"
+	@echo "  TIMEOUT  = $(TIMEOUT)   seconds make log waits"
+
+# Settings that change what is built without touching a single source file.
+# Nothing in the dependency files knows about them, so make would happily keep
+# output built the other way.  A stamp named after the current value stands in
+# for it: change the value and the name no longer exists, which rebuilds
+# whatever depends on it.
+KERNEL_STAMP := $(BUILD)/.build-selftest$(SELFTEST)-kheap$(KHEAP_MB)
+DISK_STAMP   := $(BUILD)/.disk-$(DISK_MB)
+
+$(KERNEL_STAMP):
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/.build-*
+	@touch $@
+
+$(DISK_STAMP):
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/.disk-*
+	@touch $@
+
+$(BUILD)/%.o: %.c $(KERNEL_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD)/%.asm.o: %.S
+$(BUILD)/%.asm.o: %.S $(KERNEL_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -MMD -MP -c $< -o $@
 
@@ -68,11 +116,82 @@ $(KERNEL): $(KOBJ) kernel/linker.ld
 	@# so fail the build here rather than at boot.
 	@grub-file --is-x86-multiboot $@ && echo "  multiboot header OK: $@"
 
+# ---------------------------------------------------------------------------
+# The UEFI loader
+#
+# Under UEFI nothing loads WOS but WOS: GRUB cannot hand over to this kernel on
+# current firmware (see docs/usb.md), and the one path it does support wants a
+# UEFI application anyway.  So the kernel is built into one -- a PE32+ binary
+# the firmware loads straight from the EFI system partition.
+#
+# No cross-compiler here either: the host gcc builds position independent
+# freestanding code, ld links it as a shared object, and objcopy converts that
+# to PE.  The stub must come out with no relocations at all, since nothing
+# applies them at load time, so the build checks.
+# ---------------------------------------------------------------------------
+
+EFIAPP := $(BUILD)/BOOTX64.EFI
+
+UCFLAGS_EFI := -m64 -std=gnu11 -ffreestanding -O2 -fpic -fno-plt \
+               -Wall -Wextra -Wno-unused-parameter \
+               -fno-stack-protector -fno-builtin -mno-red-zone \
+               -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
+               -fno-asynchronous-unwind-tables \
+               -Iuefi -Ikernel/include -Iinclude
+
+$(BUILD)/uefi/stub.o: uefi/stub.c $(KERNEL)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS_EFI) \
+	    -DKERNEL_MEM_END=0x$$(nm $(KERNEL) | awk '/ __kernel_end$$/ { print $$1 }') \
+	    -c $< -o $@
+
+# The kernel image is embedded, so blob.S depends on it being built first.
+$(BUILD)/uefi/blob.o: uefi/blob.S $(BUILD)/kernel.bin
+	@mkdir -p $(dir $@)
+	$(CC) -m64 -c $< -o $@
+
+$(BUILD)/kernel.bin: $(KERNEL)
+	@objcopy -O binary $(KERNEL) $@
+
+efi: $(EFIAPP)
+
+$(EFIAPP): $(BUILD)/uefi/stub.o $(BUILD)/uefi/blob.o uefi/stub.lds
+	$(LD) -shared -Bsymbolic -nostdlib -e efi_main -T uefi/stub.lds \
+	    -o $(BUILD)/uefi/stub.so $(BUILD)/uefi/stub.o $(BUILD)/uefi/blob.o
+	@# Nothing applies relocations to this image at load time, so any that
+	@# survived the link would be silently wrong addresses at runtime.
+	@if readelf -r $(BUILD)/uefi/stub.so | grep -q '^[0-9a-f]'; then \
+	    echo "  ERROR: the UEFI stub has load-time relocations:"; \
+	    readelf -r $(BUILD)/uefi/stub.so; exit 1; \
+	fi
+	@# A section with no contents cannot be carried into the PE, so anything
+	@# left in one would be written past the end of the image the firmware
+	@# allocates -- into memory belonging to somebody else.  uefi/stub.lds
+	@# folds .bss into .data to prevent it; this checks that it worked.
+	@if readelf -SW $(BUILD)/uefi/stub.so | \
+	    awk '$$3 == "NOBITS" && $$7 != "000000" { found = 1 } END { exit !found }'; then \
+	    echo "  ERROR: the UEFI stub has data outside the loaded image:"; \
+	    readelf -SW $(BUILD)/uefi/stub.so | awk '$$3 == "NOBITS"'; exit 1; \
+	fi
+	objcopy -j .text -j .rodata -j .data -j .reloc \
+	    -O efi-app-x86_64 --subsystem=10 $(BUILD)/uefi/stub.so $@
+	@echo "  built $@"
+
 iso: $(ISO)
 
-$(ISO): $(KERNEL) grub/grub.cfg
-	@mkdir -p $(ISODIR)/boot/grub
+# The disk image rides along as a Multiboot module.  That is what makes the ISO
+# self-contained: booted from a USB stick, where the kernel has no driver for
+# the boot device, GRUB loads the filesystem into memory for it.
+# The ISO carries both paths: GRUB with the Multiboot kernel for BIOS, and the
+# UEFI loader for firmware that boots the ISO the other way, which GRUB's EFI
+# build chainloads into.
+$(ISO): $(KERNEL) $(EFIAPP) $(DISK) grub/grub.cfg
+	@mkdir -p $(ISODIR)/boot/grub $(ISODIR)/EFI/wos
 	cp $(KERNEL) $(ISODIR)/boot/kernel.elf
+	cp $(DISK) $(ISODIR)/boot/wos.img
+	@# Not /EFI/BOOT: grub-mkrescue puts its own boot file there, on the EFI
+	@# system partition it builds.  Its config chainloads this one.
+	cp $(EFIAPP) $(ISODIR)/EFI/wos/BOOTX64.EFI
 	cp grub/grub.cfg $(ISODIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $@ $(ISODIR) 2>/dev/null
 	@echo "  built $@"
@@ -175,10 +294,13 @@ APP_SRC    := $(shell find app -type f 2>/dev/null)
 
 disk: $(DISK)
 
-$(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(ROOTFS_SRC) $(APP_SRC)
+$(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(ROOTFS_SRC) $(APP_SRC) $(DISK_STAMP)
 	@rm -rf $(ROOTFS)
 	@mkdir -p $(ROOTFS)
 	@cp -r rootfs/. $(ROOTFS)/
+	@# The mount point for the in-memory filesystem.  It is empty on the disk
+	@# and always will be: everything written to /ramdisk goes to memory.
+	@mkdir -p $(ROOTFS)/ramdisk
 	@for a in $(APPS); do \
 	    mkdir -p $(ROOTFS)/app/$$a/sourcecode; \
 	    cp $(BUILD)/app/$$a/launch $(ROOTFS)/app/$$a/launch; \
@@ -198,7 +320,7 @@ QEMU := qemu-system-x86_64
 KVM := $(shell test -w /dev/kvm 2>/dev/null && echo "-enable-kvm -cpu host")
 # An RTL8139 on QEMU's user-mode (SLIRP) network gives the guest 10.0.2.15 with
 # a gateway at 10.0.2.2 that answers ARP and ping -- what the net stack targets.
-QEMU_FLAGS := $(KVM) -m 256M \
+QEMU_FLAGS := $(KVM) -m $(QEMU_MEM) \
               -cdrom $(ISO) \
               -drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
               -netdev user,id=net0 -device rtl8139,netdev=net0 \
@@ -215,7 +337,6 @@ run-nox: all
 # Boot headless for TIMEOUT seconds and capture the serial log to a file.
 # Piping `-serial stdio` through a timeout loses output to buffering, so the
 # automated checks always go through a file instead.
-TIMEOUT ?= 12
 log: all
 	@rm -f $(BUILD)/serial.log
 	-@timeout $(TIMEOUT) $(QEMU) $(QEMU_FLAGS) \

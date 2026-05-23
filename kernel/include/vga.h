@@ -29,4 +29,13 @@ void vga_size(int *cols, int *rows);
 /* The 8x16 font captured from the card, 256 glyphs of 16 bytes. */
 const uint8_t *vga_font16(void);
 
+/* Whether glyphs are available at all.  Always true now that the kernel
+ * carries a font of its own; it stays as the console's check so that a future
+ * build without the built-in font cannot silently draw blank screens. */
+bool vga_font16_valid(void);
+
+/* The compiled-in IBM VGA 8x16 font, used when the card had none to capture.
+ * kernel/drivers/font8x16.c. */
+extern const uint8_t font8x16_builtin[256 * 16];
+
 #endif /* WOS_VGA_H */

@@ -16,6 +16,9 @@
  * masked away. */
 #define FRAME_OF(e) ((e) & 0x000FFFFFFFFFF000UL)
 
+/* The MSR holding the eight page attribute table entries. */
+#define IA32_PAT 0x277
+
 /* Built by boot.S and adopted as the kernel's address space. */
 extern uint64_t boot_pml4[];
 extern uint64_t boot_pdpt[];
@@ -32,6 +35,56 @@ static inline void invlpg(uint64_t virt)
 static inline void load_cr3(uint64_t phys)
 {
     __asm__ volatile("mov %0, %%cr3" : : "r"(phys) : "memory");
+}
+
+/* Reload CR3 with whatever is already in it: every non-global TLB entry goes,
+ * which is what a change in caching rules needs. */
+static inline void flush_tlb(void)
+{
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    load_cr3(cr3);
+}
+
+/* Point PAT entry 4 -- the one PTE_WC selects -- at write-combining.
+ *
+ * A framebuffer is uncached by default, and uncached means every 32-bit store
+ * crosses the bus on its own and is waited for.  Filling a 1280x800 screen that
+ * way is a million round trips to a device on the far side of PCIe, which is
+ * seconds of visible repainting.  Write-combining lets the CPU gather those
+ * stores into full cache-line bursts, which is the difference between a console
+ * that scrolls and one that crawls.
+ *
+ * The memory type actually used is the stricter of the MTRR and PAT types,
+ * except that WC in the PAT wins over UC in an MTRR -- which is exactly the
+ * case here, since firmware marks the framebuffer UC. */
+bool paging_enable_write_combining(void)
+{
+    static bool done;
+    if (done)
+        return true;
+
+    uint32_t eax = 1, ebx = 0, ecx = 0, edx = 0;
+    __asm__ volatile("cpuid"
+                     : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx));
+    if (!(edx & (1u << 16)))          /* no PAT on this CPU */
+        return false;
+
+    uint32_t lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(IA32_PAT));
+
+    /* Entry 4 is the second byte of the high half.  Everything else keeps its
+     * reset value, so ordinary mappings are unaffected. */
+    hi = (hi & ~0xFFu) | 0x01u;       /* 0x01: write-combining */
+
+    /* No cached line may survive a change in what its memory type means. */
+    __asm__ volatile("wbinvd" ::: "memory");
+    __asm__ volatile("wrmsr" : : "a"(lo), "d"(hi), "c"(IA32_PAT) : "memory");
+    __asm__ volatile("wbinvd" ::: "memory");
+    flush_tlb();
+
+    done = true;
+    return true;
 }
 
 static uint64_t *zeroed_low_frame(void)
@@ -180,9 +233,10 @@ uint64_t paging_translate(addrspace_t *as, uint64_t virt)
     if (!(pde & PTE_PRESENT))
         return 0;
 
-    /* A 2 MiB page ends the walk here. */
+    /* A 2 MiB page ends the walk here.  Its address starts at bit 21; the bits
+     * below that are flags, PTE_WC among them. */
     if (pde & PTE_HUGE)
-        return FRAME_OF(pde) | (virt & 0x1FFFFF);
+        return (FRAME_OF(pde) & ~0x1FFFFFUL) | (virt & 0x1FFFFF);
 
     uint64_t *pt = (uint64_t *)FRAME_OF(pde);
     uint64_t  pte = pt[PT_INDEX(virt)];
@@ -239,7 +293,8 @@ bool paging_map_huge(uint64_t virt, uint64_t phys, uint64_t flags)
         return false;
 
     pd[PD_INDEX(virt)] = (phys & ~0x1FFFFFUL)
-                       | (flags & PTE_WRITE) | PTE_HUGE | PTE_PRESENT;
+                       | (flags & (PTE_WRITE | PTE_WC | PTE_UNCACHED))
+                       | PTE_HUGE | PTE_PRESENT;
 
     if (&kernel_space == current_space)
         invlpg(virt);
@@ -278,6 +333,11 @@ addrspace_t *paging_new_addrspace(void)
      * it; it stays clear on the entry covering the identity map, which is
      * what keeps kernel memory out of reach of ring 3. */
     as->pml4[0] = (uint64_t)pdpt | PTE_PRESENT | PTE_WRITE | PTE_USER;
+
+    /* And the device window, so a driver called from inside a process still
+     * reaches its controller.  Every device is mapped before the first process
+     * exists, so copying the entry once is enough. */
+    pdpt[PDPT_INDEX(DEVICE_WINDOW)] = boot_pdpt[PDPT_INDEX(DEVICE_WINDOW)];
     pdpt[0]     = boot_pdpt[0];
     as->table_frames = 2;
 
@@ -293,9 +353,14 @@ void paging_free_addrspace(addrspace_t *as)
 
     uint64_t *pdpt = (uint64_t *)FRAME_OF(as->pml4[0]);
 
-    /* Entry 0 is the shared kernel identity map and is not ours to free. */
+    /* Entry 0 is the shared kernel identity map, and the device window is
+     * shared the same way: both were borrowed from the kernel's tables when
+     * this space was made, and freeing either would take them away from every
+     * other process as well. */
     for (uint64_t i = 1; i < 512; i++) {
         if (!(pdpt[i] & PTE_PRESENT))
+            continue;
+        if (i == PDPT_INDEX(DEVICE_WINDOW))
             continue;
 
         uint64_t *pd = (uint64_t *)FRAME_OF(pdpt[i]);
@@ -331,6 +396,70 @@ uint64_t paging_user_bytes(const addrspace_t *as)
 {
     return (as->user_frames + as->table_frames) * PAGE_SIZE;
 }
+
+/* Page directories for mappings made before the frame allocator exists.  Two
+ * covers the framebuffer wherever firmware puts it: one gigabyte-sized slot for
+ * the aperture, one spare. */
+static uint64_t early_pd[2][512] __attribute__((aligned(PAGE_SIZE)));
+static unsigned early_pd_used;
+
+bool paging_map_huge_early(uint64_t virt, uint64_t phys, uint64_t flags)
+{
+    /* Only the first PML4 entry exists this early, which is the whole of the
+     * low 512 GiB -- everything the kernel ever maps for itself. */
+    if (PML4_INDEX(virt) != 0)
+        return false;
+
+    uint64_t *pd;
+    uint64_t entry = boot_pdpt[PDPT_INDEX(virt)];
+
+    if (entry & PTE_PRESENT) {
+        pd = (uint64_t *)FRAME_OF(entry);
+    } else {
+        if (early_pd_used >= sizeof(early_pd) / sizeof(early_pd[0]))
+            return false;
+        pd = early_pd[early_pd_used++];
+        for (int i = 0; i < 512; i++)
+            pd[i] = 0;
+        boot_pdpt[PDPT_INDEX(virt)] = (uint64_t)pd | PTE_PRESENT | PTE_WRITE;
+    }
+
+    pd[PD_INDEX(virt)] = (phys & ~0x1FFFFFUL)
+                       | (flags & (PTE_WRITE | PTE_WC | PTE_UNCACHED))
+                       | PTE_HUGE | PTE_PRESENT;
+    invlpg(virt);
+    return true;
+}
+
+/* The device window: 2 MiB pages handed out in order, never given back.  There
+ * are a handful of controllers in a machine and they live as long as it runs,
+ * so nothing more elaborate is called for. */
+static uint64_t device_next = DEVICE_WINDOW;
+
+void *paging_map_device(uint64_t phys, uint64_t size)
+{
+    uint64_t base   = phys & ~0x1FFFFFUL;
+    uint64_t offset = phys - base;
+    uint64_t span   = (offset + size + 0x1FFFFF) & ~0x1FFFFFUL;
+    uint64_t virt   = device_next;
+
+    if (!phys || !size)
+        return NULL;
+
+    /* One page directory covers a gigabyte; running past it would need a
+     * second, and nothing here is that hungry. */
+    if (virt + span > DEVICE_WINDOW + 0x40000000UL)
+        return NULL;
+
+    for (uint64_t off = 0; off < span; off += 0x200000)
+        if (!paging_map_huge(virt + off, base + off, PTE_WRITE | PTE_UNCACHED))
+            return NULL;
+
+    device_next = virt + span;
+    return (void *)(virt + offset);
+}
+
+bool paging_ready(void) { return current_space != 0; }
 
 void paging_init(void)
 {

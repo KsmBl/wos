@@ -8,6 +8,8 @@
 
 #include "wfs_kernel.h"
 #include "ata.h"
+#include "ramdisk.h"
+#include "usbdisk.h"
 #include "kheap.h"
 #include "string.h"
 #include "kprintf.h"
@@ -18,18 +20,45 @@ static bool                  mounted;
 
 /* ------------------------------------------------------------------ *
  *  Block I/O
+ *
+ *  The volume lives on one of three devices, and may be a partition rather
+ *  than the whole of it.  wfs_mount() settles both questions; everything below
+ *  goes through these two functions, so the rest of the driver never asks.
  * ------------------------------------------------------------------ */
+
+static wfs_source_t source;
+static uint32_t     partition_lba;    /* first sector of the volume */
+
+static bool sectors_read(uint32_t lba, uint8_t count, void *buf)
+{
+    switch (source) {
+    case WFS_SOURCE_ATA:     return ata_read_sectors(lba, count, buf);
+    case WFS_SOURCE_USB:     return usbdisk_read_sectors(lba, count, buf);
+    case WFS_SOURCE_RAMDISK: return ramdisk_read_sectors(lba, count, buf);
+    default:                 return false;
+    }
+}
+
+static bool sectors_write(uint32_t lba, uint8_t count, const void *buf)
+{
+    switch (source) {
+    case WFS_SOURCE_ATA:     return ata_write_sectors(lba, count, buf);
+    case WFS_SOURCE_USB:     return usbdisk_write_sectors(lba, count, buf);
+    case WFS_SOURCE_RAMDISK: return ramdisk_write_sectors(lba, count, buf);
+    default:                 return false;
+    }
+}
 
 static bool block_read(uint32_t block, void *buf)
 {
-    return ata_read_sectors(block * WFS_SECTORS_PER_BLOCK,
-                            WFS_SECTORS_PER_BLOCK, buf);
+    return sectors_read(partition_lba + block * WFS_SECTORS_PER_BLOCK,
+                        WFS_SECTORS_PER_BLOCK, buf);
 }
 
 static bool block_write(uint32_t block, const void *buf)
 {
-    return ata_write_sectors(block * WFS_SECTORS_PER_BLOCK,
-                             WFS_SECTORS_PER_BLOCK, buf);
+    return sectors_write(partition_lba + block * WFS_SECTORS_PER_BLOCK,
+                         WFS_SECTORS_PER_BLOCK, buf);
 }
 
 static bool sync_superblock(void)
@@ -672,22 +701,85 @@ void wfs_statfs(wdiskinfo_t *out)
 
 bool wfs_mounted(void) { return mounted; }
 
-bool wfs_mount(void)
+bool wfs_on_ramdisk(void) { return source == WFS_SOURCE_RAMDISK; }
+
+wfs_source_t wfs_source(void) { return source; }
+
+/* Read the first block of the volume and keep it if it is a WFS superblock. */
+static bool superblock_ok(void)
 {
     uint8_t buf[WFS_BLOCK_SIZE];
-
-    if (!ata_present())
-        return false;
 
     if (!block_read(0, buf))
         return false;
 
     memcpy(&sb, buf, sizeof(sb));
+    return sb.magic == WFS_MAGIC;
+}
 
-    if (sb.magic != WFS_MAGIC) {
-        kprintf("wfs    : no filesystem on the disk (magic %08x)\n", sb.magic);
+/* Look for the volume on one device: at the very start of it, or inside one of
+ * the four partitions an MBR describes.
+ *
+ * A USB stick has to be partitioned, because the firmware needs a FAT
+ * partition it can read the loader out of, and WFS has to live somewhere else
+ * on the same device.  A plain disk image has no partition table at all and the
+ * volume starts at sector zero, which is the first thing tried. */
+static bool find_volume(wfs_source_t device)
+{
+    source        = device;
+    partition_lba = 0;
+
+    if (superblock_ok())
+        return true;
+
+    uint8_t mbr[512];
+    if (!sectors_read(0, 1, mbr))
+        return false;
+
+    if (mbr[510] != 0x55 || mbr[511] != 0xAA)
+        return false;
+
+    for (int i = 0; i < 4; i++) {
+        const uint8_t *entry = mbr + 0x1BE + i * 16;
+
+        uint32_t start = (uint32_t)entry[8]        | ((uint32_t)entry[9] << 8) |
+                        ((uint32_t)entry[10] << 16) | ((uint32_t)entry[11] << 24);
+        uint32_t count = (uint32_t)entry[12]        | ((uint32_t)entry[13] << 8) |
+                        ((uint32_t)entry[14] << 16) | ((uint32_t)entry[15] << 24);
+
+        if (!start || !count)
+            continue;
+
+        partition_lba = start;
+        if (superblock_ok())
+            return true;
+    }
+
+    partition_lba = 0;
+    source = WFS_SOURCE_NONE;
+    return false;
+}
+
+bool wfs_mount(void)
+{
+    /* Real devices first, in the order they are likely to be the system: an
+     * ATA disk, then a USB one, both of which keep what is written to them.
+     * The module the bootloader loaded is the fallback, and is only a copy in
+     * memory -- writes to it are lost at the next boot. */
+    if (ata_present() && find_volume(WFS_SOURCE_ATA)) {
+        /* mounted from the disk */
+    } else if (usbdisk_present() && find_volume(WFS_SOURCE_USB)) {
+        /* mounted from the USB device */
+    } else if (ramdisk_present() && find_volume(WFS_SOURCE_RAMDISK)) {
+        kputs("wfs    : no volume on a disk; using the boot module\n");
+    } else if (ata_present() || usbdisk_present() || ramdisk_present()) {
+        kputs("wfs    : no filesystem found on any device\n");
+        return false;
+    } else {
+        kputs("wfs    : no disk and no boot module; nothing to mount\n");
         return false;
     }
+
     if (sb.block_size != WFS_BLOCK_SIZE) {
         kprintf("wfs    : unsupported block size %u\n", sb.block_size);
         return false;

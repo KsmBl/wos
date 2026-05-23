@@ -26,6 +26,15 @@ void     pci_write32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t off,
 /* Scan every bus/slot/function for a device with this vendor and device id. */
 pci_device_t pci_find(uint16_t vendor, uint16_t device);
 
+/* The same, by class/subclass/interface -- how a host controller is found,
+ * since every vendor's has its own device id but the class code is what says
+ * the registers are where the specification puts them. */
+pci_device_t pci_find_class(uint8_t class_code, uint8_t subclass, uint8_t prog_if);
+
+/* Full 64-bit address of a memory BAR, with the flag bits removed.  A 64-bit
+ * BAR is two consecutive registers; `index` is the first of them. */
+uint64_t pci_bar_address(const pci_device_t *dev, int index);
+
 /* Turn on I/O space and bus mastering in the device's command register, which
  * a DMA-driven NIC needs before it can do anything. */
 void pci_enable_bus_master(const pci_device_t *dev);

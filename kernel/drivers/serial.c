@@ -32,10 +32,21 @@ void serial_init(void)
     outb(COM1 + REG_MODEM_CTRL, 0x0B);  /* DTR + RTS + OUT2                  */
 }
 
+/* Wait for the transmit register to empty, but not forever.
+ *
+ * A machine with no COM1 at all -- which is most of them now -- answers reads
+ * of an unimplemented port with 0xFF, and the ready bit is set in that, so the
+ * wait ends immediately and the byte goes nowhere.  Not every chipset does
+ * that: some return 0x00, where the ready bit never appears and an unbounded
+ * wait hangs the kernel on its very first character, before a single line of
+ * output has been produced to say so.  Bounding it costs nothing on hardware
+ * that works and is the difference between a boot and a dead machine on
+ * hardware that does not. */
 static void serial_wait_tx(void)
 {
-    while (!(inb(COM1 + REG_LINE_STATUS) & LSR_THR_EMPTY))
-        ;
+    for (int i = 0; i < 100000; i++)
+        if (inb(COM1 + REG_LINE_STATUS) & LSR_THR_EMPTY)
+            return;
 }
 
 void serial_putc(char c)

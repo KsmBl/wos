@@ -25,6 +25,7 @@ struct pipe;
 typedef struct {
     fd_type_t type;
     uint32_t  ino;
+    bool      ram;         /* the inode is /ramdisk's, not the disk's      */
     uint32_t  offset;      /* byte offset for files, entry index for dirs */
     uint32_t  flags;       /* the W_O_* flags it was opened with          */
     struct pipe *pipe;     /* the pipe object, when type == FD_PIPE       */

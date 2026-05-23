@@ -245,9 +245,15 @@ Powers the machine off. Nothing needs flushing first: WFS writes its
 superblock, block bitmap and inodes straight through on every change, so the
 disk is consistent at every moment.
 
-Under QEMU, VirtualBox or Bochs the VM exits. On real hardware the kernel has
-no ACPI parser to find the platform's soft-off registers, so it says so and
-halts the CPU instead.
+The machine is asked to power off the way ACPI says to: the kernel reads the
+tables at boot to find the chipset's power management register and the sleep
+type that means "off", and writes one to the other. The boot log says what it
+found — `acpi   : soft-off through PM1a at 0x604, sleep type 0`.
+
+A few fixed addresses the emulators are known to answer on are tried afterwards,
+which is what makes this work under QEMU, VirtualBox and Bochs even when their
+tables say nothing useful. If none of it takes, the kernel says so and halts the
+CPU, which is as close to off as it can get on its own.
 
 There is no user or permission model in WOS, so any process can do this.
 

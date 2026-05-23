@@ -258,8 +258,20 @@ size_t keyboard_read(char *buf, size_t max)
 void keyboard_init(void)
 {
     /* Drain any scancode the firmware left in the controller's buffer,
-     * otherwise the first IRQ arrives with stale data. */
-    while (inb(KBD_STATUS) & 0x01)
+     * otherwise the first IRQ arrives with stale data.
+     *
+     * Bounded, and skipped entirely when the status register reads back all
+     * ones.  A machine with no PS/2 controller -- which every USB-only laptop
+     * is -- answers that port with 0xFF, whose low bit says "a byte is
+     * waiting", forever.  Draining it unbounded is an infinite loop early in
+     * boot, with nothing on screen yet to say where the kernel stopped. */
+    uint8_t status = inb(KBD_STATUS);
+    if (status == 0xFF) {
+        kputs("kbd    : no PS/2 controller\n");
+        return;
+    }
+
+    for (int i = 0; i < 64 && (inb(KBD_STATUS) & 0x01); i++)
         (void)inb(KBD_DATA);
 
     register_interrupt_handler(IRQ_KEYBOARD, keyboard_irq);

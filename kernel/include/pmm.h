@@ -31,6 +31,11 @@ void pmm_free_frame(uint64_t phys);
 /* Reserve an explicit physical range, e.g. a module the bootloader loaded. */
 void pmm_reserve_range(uint64_t start, uint64_t end);
 
+/* Hand a reserved range back.  Only whole frames wholly inside it are freed,
+ * and the boot-time reservation figure comes down with them, so a region that
+ * turned out not to be needed stops being counted as the kernel's. */
+void pmm_release_range(uint64_t start, uint64_t end);
+
 uint64_t pmm_total_bytes(void);
 uint64_t pmm_used_bytes(void);
 uint64_t pmm_free_bytes(void);

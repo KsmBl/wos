@@ -129,6 +129,7 @@ static void font_access_end(const uint8_t saved[5])
  * short character cells without shipping a font bitmap. */
 static uint8_t font16[256 * 16];
 static uint8_t font8[256 * 8];
+static bool    font_valid;
 
 static void vga_read_font16(void)
 {
@@ -143,6 +144,17 @@ static void vga_read_font16(void)
         for (int r = 0; r < 8; r++)
             font8[g * 8 + r] = (uint8_t)(font16[g * 16 + 2 * r] |
                                          font16[g * 16 + 2 * r + 1]);
+
+    /* The glyphs are only there if the card is still in a text mode: plane 2
+     * holds font data in text modes and pixels in graphics modes.  A
+     * bootloader that hands over in a graphics mode leaves nothing to capture,
+     * and the framebuffer console must not paint 256 blank glyphs onto the
+     * screen and call it a console.  'A' is as good a probe as any -- no real
+     * font has an empty capital A. */
+    font_valid = false;
+    for (int r = 0; r < 16; r++)
+        if (font16['A' * 16 + r])
+            font_valid = true;
 }
 
 static void vga_load_font(const uint8_t *font, int height)
@@ -298,12 +310,30 @@ void vga_size(int *cols, int *rows)
 }
 
 /* The 8x16 glyph bitmaps captured from the card at boot, so the framebuffer
- * console can render the same font without shipping one. */
-const uint8_t *vga_font16(void) { return font16; }
+ * console renders the same font the text mode was using.  When there was
+ * nothing to capture -- a UEFI boot, where no text mode exists -- the built-in
+ * copy of the same font stands in, and the console works anyway. */
+const uint8_t *vga_font16(void)
+{
+    return font_valid ? font16 : font8x16_builtin;
+}
+
+bool vga_font16_valid(void) { return true; }
 
 void vga_init(void)
 {
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+
+    /* Leave the hardware alone entirely when the console is already running on
+     * a framebuffer the firmware set up.  This is not an optimisation: under
+     * UEFI there is no VGA text mode to program, and on a machine whose GPU
+     * still decodes the legacy ports, programming one takes the display away
+     * from the mode the firmware is scanning out.  The screen goes black, the
+     * framebuffer the kernel is drawing into stops being shown, and there is
+     * no console left to report any of it. */
+    if (fbcon_active())
+        return;
+
     vga_read_font16();          /* capture GRUB's font before changing modes */
     vga_set_mode(80, 25);       /* early boot; the framebuffer takes over soon */
 }
