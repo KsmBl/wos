@@ -14,10 +14,13 @@ make          # build the kernel, the apps, the bootable ISO and the disk image
 make run      # boot it in QEMU (VGA window, serial log on stdio)
 make log      # boot headless for a few seconds and dump the serial log
 make clean
+
+sudo tools/flash-usb.sh   # put it on a USB stick and boot it on real hardware
 ```
 
 Requirements: `gcc`, `binutils`, `grub-mkrescue` with the `i386-pc` platform
-modules, `xorriso`, `mtools` and `qemu-system-x86_64`.
+modules, `xorriso`, `mtools` and `qemu-system-x86_64`; `dosfstools` to write a
+USB stick.
 **No cross-compiler and no nasm are needed** — the host `gcc -m64` builds the
 freestanding kernel and GAS assembles the `.S` files.
 
@@ -31,6 +34,7 @@ than a triple fault; see [`docs/architecture.md`](docs/architecture.md).
 | `kernel/` | the kernel: boot, arch (GDT/IDT/PIC/PIT), drivers, memory, filesystem, processes |
 | `lib/wkernel/` | the application API — `wkernel.h` plus the library applications link against |
 | `app/<name>/sourcecode/` | source for each application; the build installs its binary to `/app/<name>/launch` on the disk |
+| `uefi/` | the UEFI loader — a PE32+ application with the kernel embedded, for firmware GRUB cannot hand over on |
 | `tools/` | host-side tools, notably `mkwfs` which builds the disk image |
 | `docs/` | API and shell documentation |
 
@@ -65,6 +69,11 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   jumps into 64-bit, then four-level paging with a per-process address space, a
   preemptive round-robin scheduler, ring-3 processes loaded from ELF64
   binaries, and `int 0x80` syscalls with every user pointer validated.
+- **USB mass storage**: an xHCI driver and the bulk-only transport, so a machine
+  that boots from a USB stick reads and writes that stick directly. See
+  [`docs/usb.md`](docs/usb.md).
+- **`/ramdisk`**, a filesystem held in memory that grows and shrinks with what
+  is in it, over a disk that holds everything else.
 - **WFS**, a filesystem on a real disk image — reads and writes persist across
   reboots, and the disk figures come from its block bitmap.
 - **wkernel**, the documented application API: file and directory I/O, memory
@@ -98,6 +107,8 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 - [`docs/console.md`](docs/console.md) — raw input mode and the ANSI escape
   sequences full-screen programs use
 - [`docs/architecture.md`](docs/architecture.md) — how the kernel fits together
+- [`docs/usb.md`](docs/usb.md) — putting WOS on a USB stick and booting it on
+  real hardware
 - [`docs/building.md`](docs/building.md) — building, running, debugging, and
   adding an application
 
@@ -107,7 +118,8 @@ The kernel runs self-tests on every boot — frame accounting, heap
 split/coalesce, address-space teardown, filesystem read/write/delete, and
 spawning ring-3 processes — because an OS has no test runner to fall back on.
 `/home/boots.txt` counts boots, which is the standing proof that writes reach
-the disk.
+the disk. `make SELFTEST=0` builds without them, for a boot that goes straight
+to the shell.
 
 Interactive behaviour is tested with `tools/keytest.sh`, which types into QEMU
 through the monitor:

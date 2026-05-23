@@ -31,6 +31,7 @@ make kernel     # just build/kernel.elf
 make lib        # just build/lib/libwkernel.a
 make apps       # just the application binaries
 make iso        # just build/wos.iso
+make efi        # just build/BOOTX64.EFI, the UEFI loader
 make disk       # just build/wos.img
 make run        # boot in QEMU, with a VGA window and the serial log on stdio
 make run-nox    # boot headless, serial only
@@ -39,12 +40,48 @@ make debug      # boot stopped, waiting for gdb on :1234
 make clean
 ```
 
+To boot it on a real machine instead of QEMU, `sudo tools/flash-usb.sh` writes
+a bootable USB stick; see [`usb.md`](usb.md). That needs GRUB's `i386-pc`
+modules (which the ISO already requires) and `dosfstools` for `mkfs.vfat`.
+Nothing extra is needed for UEFI: WOS carries its own loader, built from
+`uefi/` by the host `gcc` like everything else.
+
 `make log` exists because piping `-serial stdio` through a timeout loses
 output to buffering; it writes to `build/serial.log` and prints that instead.
 
 ```sh
 make log TIMEOUT=20
 ```
+
+## Build options
+
+```sh
+make SELFTEST=0        # build without the boot-time self-tests
+make DISK_MB=16        # a smaller filesystem image (default 64)
+```
+
+The self-tests are the four blocks of `[ok  ]` lines the boot prints; they take
+a few seconds and spawn a process that faults on purpose, which is alarming to
+watch if you did not expect it. `SELFTEST=0` leaves them out of the build
+rather than skipping them at runtime, so `kernel/selftest.c` compiles to nothing
+and the kernel is about 40 KiB smaller. The boot goes straight from the driver
+log to the shell.
+
+`DISK_MB` is worth setting when booting from USB. There is no USB driver, so
+the whole filesystem image is loaded into RAM and stays there for the life of
+the boot — a 64 MiB image costs 64 MiB of memory, and the installed system uses
+about 4 MiB of it. See [`usb.md`](usb.md#memory).
+
+Changing either setting rebuilds what depends on it: every kernel object for
+`SELFTEST`, the image for `DISK_MB`. Neither can be noticed from a timestamp,
+since no source file changes, so a stamp file named after the current value
+stands in for one.
+
+Two things that are easy to expect from this and do not follow: it does not
+change what is installed on the disk image (the `hello` program the process
+test uses is an ordinary application and stays), and it does not remove the
+boot counter in `/home/boots.txt` — that is written by the filesystem test, so
+it simply stops advancing.
 
 ## Testing interactive behaviour
 
