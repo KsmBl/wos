@@ -6,8 +6,8 @@
 #
 #     make DISK_MB=16
 #
-# `make config` prints what is currently set, and changing anything here
-# rebuilds what depends on it.
+# `tools/configure.sh` edits this file from a menu, `make config` prints what is
+# currently set, and changing anything here rebuilds what depends on it.
 
 # ---------------------------------------------------------------------------
 # What goes into the system

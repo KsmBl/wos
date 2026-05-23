@@ -12,6 +12,7 @@
 #   make SELFTEST=0    build without the boot-time self-tests
 #   make DISK_MB=16    build a smaller filesystem image
 #   make config        print what is currently set
+#   tools/configure.sh pick them from a menu, then build
 #
 # No cross-compiler is required: the host gcc builds 64-bit freestanding code
 # with -m64, and GAS handles the assembly, so there is no dependency on nasm.

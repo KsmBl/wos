@@ -56,8 +56,21 @@ make log TIMEOUT=20
 ## Build options
 
 ```sh
+tools/configure.sh     # pick them from a menu, then build
+```
+
+Ticks the on/off ones, asks for the others, and writes `config.mk` -- which is
+the file `make` reads, so a setting changed here and one changed by hand in the
+file are the same setting. `tools/configure.sh --show` prints them without
+opening the menu.
+
+Or set them directly, in `config.mk` for good or on the command line for one
+build:
+
+```sh
 make SELFTEST=0        # build without the boot-time self-tests
 make DISK_MB=16        # a smaller filesystem image (default 64)
+make config            # print what is currently set
 ```
 
 The self-tests are the four blocks of `[ok  ]` lines the boot prints; they take
