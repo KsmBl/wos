@@ -773,7 +773,9 @@ split
 ```
 
 Run two terminals side by side -- a tiny terminal multiplexer, in the spirit of
-tmux or screen. Each pane is its own shell.
+tmux or screen. Each pane is its own shell: the login shell, so
+[`chsh`](#chsh) decides which one appears, the same as a fresh login or `su`
+gives you. The status label says which it is.
 
 ```
 whell -- the WOS shell.      |whell -- the WOS shell.

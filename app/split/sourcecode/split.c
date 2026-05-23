@@ -12,6 +12,10 @@
  *
  * Each terminal is a wterm from the shared library, the same emulator vim's
  * :term uses; split just arranges two of them and routes the keyboard.
+ *
+ * The panes run the login shell, so `chsh` decides what appears in them -- the
+ * same shell a fresh login or `su` would give, rather than a second opinion
+ * about which shell the user meant.
  */
 
 #include <wkernel.h>
@@ -49,11 +53,49 @@ static int  focus;                 /* 0 = left, 1 = right       */
 static int  chrome_dirty = 1;
 static int  single;                /* one pane left, filling the screen */
 
+/* The shell the panes run, and the bare name of it for the status line. */
+static char shell_path[W_SHELL_MAX + 1];
+static char shell_name[W_NAME_MAX + 1] = "shell";
+
+/* Ask what our own login shell is, and fall back to whell if the answer is
+ * unusable -- an empty setting, or one naming a program that has since been
+ * removed, either of which would otherwise leave two empty panes. */
+static void find_shell(void)
+{
+    if (wgetshell(-1, shell_path, sizeof(shell_path)) < 0 || !shell_path[0])
+        strlcpy(shell_path, "/app/whell/launch", sizeof(shell_path));
+
+    wstat_t st;
+    if (wstat(shell_path, &st) < 0)
+        strlcpy(shell_path, "/app/whell/launch", sizeof(shell_path));
+
+    /* /app/<name>/launch names the shell; anything else is shown by its last
+     * component. */
+    const char *start = shell_path;
+    const char *end   = shell_path + strlen(shell_path);
+
+    if (strncmp(shell_path, "/app/", 5) == 0) {
+        start = shell_path + 5;
+        const char *slash = strchr(start, '/');
+        if (slash)
+            end = slash;
+    } else {
+        const char *slash = strrchr(shell_path, '/');
+        if (slash)
+            start = slash + 1;
+    }
+
+    int len = (int)(end - start);
+    if (len > 0 && len <= (int)sizeof(shell_name) - 1) {
+        memcpy(shell_name, start, (wsize_t)len);
+        shell_name[len] = '\0';
+    }
+}
+
 static int start_pane(int i, int ox, int cols)
 {
-    char *const argv[] = { "whell", 0 };
-    return wterm_start(&pane[i], "/app/whell/launch", argv,
-                       1, ox, CONTENT_H, cols);
+    char *const argv[] = { shell_name, 0 };
+    return wterm_start(&pane[i], shell_path, argv, 1, ox, CONTENT_H, cols);
 }
 
 static void draw_field(int row, int col, int width, int fg, int bg,
@@ -78,8 +120,9 @@ static void draw_chrome(void)
     /* Collapsed to one terminal: a single full-width status line, no
      * separator. */
     if (single) {
-        draw_field(STATUS_ROW, 1, con_w, W_BLACK, W_CYAN,
-                   " whell    (Ctrl-W q to quit)");
+        char label[64];
+        wsnprintf(label, sizeof(label), " %s    (Ctrl-W q to quit)", shell_name);
+        draw_field(STATUS_ROW, 1, con_w, W_BLACK, W_CYAN, label);
         return;
     }
 
@@ -94,8 +137,8 @@ static void draw_chrome(void)
     /* Status labels, the focused one highlighted. */
     for (int i = 0; i < 2; i++) {
         char label[42];
-        wsnprintf(label, sizeof(label), " %s: whell%s",
-                  i == 0 ? "left" : "right",
+        wsnprintf(label, sizeof(label), " %s: %s%s",
+                  i == 0 ? "left" : "right", shell_name,
                   pane[i].open ? "" : " [exited]");
 
         int fg = (focus == i) ? W_BLACK : W_WHITE;
@@ -127,6 +170,7 @@ static void collapse_to_survivor(void)
 int main(int argc, char **argv)
 {
     layout_init();              /* size the panes to the current text mode */
+    find_shell();               /* and run whatever chsh says a shell is    */
 
     int prev = wconsole_raw(W_CONSOLE_RAW);
     wcursor(1);
