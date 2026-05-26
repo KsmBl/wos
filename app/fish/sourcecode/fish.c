@@ -117,9 +117,57 @@ static int builtin_help(int argc, char **argv)
     wprintf("  right arrow or End accepts the suggestion\n");
     wprintf("  up/down walk the history, Tab completes\n\n");
     wprintf("Builtins: cd, history, help, exit\n");
+    wprintf("Short for: ll = ls -l, la = ls -a\n");
     wprintf("Everything else is a program in /app, so `ls` runs\n");
     wprintf("/app/ls/launch. Press Tab to see what is installed.\n");
     return 0;
+}
+
+/* The two abbreviations everyone types.  fish has no alias mechanism to define
+ * them with -- and one would be a configuration file, a parser for it and a
+ * place to keep it, for two names -- so they are simply known here.
+ *
+ * Anything else on the line is kept, so `ll /app` is `ls -l /app`. */
+static const struct {
+    const char *name;
+    const char *expands_to;
+} aliases[] = {
+    { "ll", "-l" },
+    { "la", "-a" },
+};
+
+/* The alias names, for the editor: it colours a command green when fish knows
+ * it and completes on Tab, and both would be wrong about these otherwise. */
+const char *fish_alias_name(int i)
+{
+    if (i < 0 || (unsigned)i >= sizeof(aliases) / sizeof(aliases[0]))
+        return NULL;
+    return aliases[i].name;
+}
+
+/* Rewrite argv in place of an alias, into `out`.  Returns the argv to use,
+ * which is the original one when the command was not an alias. */
+static char **apply_alias(int *argc, char **argv, char **out)
+{
+    const char *flag = NULL;
+
+    for (unsigned i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++)
+        if (strcmp(argv[0], aliases[i].name) == 0)
+            flag = aliases[i].expands_to;
+
+    if (!flag)
+        return argv;
+
+    int n = 0;
+    out[n++] = (char *)"ls";
+    out[n++] = (char *)flag;
+
+    for (int i = 1; i < *argc && n < FISH_MAX_ARGS; i++)
+        out[n++] = argv[i];
+
+    out[n] = NULL;
+    *argc = n;
+    return out;
 }
 
 /* Run a program and wait for it. */
@@ -140,13 +188,16 @@ static int run_line(char *line)
 {
     /* Parsing writes NULs into the line, so keep a copy for whell. */
     char original[FISH_LINE_MAX];
-    char *argv[FISH_MAX_ARGS + 1];
+    char *parsed[FISH_MAX_ARGS + 1];
+    char *expanded[FISH_MAX_ARGS + 2];
 
     strlcpy(original, line, sizeof(original));
 
-    int argc = fish_parse(line, argv, FISH_MAX_ARGS + 1);
+    int argc = fish_parse(line, parsed, FISH_MAX_ARGS + 1);
     if (argc == 0)
         return 0;
+
+    char **argv = apply_alias(&argc, parsed, expanded);
 
     if (strcmp(argv[0], "exit") == 0) {
         should_exit = 1;

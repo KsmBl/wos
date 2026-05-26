@@ -27,6 +27,10 @@ void fish_history_add(const char *line);
  * whell builtin, or an application under /app. */
 int fish_command_exists(const char *name);
 
+/* The name of alias `i`, or NULL past the last one.  ll and la are neither
+ * builtins nor programs, so the editor asks for them separately. */
+const char *fish_alias_name(int i);
+
 /* Split a line into arguments in place. */
 int fish_parse(char *line, char **argv, int max);
 

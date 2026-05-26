@@ -19,7 +19,8 @@ static int  match_count;
 
 /* The builtins fish handles itself.  Everything else a user would call a
  * command is a program under /app, which completion and highlighting find by
- * scanning that directory rather than from a list kept here. */
+ * scanning that directory rather than from a list kept here -- or one of the
+ * two aliases, which fish.c defines and this asks about. */
 static const char *fish_builtins[] = {
     "cd", "exit", "history", "help",
     NULL
@@ -57,6 +58,10 @@ int fish_command_exists(const char *name)
 
     for (int i = 0; fish_builtins[i]; i++)
         if (strcmp(name, fish_builtins[i]) == 0)
+            return 1;
+
+    for (int i = 0; fish_alias_name(i); i++)
+        if (strcmp(name, fish_alias_name(i)) == 0)
             return 1;
 
     wstat_t st;
@@ -97,6 +102,11 @@ static void match_commands(const char *prefix, int prefix_len)
         if (prefix_len == 0 ||
             strncmp(fish_builtins[i], prefix, (wsize_t)prefix_len) == 0)
             add_match(fish_builtins[i], 0);
+
+    for (int i = 0; fish_alias_name(i); i++)
+        if (prefix_len == 0 ||
+            strncmp(fish_alias_name(i), prefix, (wsize_t)prefix_len) == 0)
+            add_match(fish_alias_name(i), 0);
 
     int d = wopendir("/app");
     if (d < 0)

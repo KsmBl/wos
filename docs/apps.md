@@ -622,6 +622,18 @@ fish implements `cd`, `pwd`, `history`, `clear`, `help` and `exit` itself —
 `cd` has to be a builtin because a child process cannot change its parent's
 working directory.
 
+Two names are short for longer ones:
+
+| | |
+|---|---|
+| `ll` | `ls -l` |
+| `la` | `ls -a` |
+
+Anything after them is kept, so `ll /app` is `ls -l /app`. They are not an
+alias mechanism — there is no way to define your own, which would mean a
+configuration file, a parser for it and somewhere to keep it, for two names.
+The editor knows them, so they colour green as you type and complete on Tab.
+
 Anything else is looked for at `/app/<name>/launch`, and failing that is
 handed to `whell -c "<line>"`. That is where `ls`, `free`, `df`, `ps`, `cat`,
 `rm`, `mkdir`, `touch` and `shutdown` live, so the two shells share one set of
@@ -629,7 +641,8 @@ builtins instead of each keeping its own copy.
 
 ## What is missing
 
-No functions, no abbreviations, no `$variables`, no pipes or redirection, no
+No functions, no user-defined abbreviations, no `$variables`, no pipes or
+redirection, no
 job control, and no universal variables. Pipes are the significant one — they
 need the kernel to support more than one console-attached descriptor per
 process.
