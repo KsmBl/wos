@@ -57,9 +57,17 @@
 #define PORTSC_PP       (1u << 9)   /* power */
 #define PORTSC_CSC      (1u << 17)  /* connect status changed */
 #define PORTSC_PRC      (1u << 21)  /* reset complete */
-/* The bits that are cleared by writing a one, and so must be masked out of any
- * read-modify-write that is not trying to clear them. */
+/* The change flags, cleared by writing a one.
+ *
+ * PED and PR are the same kind of trap and are easier to forget: PED reports
+ * that the port is enabled, and writing that same one back *disables* it.  A
+ * machine that booted from a USB stick arrives here with the port enabled by
+ * its firmware, so a read-modify-write that keeps PED switches off the port the
+ * disk is on -- and the disk then looks like a device that was never there.
+ * PORTSC_KEEP drops all three, and everything that writes PORTSC goes through
+ * it. */
 #define PORTSC_RW1CS    0x00FE0000u
+#define PORTSC_KEEP(sc) ((sc) & ~(PORTSC_RW1CS | PORTSC_PED | PORTSC_PR))
 #define PORTSC_SPEED(v) (((v) >> 10) & 0xF)
 
 /* Runtime registers, at RTSOFF; interrupter 0 is at +0x20. */
@@ -445,7 +453,7 @@ static uint8_t find_port(void)
         /* Powered ports that are already enabled trained themselves, which is
          * what a USB 3 port does on connect.  A USB 2 port needs telling. */
         if (!(sc & PORTSC_PED)) {
-            wr32(op, OP_PORTSC(p), (sc & ~PORTSC_RW1CS) | PORTSC_PR);
+            wr32(op, OP_PORTSC(p), PORTSC_KEEP(sc) | PORTSC_PR);
 
             for (int i = 0; i < 100; i++) {
                 pit_sleep(10);
@@ -455,12 +463,17 @@ static uint8_t find_port(void)
             }
 
             /* Acknowledge the change bits, which stay set until written. */
-            wr32(op, OP_PORTSC(p), (sc & ~PORTSC_RW1CS) | PORTSC_PRC | PORTSC_CSC);
+            wr32(op, OP_PORTSC(p), PORTSC_KEEP(sc) | PORTSC_PRC | PORTSC_CSC);
             sc = rd32(op, OP_PORTSC(p));
         }
 
         if (sc & PORTSC_PED) {
             port_speed = PORTSC_SPEED(sc);
+
+            /* A device is allowed to take its time between the port coming up
+             * and being able to answer; the specification's figure is 10 ms,
+             * and nothing is lost by giving it more. */
+            pit_sleep(50);
             return (uint8_t)p;
         }
     }
@@ -687,12 +700,15 @@ bool xhci_clear_stall(bool in)
  *  Init
  * ------------------------------------------------------------------ */
 
-bool xhci_init(void)
+/* Bring up controller number `index`.  False when there is no such controller,
+ * or it would not start. */
+static bool start_controller(int index)
 {
     /* 0x0C/0x03/0x30: serial bus controller, USB, xHCI. */
-    pci_device_t dev = pci_find_class(0x0C, 0x03, 0x30);
+    pci_device_t dev = pci_find_class_index(0x0C, 0x03, 0x30, index);
     if (!dev.found) {
-        failure = "no xHCI controller on the PCI bus";
+        failure = index == 0 ? "no xHCI controller on the PCI bus"
+                             : "no disk on any USB controller";
         return false;
     }
 
@@ -709,6 +725,16 @@ bool xhci_init(void)
         failure = "the controller's registers could not be mapped";
         return false;
     }
+
+    /* Everything below belongs to this controller, not the last one. */
+    slot_id     = 0;
+    ready       = false;
+    port_cursor = 1;
+    ep0_ring.trbs = NULL;
+    bulk_in_ring.trbs = NULL;
+    bulk_out_ring.trbs = NULL;
+    event_index = 0;
+    event_cycle = 1;
 
     op = cap + (rd32(cap, CAP_CAPLENGTH) & 0xFF);
     rt = cap + (rd32(cap, CAP_RTSOFF) & ~0x1Fu);
@@ -784,7 +810,7 @@ bool xhci_init(void)
     for (uint32_t p = 1; p <= max_ports; p++) {
         uint32_t sc = rd32(op, OP_PORTSC(p));
         if (!(sc & PORTSC_PP))
-            wr32(op, OP_PORTSC(p), (sc & ~PORTSC_RW1CS) | PORTSC_PP);
+            wr32(op, OP_PORTSC(p), PORTSC_KEEP(sc) | PORTSC_PP);
     }
 
     /* And wait for something to appear.  A device that is already plugged in
@@ -795,15 +821,52 @@ bool xhci_init(void)
     for (int i = 0; i < 10; i++) {
         pit_sleep(100);
 
+        int connected = 0;
         for (uint32_t p = 1; p <= max_ports; p++)
-            if (rd32(op, OP_PORTSC(p)) & PORTSC_CCS) {
-                failure = "a device answered but is not a disk";
-                return true;
-            }
+            if (rd32(op, OP_PORTSC(p)) & PORTSC_CCS)
+                connected++;
+
+        if (connected) {
+            kprintf("usb    : controller %d, %u ports, %d with a device\n",
+                    index, max_ports, connected);
+            failure = "a device answered but is not a disk";
+            return true;
+        }
     }
 
-    failure = "nothing is plugged into the controller";
-    return true;
+    kprintf("usb    : controller %d, %u ports, nothing plugged in\n",
+            index, max_ports);
+    failure = "nothing is plugged into any USB port";
+    return false;
+}
+
+/* The controller being used, and how many have been tried. */
+static int controller_index = -1;
+
+bool xhci_init(void)
+{
+    /* Every controller in turn: a machine with two of them keeps its front
+     * sockets on one and its back sockets on the other as often as not, and
+     * the disk is on whichever it is on. */
+    for (int i = 0; i < 4; i++)
+        if (start_controller(i)) {
+            controller_index = i;
+            return true;
+        }
+
+    return false;
+}
+
+/* Move to the next controller, for when this one had no disk on it. */
+bool xhci_next_controller(void)
+{
+    for (int i = controller_index + 1; i < 4; i++)
+        if (start_controller(i)) {
+            controller_index = i;
+            return true;
+        }
+
+    return false;
 }
 
 bool xhci_next_device(void)
@@ -816,9 +879,12 @@ bool xhci_next_device(void)
         return false;
 
     if (!address_device()) {
+        kprintf("usb    : port %u would not take an address\n", root_port);
         failure = "a device would not take an address";
         return false;
     }
 
     return true;
 }
+
+uint8_t xhci_port(void) { return root_port; }

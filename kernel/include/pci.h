@@ -31,6 +31,11 @@ pci_device_t pci_find(uint16_t vendor, uint16_t device);
  * the registers are where the specification puts them. */
 pci_device_t pci_find_class(uint8_t class_code, uint8_t subclass, uint8_t prog_if);
 
+/* The same, picking between several devices of one kind.  Returns a device
+ * with `found` clear once `index` is past the last one. */
+pci_device_t pci_find_class_index(uint8_t class_code, uint8_t subclass,
+                                  uint8_t prog_if, int index);
+
 /* Full 64-bit address of a memory BAR, with the flag bits removed.  A 64-bit
  * BAR is two consecutive registers; `index` is the first of them. */
 uint64_t pci_bar_address(const pci_device_t *dev, int index);

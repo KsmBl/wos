@@ -376,7 +376,10 @@ static bool probe_device(void)
 
     /* The configuration descriptor comes in two reads: the header says how
      * long the whole thing is, then it is read again in full. */
-    static uint8_t config_buffer[512];
+    /* A plain disk describes itself in under a hundred bytes; the room is for
+     * the ones that are a disk and a card reader and a hub in one package, and
+     * describe all of it in a single configuration. */
+    static uint8_t config_buffer[1024];
     usb_config_descriptor_t header;
 
     if (!xhci_control(0x80, USB_REQ_GET_DESCRIPTOR, USB_DESC_CONFIG << 8, 0,
@@ -430,12 +433,18 @@ bool usbdisk_init(void)
 
     failure = xhci_error();          /* "nothing plugged in", until proved otherwise */
 
-    /* Every device on the controller in turn: a machine that boots from USB
-     * usually has a keyboard on it too, and the first port with something
-     * plugged into it is as likely to be that as the disk. */
-    for (int i = 0; i < 16 && xhci_next_device(); i++)
-        if (probe_device())
-            return true;
+    /* Every device on every controller: a machine that boots from USB usually
+     * has a keyboard on it too, the first port with something plugged into it
+     * is as likely to be that as the disk, and the disk may not even be on the
+     * controller the keyboard is on. */
+    do {
+        for (int i = 0; i < 16 && xhci_next_device(); i++) {
+            if (probe_device())
+                return true;
+
+            kprintf("usb    : port %u: %s\n", xhci_port(), failure);
+        }
+    } while (xhci_next_controller());
 
     return false;
 }

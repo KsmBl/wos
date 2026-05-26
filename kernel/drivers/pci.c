@@ -49,10 +49,17 @@ static pci_device_t describe(uint8_t bus, uint8_t slot, uint8_t func)
 
 /* Find a device by what it is rather than who made it, which is the only way
  * to find a host controller: every vendor's is a different device id, and they
- * all implement the same register interface because the class code says so. */
-pci_device_t pci_find_class(uint8_t class_code, uint8_t subclass, uint8_t prog_if)
+ * all implement the same register interface because the class code says so.
+ *
+ * `index` picks between several of the same kind.  A machine with two USB
+ * controllers is ordinary -- one on the chipset and one on a card, or two
+ * chipset ones covering different sockets -- and the disk is on whichever it
+ * is on, not necessarily the first. */
+pci_device_t pci_find_class_index(uint8_t class_code, uint8_t subclass,
+                                  uint8_t prog_if, int index)
 {
     pci_device_t none = { 0 };
+    int seen = 0;
 
     for (int bus = 0; bus < 256; bus++)
         for (int slot = 0; slot < 32; slot++)
@@ -67,11 +74,17 @@ pci_device_t pci_find_class(uint8_t class_code, uint8_t subclass, uint8_t prog_i
 
                 if ((uint8_t)(klass >> 24) == class_code &&
                     (uint8_t)(klass >> 16) == subclass &&
-                    (uint8_t)(klass >> 8)  == prog_if)
+                    (uint8_t)(klass >> 8)  == prog_if &&
+                    seen++ == index)
                     return describe((uint8_t)bus, (uint8_t)slot, (uint8_t)func);
             }
 
     return none;
+}
+
+pci_device_t pci_find_class(uint8_t class_code, uint8_t subclass, uint8_t prog_if)
+{
+    return pci_find_class_index(class_code, subclass, prog_if, 0);
 }
 
 pci_device_t pci_find(uint16_t vendor, uint16_t device)

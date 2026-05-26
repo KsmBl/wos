@@ -33,6 +33,13 @@ bool xhci_init(void);
  * is how a USB disk is told apart from the keyboard next to it. */
 bool xhci_next_device(void);
 
+/* Move on to the next USB controller in the machine, when the one in use had
+ * no disk on it.  False when there are no more. */
+bool xhci_next_controller(void);
+
+/* The root port the current device is on, for the boot log. */
+uint8_t xhci_port(void);
+
 /* True once a device has been addressed and configured. */
 bool xhci_device_ready(void);
 
