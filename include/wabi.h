@@ -251,12 +251,19 @@ typedef struct {
 /* Console geometry.  The text mode can be changed at runtime with wsetmode();
  * W_CONSOLE_WIDTH/HEIGHT are the size the console boots in (80x50 -- an 8x8
  * cell, for twice the rows of plain 80x25), and a full-screen program should
- * call wconsize() to learn the size in force rather than assume these.  The
- * MAX values bound the largest mode, for sizing fixed buffers. */
+ * call wconsize() to learn the size in force rather than assume these.
+ *
+ * The MAX values bound the largest grid the kernel will ever build, and are
+ * what a fixed buffer has to be sized by.  They are not a guess: the
+ * framebuffer console is bounded by these same two numbers, so a program that
+ * sizes a line buffer by W_CONSOLE_MAX_WIDTH and fills it to the width
+ * wconsize() reported cannot overrun it.  A machine with a 1280x800 display
+ * gives a 160x50 console, and 1920x1200 gives 240x75, which is where these
+ * come from. */
 #define W_CONSOLE_WIDTH      80
 #define W_CONSOLE_HEIGHT     50
-#define W_CONSOLE_MAX_WIDTH  80
-#define W_CONSOLE_MAX_HEIGHT 60
+#define W_CONSOLE_MAX_WIDTH  240
+#define W_CONSOLE_MAX_HEIGHT 75
 
 /* Special keys returned by wgetkey().  They start above 0xFF so they cannot
  * collide with an ordinary character. */

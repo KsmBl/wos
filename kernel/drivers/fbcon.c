@@ -1,6 +1,7 @@
 /* Framebuffer text console. See fbcon.h. */
 
 #include "fbcon.h"
+#include "wabi.h"
 #include "vga.h"
 #include "pci.h"
 #include "paging.h"
@@ -48,9 +49,14 @@
 #define FB_WINDOW FBCON_APERTURE_SIZE
 
 /* The largest grid we will build, bounding the fixed backing store.  240x75 at
- * 8x16 is 1920x1200, which fits QEMU's default 16 MiB of video memory. */
-#define MAX_COLS 240
-#define MAX_ROWS 75
+ * 8x16 is 1920x1200, which fits QEMU's default 16 MiB of video memory.
+ *
+ * Taken from the numbers applications are told, rather than the other way
+ * round: a program sizes its line buffers by those and fills them to whatever
+ * wconsize() reports, so a console wider than the width in the ABI overruns
+ * every one of them.  Keeping the two in one place is what stops that. */
+#define MAX_COLS W_CONSOLE_MAX_WIDTH
+#define MAX_ROWS W_CONSOLE_MAX_HEIGHT
 
 static volatile uint32_t *fb;        /* the linear framebuffer          */
 static uint64_t fb_phys;
