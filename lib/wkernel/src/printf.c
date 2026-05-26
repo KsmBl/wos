@@ -328,3 +328,40 @@ const char *wstrerror(int err)
     default:             return "unknown error";
     }
 }
+
+/* How long the machine has been up, in words.
+ *
+ * Shared so that the uptime command and the header htop draws cannot disagree
+ * about it -- one of them would be quietly wrong, and there is no way to tell
+ * which from looking.  Returns a pointer into a rotating set of buffers, like
+ * whuman() above, so a few can be in one printf.
+ */
+const char *wuptime_string(void)
+{
+    static char slots[4][48];
+    static int  next;
+
+    char *buf = slots[next];
+    next = (next + 1) % 4;
+
+    unsigned seconds = wuptime_ms() / 1000u;
+    unsigned days    = seconds / 86400u;
+    unsigned hours   = (seconds % 86400u) / 3600u;
+    unsigned minutes = (seconds % 3600u) / 60u;
+
+    /* Days matter or they do not; below an hour, minutes are what a person
+     * wants, and below a minute, seconds are the only thing moving. */
+    if (days)
+        wsnprintf(buf, sizeof(slots[0]), "%u day%s, %u:%02u",
+                  days, days == 1 ? "" : "s", hours, minutes);
+    else if (hours)
+        wsnprintf(buf, sizeof(slots[0]), "%u:%02u", hours, minutes);
+    else if (minutes)
+        wsnprintf(buf, sizeof(slots[0]), "%u min%s", minutes,
+                  minutes == 1 ? "" : "s");
+    else
+        wsnprintf(buf, sizeof(slots[0]), "%u sec%s", seconds,
+                  seconds == 1 ? "" : "s");
+
+    return buf;
+}

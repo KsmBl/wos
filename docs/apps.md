@@ -31,6 +31,7 @@ which is the price of having no shared libraries.
 | [`wget`](#wget) | download a URL to a file |
 | [`lynx`](#lynx) | browse the web as text |
 | [`shutdown`](#shutdown) | power the machine off |
+| [`uptime`](#uptime) | how long the machine has been running |
 | [`whoami`](#whoami) | print the current user and what it may do |
 | [`passwd`](#passwd) | change a password |
 | [`su`](#su) | start a shell as another user |
@@ -259,6 +260,31 @@ There is no user or permission model in WOS, so any process can do this.
 
 **Exit status:** does not return on success; 1 if the machine could not be
 powered off.
+
+## uptime
+
+```
+uptime [-p]
+```
+
+How long the machine has been running, the clock, and how many users it knows
+about.
+
+```
+$ uptime
+ 17:41:53  up 1:23,  1 user
+$ uptime -p
+up 1:23
+```
+
+There is no load average. WOS has no notion of one, and a number that looked
+like Linux's without meaning what Linux's means would be worse than leaving it
+out.
+
+htop draws the same line in its header, from the same function
+(`wuptime_string()`), so the two cannot come to disagree about it.
+
+**Exit status:** 0.
 
 ## whoami
 

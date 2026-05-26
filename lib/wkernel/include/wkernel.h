@@ -953,6 +953,19 @@ int wgetline(char *buf, wsize_t size);
 const char *whuman(unsigned long bytes);
 
 /**
+ * How long the machine has been running, in words: "3 days, 4:05", "1:23",
+ * "7 mins", "42 secs".
+ *
+ * The `uptime` command and htop's header both print this, so that they cannot
+ * disagree about a number a person is likely to read twice.
+ *
+ * @return A pointer into a rotating set of static buffers, valid until a few
+ *         more calls have been made -- the same arrangement whuman() uses, so
+ *         several can appear in one printf.
+ */
+const char *wuptime_string(void);
+
+/**
  * Turn an error code into a readable message.
  * @param err A positive `W_E*` code -- negate what a failing call returned.
  * @return A short description, e.g. "no such file or directory".

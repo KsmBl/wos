@@ -95,14 +95,20 @@ static void draw_meter(int row, const char *label, unsigned used,
     wprintf("]");
 }
 
+/* The same line the uptime command prints, from the same function: two places
+ * showing the same number is two chances to show different ones. */
 static void draw_uptime(void)
 {
-    unsigned total = wuptime_ms() / 1000u;
+    char field[32];
+    wsnprintf(field, sizeof(field), " up %s ", wuptime_string());
 
-    wgotoxy(1, cols - 20);
+    int col = cols - (int)strlen(field);
+    if (col < 1)
+        col = 1;
+
+    wgotoxy(1, col);
     wcolor(W_BLACK, W_CYAN);
-    wprintf(" Uptime %02u:%02u:%02u ",
-            total / 3600u, (total % 3600u) / 60u, total % 60u);
+    wprintf("%s", field);
     wcolor_reset();
 }
 
