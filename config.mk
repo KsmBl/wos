@@ -16,7 +16,7 @@
 # Run the self-tests at boot: the four blocks of [ok  ] lines, which take a few
 # seconds and include a process that faults on purpose.  0 leaves them out of
 # the build entirely, so the kernel does not carry the code.
-SELFTEST ?= 0
+SELFTEST ?= 1
 
 # Size of the filesystem image, in MiB.  The installed system is about 4 MiB;
 # the rest is room to write into.
@@ -25,7 +25,7 @@ SELFTEST ?= 0
 # one it cannot -- no xHCI, or the stick behind a hub -- the whole image is
 # loaded into RAM instead and stays there, and the size of it is memory the
 # machine does not get back.
-DISK_MB ?= 16
+DISK_MB ?= 128
 
 # Size of the kernel heap arena, in MiB.  Everything kmalloc() hands out comes
 # from here: process control blocks, kernel stacks, file buffers, a whole

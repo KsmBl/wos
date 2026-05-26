@@ -700,22 +700,25 @@ bool xhci_clear_stall(bool in)
  *  Init
  * ------------------------------------------------------------------ */
 
-/* Bring up controller number `index`.  False when there is no such controller,
- * or it would not start. */
-static bool start_controller(int index)
+/* Bring up controller number `index`.
+ *
+ * Returns 1 when it is running with something plugged into it, 0 when there is
+ * no such controller -- which ends the search, since they are numbered in order
+ * -- and -1 when there is one but it was no use. */
+static int start_controller(int index)
 {
     /* 0x0C/0x03/0x30: serial bus controller, USB, xHCI. */
     pci_device_t dev = pci_find_class_index(0x0C, 0x03, 0x30, index);
     if (!dev.found) {
-        failure = index == 0 ? "no xHCI controller on the PCI bus"
-                             : "no disk on any USB controller";
-        return false;
+        if (index == 0)
+            failure = "no xHCI controller on the PCI bus";
+        return 0;
     }
 
     uint64_t bar = pci_bar_address(&dev, 0);
     if (!bar) {
         failure = "the controller has no memory-mapped registers";
-        return false;
+        return -1;
     }
 
     pci_enable_bus_master(&dev);
@@ -723,7 +726,7 @@ static bool start_controller(int index)
     cap = paging_map_device(bar, 0x10000);
     if (!cap) {
         failure = "the controller's registers could not be mapped";
-        return false;
+        return -1;
     }
 
     /* Everything below belongs to this controller, not the last one. */
@@ -747,14 +750,14 @@ static bool start_controller(int index)
 
     if (!max_slots || !max_ports) {
         failure = "the controller reports no slots or no ports";
-        return false;
+        return -1;
     }
 
     take_ownership();
 
     if (!reset_controller()) {
         failure = "the controller would not reset";
-        return false;
+        return -1;
     }
 
     /* One slot is all this driver ever uses. */
@@ -763,13 +766,13 @@ static bool start_controller(int index)
     dcbaa = dma_page();
     if (!dcbaa || !allocate_scratchpad()) {
         failure = "out of memory for the controller's own structures";
-        return false;
+        return -1;
     }
     wr64(op, OP_DCBAAP, (uint64_t)(uintptr_t)dcbaa);
 
     if (!ring_init(&cmd_ring)) {
         failure = "out of memory for the command ring";
-        return false;
+        return -1;
     }
     wr64(op, OP_CRCR, (uint64_t)(uintptr_t)cmd_ring.trbs | 1);
 
@@ -779,7 +782,7 @@ static bool start_controller(int index)
     uint64_t *erst = dma_page();
     if (!event_trbs || !erst) {
         failure = "out of memory for the event ring";
-        return false;
+        return -1;
     }
 
     erst[0] = (uint64_t)(uintptr_t)event_trbs;
@@ -801,7 +804,7 @@ static bool start_controller(int index)
 
     if (rd32(op, OP_USBSTS) & USBSTS_HCH) {
         failure = "the controller would not start";
-        return false;
+        return -1;
     }
 
     /* Power the ports.  Firmware is entitled to leave them off, and a port with
@@ -830,14 +833,14 @@ static bool start_controller(int index)
             kprintf("usb    : controller %d, %u ports, %d with a device\n",
                     index, max_ports, connected);
             failure = "a device answered but is not a disk";
-            return true;
+            return 1;
         }
     }
 
     kprintf("usb    : controller %d, %u ports, nothing plugged in\n",
             index, max_ports);
     failure = "nothing is plugged into any USB port";
-    return false;
+    return -1;
 }
 
 /* The controller being used, and how many have been tried. */
@@ -848,11 +851,16 @@ bool xhci_init(void)
     /* Every controller in turn: a machine with two of them keeps its front
      * sockets on one and its back sockets on the other as often as not, and
      * the disk is on whichever it is on. */
-    for (int i = 0; i < 4; i++)
-        if (start_controller(i)) {
+    for (int i = 0; i < 4; i++) {
+        int r = start_controller(i);
+
+        if (r > 0) {
             controller_index = i;
             return true;
         }
+        if (r == 0)
+            break;              /* no controller number i, so none after it */
+    }
 
     return false;
 }
@@ -860,11 +868,16 @@ bool xhci_init(void)
 /* Move to the next controller, for when this one had no disk on it. */
 bool xhci_next_controller(void)
 {
-    for (int i = controller_index + 1; i < 4; i++)
-        if (start_controller(i)) {
+    for (int i = controller_index + 1; i < 4; i++) {
+        int r = start_controller(i);
+
+        if (r > 0) {
             controller_index = i;
             return true;
         }
+        if (r == 0)
+            break;
+    }
 
     return false;
 }
