@@ -113,6 +113,13 @@ static cbw_t    cbw_buffer;
 static csw_t    csw_buffer;
 static uint8_t  data_buffer[4096];
 
+/* Why no disk was found, for the boot log.  The USB one is worth reporting
+ * because a machine that falls back to the copy in memory looks identical to
+ * one that has no disk at all -- except for the tens of megabytes it holds. */
+static const char *failure = "not tried";
+
+const char *usbdisk_error(void)     { return failure; }
+
 bool usbdisk_present(void)          { return present; }
 uint32_t usbdisk_sector_count(void) { return sectors; }
 const char *usbdisk_name(void)      { return name; }
@@ -362,8 +369,10 @@ static bool probe_device(void)
     usb_device_descriptor_t device;
 
     if (!xhci_control(0x80, USB_REQ_GET_DESCRIPTOR, USB_DESC_DEVICE << 8, 0,
-                      &device, sizeof(device), true))
+                      &device, sizeof(device), true)) {
+        failure = "a device would not describe itself";
         return false;
+    }
 
     /* The configuration descriptor comes in two reads: the header says how
      * long the whole thing is, then it is read again in full. */
@@ -386,19 +395,27 @@ static bool probe_device(void)
     usb_endpoint_t bulk_in, bulk_out;
 
     if (!parse_configuration(config_buffer, total, &configuration,
-                             &bulk_in, &bulk_out))
+                             &bulk_in, &bulk_out)) {
+        failure = "a device answered but is not a disk";
         return false;
+    }
 
-    if (!xhci_configure(configuration, &bulk_in, &bulk_out))
+    if (!xhci_configure(configuration, &bulk_in, &bulk_out)) {
+        failure = "the disk's endpoints could not be configured";
         return false;
+    }
 
-    if (!test_unit_ready())
+    if (!test_unit_ready()) {
+        failure = "the disk never reported itself ready";
         return false;
+    }
 
     inquiry();                       /* only for the name; not fatal */
 
-    if (!read_capacity())
+    if (!read_capacity()) {
+        failure = "the disk would not report its size, or is not 512-byte";
         return false;
+    }
 
     present = true;
     return true;
@@ -406,8 +423,12 @@ static bool probe_device(void)
 
 bool usbdisk_init(void)
 {
-    if (!xhci_init())
+    if (!xhci_init()) {
+        failure = xhci_error();
         return false;
+    }
+
+    failure = xhci_error();          /* "nothing plugged in", until proved otherwise */
 
     /* Every device on the controller in turn: a machine that boots from USB
      * usually has a keyboard on it too, and the first port with something

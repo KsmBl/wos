@@ -153,7 +153,14 @@ static uint8_t bulk_in_dci, bulk_out_dci;
 
 static bool ready;
 
+/* Why the last attempt got no further, for the boot log.  A machine that finds
+ * no disk is the one case where the kernel cannot show its working any other
+ * way -- there is no device to ask afterwards. */
+static const char *failure = "not tried";
+
 bool xhci_device_ready(void) { return ready; }
+
+const char *xhci_error(void) { return failure; }
 
 /* ------------------------------------------------------------------ *
  *  Register access
@@ -684,18 +691,24 @@ bool xhci_init(void)
 {
     /* 0x0C/0x03/0x30: serial bus controller, USB, xHCI. */
     pci_device_t dev = pci_find_class(0x0C, 0x03, 0x30);
-    if (!dev.found)
+    if (!dev.found) {
+        failure = "no xHCI controller on the PCI bus";
         return false;
+    }
 
     uint64_t bar = pci_bar_address(&dev, 0);
-    if (!bar)
+    if (!bar) {
+        failure = "the controller has no memory-mapped registers";
         return false;
+    }
 
     pci_enable_bus_master(&dev);
 
     cap = paging_map_device(bar, 0x10000);
-    if (!cap)
+    if (!cap) {
+        failure = "the controller's registers could not be mapped";
         return false;
+    }
 
     op = cap + (rd32(cap, CAP_CAPLENGTH) & 0xFF);
     rt = cap + (rd32(cap, CAP_RTSOFF) & ~0x1Fu);
@@ -706,32 +719,42 @@ bool xhci_init(void)
     max_ports = (hcs1 >> 24) & 0xFF;
     context_size = (rd32(cap, CAP_HCCPARAMS1) & (1u << 2)) ? 64 : 32;
 
-    if (!max_slots || !max_ports)
+    if (!max_slots || !max_ports) {
+        failure = "the controller reports no slots or no ports";
         return false;
+    }
 
     take_ownership();
 
-    if (!reset_controller())
+    if (!reset_controller()) {
+        failure = "the controller would not reset";
         return false;
+    }
 
     /* One slot is all this driver ever uses. */
     wr32(op, OP_CONFIG, (rd32(op, OP_CONFIG) & ~0xFFu) | max_slots);
 
     dcbaa = dma_page();
-    if (!dcbaa || !allocate_scratchpad())
+    if (!dcbaa || !allocate_scratchpad()) {
+        failure = "out of memory for the controller's own structures";
         return false;
+    }
     wr64(op, OP_DCBAAP, (uint64_t)(uintptr_t)dcbaa);
 
-    if (!ring_init(&cmd_ring))
+    if (!ring_init(&cmd_ring)) {
+        failure = "out of memory for the command ring";
         return false;
+    }
     wr64(op, OP_CRCR, (uint64_t)(uintptr_t)cmd_ring.trbs | 1);
 
     /* The event ring is described to the controller by a table of segments;
      * one segment is enough. */
     event_trbs = dma_page();
     uint64_t *erst = dma_page();
-    if (!event_trbs || !erst)
+    if (!event_trbs || !erst) {
+        failure = "out of memory for the event ring";
         return false;
+    }
 
     erst[0] = (uint64_t)(uintptr_t)event_trbs;
     erst[1] = RING_TRBS;                 /* segment size, in TRBs */
@@ -750,13 +773,36 @@ bool xhci_init(void)
     for (int i = 0; i < 100 && (rd32(op, OP_USBSTS) & USBSTS_HCH); i++)
         pit_sleep(10);
 
-    if (rd32(op, OP_USBSTS) & USBSTS_HCH)
+    if (rd32(op, OP_USBSTS) & USBSTS_HCH) {
+        failure = "the controller would not start";
         return false;
+    }
 
-    /* Ports need a moment after the controller starts before a device that is
-     * already plugged in shows up as connected. */
-    pit_sleep(100);
+    /* Power the ports.  Firmware is entitled to leave them off, and a port with
+     * no power on it reports nothing connected however long it is watched --
+     * which looks exactly like an empty machine. */
+    for (uint32_t p = 1; p <= max_ports; p++) {
+        uint32_t sc = rd32(op, OP_PORTSC(p));
+        if (!(sc & PORTSC_PP))
+            wr32(op, OP_PORTSC(p), (sc & ~PORTSC_RW1CS) | PORTSC_PP);
+    }
 
+    /* And wait for something to appear.  A device that is already plugged in
+     * still has to be seen, trained and reported; giving up sooner is how a
+     * disk that is plainly there gets missed.  A second is the ceiling, paid
+     * only by a machine with a controller and nothing on it -- as soon as any
+     * port reports a connection, this stops. */
+    for (int i = 0; i < 10; i++) {
+        pit_sleep(100);
+
+        for (uint32_t p = 1; p <= max_ports; p++)
+            if (rd32(op, OP_PORTSC(p)) & PORTSC_CCS) {
+                failure = "a device answered but is not a disk";
+                return true;
+            }
+    }
+
+    failure = "nothing is plugged into the controller";
     return true;
 }
 
@@ -769,5 +815,10 @@ bool xhci_next_device(void)
     if (!root_port)
         return false;
 
-    return address_device();
+    if (!address_device()) {
+        failure = "a device would not take an address";
+        return false;
+    }
+
+    return true;
 }

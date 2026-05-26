@@ -36,6 +36,10 @@ bool xhci_next_device(void);
 /* True once a device has been addressed and configured. */
 bool xhci_device_ready(void);
 
+/* Why the controller or the device got no further, in a few words, for the
+ * boot log.  Meaningless once something has been found. */
+const char *xhci_error(void);
+
 /* A control transfer on endpoint 0.  `data` may be NULL for a request with no
  * data stage; `in` gives the direction of that stage.  Returns false if the
  * controller reported an error or the transfer did not complete. */

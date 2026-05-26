@@ -238,7 +238,7 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
         kprintf("usb    : %s, %u sectors (%s)\n",
                 usbdisk_name(), count, fmt_bytes((uint64_t)count * 512));
     } else {
-        kputs("usb    : no mass storage device\n");
+        kprintf("usb    : no disk -- %s\n", usbdisk_error());
     }
 
     /* A filesystem the bootloader loaded into memory, for machines whose boot
