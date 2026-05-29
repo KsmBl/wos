@@ -11,7 +11,8 @@ extern uint8_t __kernel_end[];
 static uint64_t *bitmap;            /* one bit per frame */
 static uint64_t  bitmap_frames;     /* number of frames the bitmap covers */
 static uint64_t  bitmap_words;
-static uint64_t  total_frames;
+static uint64_t  total_frames;    /* frames the bitmap covers, holes included */
+static uint64_t  usable_frames;   /* of those, the ones that are really RAM   */
 static uint64_t  used_frames;
 static uint64_t  reserved_frames;   /* used_frames once init finished */
 static uint64_t  heap_base;
@@ -79,8 +80,14 @@ static void free_range(uint64_t start, uint64_t end)
         mark_free(a / PAGE_SIZE);
 }
 
-/* Find the highest address the memory map reports, so the bitmap covers
- * everything the machine actually has. */
+/* The top of the memory the machine reports, so the bitmap covers all of it.
+ *
+ * All of it means all of it: a PC puts a few gigabytes below the 4 GiB line and
+ * everything else above it, so a machine with 8 GiB has more than half of its
+ * memory up there.  Ignoring that -- which this did, by looking only at regions
+ * whose address fits in 32 bits -- is how a machine with 8 GiB came to run in
+ * 3.  Nothing below needs the addresses to be small: the bitmap is indexed by
+ * frame number, and a frame is only ever touched through a mapping. */
 static uint64_t highest_address(const struct multiboot_info *mbi)
 {
     uint64_t highest = 0;
@@ -91,11 +98,10 @@ static uint64_t highest_address(const struct multiboot_info *mbi)
         while (cur < end) {
             const struct multiboot_mmap_entry *e =
                 (const struct multiboot_mmap_entry *)cur;
-            if (e->type == MB_MEMORY_AVAILABLE && (e->addr >> 32) == 0) {
+            if (e->type == MB_MEMORY_AVAILABLE) {
                 uint64_t top = e->addr + e->len;
-                uint32_t top32 = (top >> 32) ? 0xFFFFF000u : (uint32_t)top;
-                if (top32 > highest)
-                    highest = top32;
+                if (top > highest)
+                    highest = top;
             }
             cur += e->size + sizeof(uint32_t);
         }
@@ -247,14 +253,18 @@ void pmm_init(const struct multiboot_info *mbi)
         while (cur < end) {
             const struct multiboot_mmap_entry *e =
                 (const struct multiboot_mmap_entry *)cur;
-            if (e->type == MB_MEMORY_AVAILABLE && (e->addr >> 32) == 0) {
-                uint64_t top = e->addr + e->len;
-                uint32_t top32 = (top >> 32) ? 0xFFFFF000u : (uint32_t)top;
-                free_range((uint32_t)e->addr, top32);
-            }
+            if (e->type == MB_MEMORY_AVAILABLE)
+                free_range(e->addr, e->addr + e->len);
             cur += e->size + sizeof(uint32_t);
         }
     }
+
+    /* What is left free at this point is the machine's memory; everything else
+     * the bitmap covers is a hole between one bank and the next, or hardware
+     * with an address but no RAM behind it.  A PC with 8 GiB spreads it either
+     * side of a two-gigabyte hole below 4 GiB, and counting that hole as memory
+     * in use would report a machine two thirds full at boot. */
+    usable_frames = total_frames - used_frames;
 
     /* Now take back everything that must never be handed out.  The heap follows
      * the bitmap, both inside the span found for them. */
@@ -347,8 +357,10 @@ void pmm_free_frame(uint64_t phys)
         next_hint_low = frame;
 }
 
-uint64_t pmm_total_bytes(void)  { return total_frames * PAGE_SIZE; }
-uint64_t pmm_used_bytes(void)   { return used_frames * PAGE_SIZE; }
+/* The figures are about memory, not about addresses: `total` is the RAM the
+ * machine reported, and used + free adds up to it. */
+uint64_t pmm_total_bytes(void)  { return usable_frames * PAGE_SIZE; }
 uint64_t pmm_free_bytes(void)   { return (total_frames - used_frames) * PAGE_SIZE; }
+uint64_t pmm_used_bytes(void)   { return pmm_total_bytes() - pmm_free_bytes(); }
 uint64_t pmm_kernel_bytes(void) { return reserved_frames * PAGE_SIZE; }
 uint64_t pmm_heap_base(void)    { return heap_base; }

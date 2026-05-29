@@ -50,9 +50,13 @@ void selftest_interrupts(void)
  * accounting moves by exactly the right amount in both directions. */
 static void test_frame_allocator(void)
 {
-    const int    count = 16;
-    uint32_t     frames[16];
-    uint32_t     free_before = pmm_free_bytes();
+    const int count = 16;
+
+    /* 64-bit, both of them: a frame on a machine with real memory in it can
+     * sit above the 4 GiB line, and so can the free figure.  Truncating either
+     * makes this test fail on the machines it most wants to pass on. */
+    uint64_t frames[16];
+    uint64_t free_before = pmm_free_bytes();
 
     for (int i = 0; i < count; i++) {
         frames[i] = pmm_alloc_frame();
@@ -133,7 +137,7 @@ static void test_kernel_heap(void)
  * that loading a program will take. */
 static void test_address_space(void)
 {
-    uint32_t free_before = pmm_free_bytes();
+    uint64_t free_before = pmm_free_bytes();
 
     addrspace_t *as = paging_new_addrspace();
     if (!as)
@@ -462,7 +466,7 @@ void selftest_processes(void)
         return;
     }
 
-    uint32_t free_before = pmm_free_bytes();
+    uint64_t free_before = pmm_free_bytes();
 
     /* One process, with arguments, reaped for its exit status. */
     {

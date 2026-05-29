@@ -103,12 +103,16 @@ typedef struct {
  *  Memory and disk statistics
  * ------------------------------------------------------------------ */
 
+/* 64-bit, because a PC puts most of its memory above the 4 GiB line and a
+ * 32-bit count of bytes cannot reach it: a machine with 8 GiB would report 3.
+ * The disk figures are the same size for the same reason. */
 typedef struct {
-    uint32_t total_bytes;    /* usable RAM the machine reported          */
-    uint32_t used_bytes;     /* frames currently allocated               */
-    uint32_t free_bytes;     /* total_bytes - used_bytes                 */
-    uint32_t kernel_bytes;   /* kernel image, heap arena and page tables */
+    uint64_t total_bytes;    /* usable RAM the machine reported          */
+    uint64_t used_bytes;     /* frames currently allocated               */
+    uint64_t free_bytes;     /* total_bytes - used_bytes                 */
+    uint64_t kernel_bytes;   /* kernel image, heap arena and page tables */
     uint32_t page_size;      /* always 4096                              */
+    uint32_t pad;
 } wmeminfo_t;
 
 typedef struct {
@@ -131,9 +135,9 @@ typedef struct {
 } wthreadmem_t;
 
 typedef struct {
-    uint32_t total_bytes;
-    uint32_t used_bytes;
-    uint32_t free_bytes;
+    uint64_t total_bytes;
+    uint64_t used_bytes;
+    uint64_t free_bytes;
     uint32_t block_size;
     uint32_t total_blocks;
     uint32_t free_blocks;

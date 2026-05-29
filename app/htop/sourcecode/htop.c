@@ -29,12 +29,12 @@ static int cols = 80, rows = 25;
  * obvious `used * out_of / total` would overflow on a multi-gigabyte total.
  * Halving both sides keeps the ratio while bringing the product back in
  * range. */
-static unsigned scale_to(unsigned used, unsigned total, unsigned out_of)
+static unsigned scale_to(unsigned long used, unsigned long total, unsigned out_of)
 {
     if (total == 0 || out_of == 0)
         return 0;
 
-    while (used > 0xFFFFFFFFu / out_of) {
+    while (used > (unsigned long)-1 / out_of) {
         used  /= 2;
         total /= 2;
     }
@@ -47,7 +47,7 @@ static unsigned scale_to(unsigned used, unsigned total, unsigned out_of)
 
 /* Colour a meter by how full it is, the way htop does: green while there is
  * plenty, yellow as it fills, red when it is nearly gone. */
-static int meter_colour(unsigned used, unsigned total)
+static int meter_colour(unsigned long used, unsigned long total)
 {
     unsigned percent = scale_to(used, total, 100);
 
@@ -59,8 +59,8 @@ static int meter_colour(unsigned used, unsigned total)
 }
 
 /* One labelled bar: "Mem[||||||      5.3M/255.8M]". */
-static void draw_meter(int row, const char *label, unsigned used,
-                       unsigned total)
+static void draw_meter(int row, const char *label, unsigned long used,
+                       unsigned long total)
 {
     unsigned filled = scale_to(used, total, METER_WIDTH);
     if (filled > METER_WIDTH)

@@ -449,9 +449,9 @@ void ramfs_statfs(wdiskinfo_t *out)
         free_low = LOW_MEMORY_LIMIT;
 
     out->block_size   = BLOCK_SIZE;
-    out->total_bytes  = (uint32_t)(used + free_low);
-    out->free_bytes   = (uint32_t)free_low;
-    out->used_bytes   = (uint32_t)used;
+    out->total_bytes  = used + free_low;
+    out->free_bytes   = free_low;
+    out->used_bytes   = used;
     out->total_blocks = (uint32_t)((used + free_low) / BLOCK_SIZE);
     out->free_blocks  = (uint32_t)(free_low / BLOCK_SIZE);
 
