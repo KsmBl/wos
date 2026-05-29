@@ -133,9 +133,46 @@ pci_device_t pci_find(uint16_t vendor, uint16_t device)
 void pci_enable_bus_master(const pci_device_t *dev)
 {
     uint32_t cmd = pci_read32(dev->bus, dev->slot, dev->func, 0x04);
-    cmd |= 0x0001;      /* I/O space enable   */
-    cmd |= 0x0004;      /* bus master enable  */
+    cmd |= 0x0001;      /* I/O space enable     */
+    cmd |= 0x0002;      /* memory space enable  */
+    cmd |= 0x0004;      /* bus master enable    */
     pci_write32(dev->bus, dev->slot, dev->func, 0x04, cmd);
+}
+
+/* Put a device into D0, the state in which it answers.
+ *
+ * Firmware leaves a device it used in D0, and one it did not in whatever it
+ * felt like -- often D3hot, where the registers read back as all-ones and a
+ * driver sees a controller that will not do anything it is told.  The power
+ * management capability is optional, and its absence means the device has only
+ * ever been in D0. */
+void pci_power_on(const pci_device_t *dev)
+{
+    uint32_t status = pci_read32(dev->bus, dev->slot, dev->func, 0x04);
+
+    if (!(status & (1u << 20)))          /* no capability list */
+        return;
+
+    uint8_t off = (uint8_t)(pci_read32(dev->bus, dev->slot, dev->func, 0x34) & 0xFC);
+
+    for (int i = 0; i < 48 && off >= 0x40; i++) {
+        uint32_t header = pci_read32(dev->bus, dev->slot, dev->func, off);
+
+        if ((header & 0xFF) == 0x01) {   /* power management */
+            uint32_t pmcsr = pci_read32(dev->bus, dev->slot, dev->func,
+                                        (uint8_t)(off + 4));
+            if ((pmcsr & 0x3) != 0) {
+                pci_write32(dev->bus, dev->slot, dev->func,
+                            (uint8_t)(off + 4), pmcsr & ~0x3u);
+                /* The specification allows 10 ms to come back up. */
+                for (volatile int spin = 0; spin < 2000000; spin++)
+                    ;
+            }
+            return;
+        }
+
+        off = (uint8_t)((header >> 8) & 0xFC);
+    }
 }
 
 uint64_t pci_bar_address(const pci_device_t *dev, int index)

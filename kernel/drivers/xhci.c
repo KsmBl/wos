@@ -721,6 +721,7 @@ static int start_controller(int index)
         return -1;
     }
 
+    pci_power_on(&dev);
     pci_enable_bus_master(&dev);
 
     cap = paging_map_device(bar, 0x10000);
@@ -742,6 +743,11 @@ static int start_controller(int index)
     op = cap + (rd32(cap, CAP_CAPLENGTH) & 0xFF);
     rt = cap + (rd32(cap, CAP_RTSOFF) & ~0x1Fu);
     doorbell = (volatile uint32_t *)(cap + (rd32(cap, CAP_DBOFF) & ~0x3u));
+
+    if (rd32(cap, CAP_CAPLENGTH) == 0xFFFFFFFFu) {
+        failure = "the controller's registers read as all-ones";
+        return -1;
+    }
 
     uint32_t hcs1 = rd32(cap, CAP_HCSPARAMS1);
     max_slots = hcs1 & 0xFF;
@@ -837,8 +843,15 @@ static int start_controller(int index)
         }
     }
 
-    kprintf("usb    : controller %d, %u ports, nothing plugged in\n",
+    /* The ports as they actually are.  A machine that finds nothing is the one
+     * that most needs this: whether the ports have power, whether anything is
+     * connected, and what state the link is in are all in these bits, and there
+     * is no way to ask afterwards. */
+    kprintf("usb    : controller %d, %u ports, nothing plugged in; portsc",
             index, max_ports);
+    for (uint32_t p = 1; p <= max_ports && p <= 8; p++)
+        kprintf(" %x", rd32(op, OP_PORTSC(p)));
+    kputs("\n");
     failure = "nothing is plugged into any USB port";
     return -1;
 }

@@ -40,8 +40,13 @@ pci_device_t pci_find_class_index(uint8_t class_code, uint8_t subclass,
  * BAR is two consecutive registers; `index` is the first of them. */
 uint64_t pci_bar_address(const pci_device_t *dev, int index);
 
-/* Turn on I/O space and bus mastering in the device's command register, which
- * a DMA-driven NIC needs before it can do anything. */
+/* Turn on I/O space, memory space and bus mastering in the device's command
+ * register.  A DMA-driven device needs the last of those; one whose registers
+ * are memory mapped needs the second, and reads back all-ones without it. */
 void pci_enable_bus_master(const pci_device_t *dev);
+
+/* Bring a device out of a low power state, where its registers read as
+ * all-ones and it ignores everything written to them. */
+void pci_power_on(const pci_device_t *dev);
 
 #endif /* WOS_PCI_H */
