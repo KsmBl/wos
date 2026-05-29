@@ -181,7 +181,22 @@ The stick is written with two of them:
 | | |
 |---|---|
 | 1 | FAT32, marked active and typed EFI System — the loader, the kernel and a copy of the filesystem image |
-| 2 | the WFS volume itself, raw, with no filesystem in front of it |
+| 2 | the WFS volume itself, raw, filling the rest of the stick |
+
+Partition 2 is made to fit the stick, not to match the image the build
+produced: `flash-usb.sh` gives it everything left after the boot partition and
+formats it there, so a 64 GB stick is a 64 GB disk. `DISK_MB` sizes the image
+that `make run` boots from and the copy the loader carries as a fallback; it
+does not limit what a flashed stick holds.
+
+Making a volume that size costs nothing, because free space on a fresh
+filesystem is blocks nobody has written: `mkwfs` writes the metadata and the
+installed system -- a few tens of megabytes -- and leaves the rest alone.
+
+The one figure that scales with the disk is the block bitmap, which the kernel
+caches whole: a megabyte of heap for every 8 GiB. A stick beyond about 64 GiB
+needs `KHEAP_MB` raised, and says so at boot rather than failing quietly, then
+falls back to the copy in memory so the machine still comes up.
 
 Partition 2 is the one WOS runs on. The kernel drives the stick itself, through
 its own xHCI and USB mass storage drivers, so what is written to it is still

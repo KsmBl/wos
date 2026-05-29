@@ -760,35 +760,27 @@ static bool find_volume(wfs_source_t device)
     return false;
 }
 
-bool wfs_mount(void)
+/* Everything after the superblock has been found: check it is a volume this
+ * driver can work with, and read the block bitmap into memory.  False leaves
+ * the caller free to try another device. */
+static bool adopt_volume(void)
 {
-    /* Real devices first, in the order they are likely to be the system: an
-     * ATA disk, then a USB one, both of which keep what is written to them.
-     * The module the bootloader loaded is the fallback, and is only a copy in
-     * memory -- writes to it are lost at the next boot. */
-    if (ata_present() && find_volume(WFS_SOURCE_ATA)) {
-        /* mounted from the disk */
-    } else if (usbdisk_present() && find_volume(WFS_SOURCE_USB)) {
-        /* mounted from the USB device */
-    } else if (ramdisk_present() && find_volume(WFS_SOURCE_RAMDISK)) {
-        kputs("wfs    : no volume on a disk; using the boot module\n");
-    } else if (ata_present() || usbdisk_present() || ramdisk_present()) {
-        kputs("wfs    : no filesystem found on any device\n");
-        return false;
-    } else {
-        kputs("wfs    : no disk and no boot module; nothing to mount\n");
-        return false;
-    }
-
     if (sb.block_size != WFS_BLOCK_SIZE) {
         kprintf("wfs    : unsupported block size %u\n", sb.block_size);
         return false;
     }
 
+    /* The whole bitmap is cached, because every allocation consults it.  That
+     * is a megabyte of heap for every 8 GiB of disk, so a big enough volume
+     * does not fit in the arena -- and the answer is to say which knob to turn
+     * and carry on with a smaller volume, not to leave the machine with no
+     * filesystem at all. */
     uint32_t bitmap_bytes = sb.bitmap_blocks * WFS_BLOCK_SIZE;
     block_bitmap = kmalloc(bitmap_bytes);
     if (!block_bitmap) {
-        kprintf("wfs    : cannot allocate %s for the block bitmap\n",
+        kprintf("wfs    : %s volume needs %s of heap for its block bitmap; "
+                "raise KHEAP_MB\n",
+                fmt_bytes((uint64_t)sb.total_blocks * WFS_BLOCK_SIZE),
                 fmt_bytes(bitmap_bytes));
         return false;
     }
@@ -805,4 +797,35 @@ bool wfs_mount(void)
 
     mounted = true;
     return true;
+}
+
+bool wfs_mount(void)
+{
+    /* Real devices first, in the order they are likely to be the system: an
+     * ATA disk, then a USB one, both of which keep what is written to them.
+     * The module the bootloader loaded is the fallback, and is only a copy in
+     * memory -- writes to it are lost at the next boot.
+     *
+     * Each is tried all the way to a working mount, so a device that holds a
+     * volume this driver cannot take on -- too large for the heap, an
+     * unreadable bitmap -- moves on to the next rather than leaving the machine
+     * with nothing mounted. */
+    if (ata_present() && find_volume(WFS_SOURCE_ATA) && adopt_volume())
+        return true;
+
+    if (usbdisk_present() && find_volume(WFS_SOURCE_USB) && adopt_volume())
+        return true;
+
+    if (ramdisk_present() && find_volume(WFS_SOURCE_RAMDISK) && adopt_volume()) {
+        kputs("wfs    : no volume on a disk; using the boot module\n");
+        return true;
+    }
+
+    if (ata_present() || usbdisk_present() || ramdisk_present())
+        kputs("wfs    : no filesystem could be mounted from any device\n");
+    else
+        kputs("wfs    : no disk and no boot module; nothing to mount\n");
+
+    source = WFS_SOURCE_NONE;
+    return false;
 }
