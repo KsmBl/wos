@@ -5,8 +5,16 @@
  *
  *   usage: mkwfs <image> <size-in-MiB> <staging-directory>
  *
- * The whole image is built in memory and written out once, which keeps the
- * block helpers trivial compared to seeking around a file descriptor.
+ * The volume is built in memory and written out once, which keeps the block
+ * helpers trivial compared to seeking around a file descriptor.  Only the part
+ * that has anything in it is built: the metadata, and the blocks the staging
+ * tree fills.  Everything above that is free space, which on disk means blocks
+ * nobody has written and a bitmap that says so -- so a volume the size of a USB
+ * stick costs the same to make as a small one, and writing it does not mean
+ * writing tens of gigabytes of zeroes.
+ *
+ * `image` may be a file or a block device.  A file is extended to the full size
+ * afterwards; a device is already that size.
  */
 
 #include <stdio.h>
@@ -16,11 +24,18 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <unistd.h>
 
 #include "wfs.h"
 
+/* How much room to build for the staging tree.  The installed system is a few
+ * megabytes; this is generous enough that nobody meets it by accident and small
+ * enough to allocate without thinking. */
+#define DATA_ROOM_BLOCKS (256u * 1024u)      /* 256 MiB */
+
 static uint8_t              *img;
-static uint32_t              image_blocks;
+static uint32_t              image_blocks;    /* the volume, in blocks     */
+static uint32_t              built_blocks;    /* of those, the ones in RAM */
 static struct wfs_superblock *sb;
 static uint8_t              *bitmap;
 static struct wfs_inode     *inodes;
@@ -35,6 +50,8 @@ static uint8_t *block_ptr(uint32_t block)
 {
     if (block >= image_blocks)
         die("block out of range");
+    if (block >= built_blocks)
+        die("the staging tree needs more room than mkwfs builds at once");
     return img + (size_t)block * WFS_BLOCK_SIZE;
 }
 
@@ -246,11 +263,7 @@ int main(int argc, char **argv)
     if (size_mb < 1)
         die("image must be at least 1 MiB");
 
-    image_blocks = size_mb * 1024u * 1024u / WFS_BLOCK_SIZE;
-
-    img = calloc(image_blocks, WFS_BLOCK_SIZE);
-    if (!img)
-        die("out of memory allocating the image");
+    image_blocks = (uint32_t)((uint64_t)size_mb * 1024u * 1024u / WFS_BLOCK_SIZE);
 
     /* Lay out the volume: superblock, bitmap, inode table, then data.
      * One inode per 32 blocks is generous for a system that stores a few
@@ -263,6 +276,17 @@ int main(int argc, char **argv)
     total_inodes = (total_inodes + WFS_INODES_PER_BLOCK - 1)
                    / WFS_INODES_PER_BLOCK * WFS_INODES_PER_BLOCK;
     uint32_t inode_blocks = total_inodes / WFS_INODES_PER_BLOCK;
+
+    /* Build the metadata and room for the tree, not the whole volume: on a
+     * 64 GiB stick the rest is thirty gigabytes of zeroes nobody needs to write
+     * and no host wants to allocate. */
+    built_blocks = 1 + bitmap_blocks + inode_blocks + DATA_ROOM_BLOCKS;
+    if (built_blocks > image_blocks)
+        built_blocks = image_blocks;
+
+    img = calloc(built_blocks, WFS_BLOCK_SIZE);
+    if (!img)
+        die("out of memory allocating the volume");
 
     sb = (struct wfs_superblock *)img;
     sb->magic         = WFS_MAGIC;
@@ -299,14 +323,33 @@ int main(int argc, char **argv)
 
     add_host_dir(root, staging);
 
-    FILE *out = fopen(image_path, "wb");
+    /* Everything above the last block that was filled is free space, and free
+     * space on a fresh volume is blocks nobody has written to. */
+    uint32_t written_blocks = sb->data_start;
+    for (uint32_t b = sb->data_start; b < built_blocks; b++)
+        if (bitmap_test(b))
+            written_blocks = b + 1;
+
+    /* r+ on a device opens it without truncating; on a file that does not exist
+     * yet there is nothing to open, so a plain create is tried first. */
+    FILE *out = fopen(image_path, "r+b");
+    if (!out)
+        out = fopen(image_path, "wb");
     if (!out) {
-        fprintf(stderr, "mkwfs: cannot create %s: %s\n",
+        fprintf(stderr, "mkwfs: cannot open %s: %s\n",
                 image_path, strerror(errno));
         return 1;
     }
-    if (fwrite(img, WFS_BLOCK_SIZE, image_blocks, out) != image_blocks)
+    if (fwrite(img, WFS_BLOCK_SIZE, written_blocks, out) != written_blocks)
         die("short write");
+
+    /* A file has to be given the size the superblock claims; a device already
+     * has one, and telling it to be a different size does nothing. */
+    fflush(out);
+    if (ftruncate(fileno(out), (off_t)image_blocks * WFS_BLOCK_SIZE) != 0 &&
+        errno != EINVAL)
+        die("cannot set the image size");
+
     fclose(out);
 
     uint32_t used = sb->total_blocks - sb->free_blocks;

@@ -49,6 +49,8 @@ ROOT=$(cd "$(dirname "$SELF")/.." && pwd)
 
 ISO="$ROOT/build/wos.iso"
 IMG="$ROOT/build/wos.img"
+MKWFS="$ROOT/build/mkwfs"
+ROOTFS="$ROOT/build/root"
 KERNEL="$ROOT/build/kernel.elf"
 EFIAPP="$ROOT/build/BOOTX64.EFI"
 GRUBCFG="$ROOT/grub/grub.cfg"
@@ -275,17 +277,24 @@ install)
     esp_sectors=$(( img_sectors + 65536 ))          # the image, plus room
 
     total_sectors=$(blockdev --getsz "$DEVICE")
-    need_sectors=$(( 2048 + esp_sectors + img_sectors + 2048 ))
+    need_sectors=$(( 2048 + esp_sectors + 8192 ))
     if (( total_sectors < need_sectors )); then
         die "$DEVICE holds $((total_sectors/2048)) MiB; this needs $((need_sectors/2048)) MiB"
     fi
+
+    # Partition 2 gets everything left, and the filesystem is made to fit it --
+    # the stick's size is the disk's size, rather than whatever DISK_MB the
+    # build happened to use.  sfdisk fills the rest of the device when a
+    # partition is given no size.
+    data_sectors=$(( total_sectors - 2048 - esp_sectors ))
+    data_mb=$(( data_sectors / 2048 ))
 
     info "-- partitioning $DEVICE"
     sfdisk --wipe always --wipe-partitions always --quiet "$DEVICE" <<EOF
 label: dos
 unit: sectors
 start=2048, size=$esp_sectors, type=ef, bootable
-start=$(( 2048 + esp_sectors )), size=$img_sectors, type=83
+start=$(( 2048 + esp_sectors )), type=83
 EOF
     settle
     partprobe "$DEVICE" >/dev/null 2>&1 || true
@@ -323,8 +332,15 @@ EOF
     mkdir -p "$mnt/EFI/BOOT"
     cp "$EFIAPP" "$mnt/EFI/BOOT/BOOTX64.EFI"
 
-    info "-- writing the filesystem to $datapart"
-    dd if="$IMG" of="$datapart" bs=4M conv=fsync status=progress
+    # Made on the partition rather than copied onto it: an image is a fixed
+    # size and the partition is whatever is left of the stick, which is usually
+    # a great deal more.  Only the metadata and the installed system are
+    # written; the free space is blocks nobody has touched.
+    info "-- making the filesystem on $datapart ($data_mb MiB)"
+    [[ -x $MKWFS ]] || die "$MKWFS is missing; run make first"
+    [[ -d $ROOTFS ]] || die "$ROOTFS is missing; run make first"
+    "$MKWFS" "$datapart" "$data_mb" "$ROOTFS" | sed 's/^/   /'
+    sync
 
     sync
     info "-- verifying"
@@ -337,8 +353,6 @@ EOF
     [[ $magic == WFS1 ]] || die "wos.img on the stick is not a WFS volume"
     magic=$(dd if="$datapart" bs=4 count=1 status=none | tr -d '\0')
     [[ $magic == WFS1 ]] || die "$datapart is not a WFS volume"
-    cmp -n "$(stat -c %s "$IMG")" "$IMG" "$datapart" || \
-        die "the filesystem partition does not match the image"
     # 0x80 in the first partition entry: the active flag some BIOSes require.
     boot_flag=$(dd if="$DEVICE" bs=1 skip=446 count=1 status=none | od -An -tx1 | tr -d ' ')
     [[ $boot_flag == 80 ]] || warn "partition 1 is not marked active (flag $boot_flag)"

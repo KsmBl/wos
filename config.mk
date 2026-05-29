@@ -21,10 +21,12 @@ SELFTEST ?= 1
 # Size of the filesystem image, in MiB.  The installed system is about 4 MiB;
 # the rest is room to write into.
 #
-# On a machine the kernel can read the stick of, this is just disk space.  On
-# one it cannot -- no xHCI, or the stick behind a hub -- the whole image is
-# loaded into RAM instead and stays there, and the size of it is memory the
-# machine does not get back.
+# This is the image `make run` boots from, and the copy the loader carries for a
+# machine whose disk the kernel cannot read -- where it is held in RAM for the
+# whole boot, so its size is memory the machine does not get back.
+#
+# It is *not* the size of a flashed USB stick: tools/flash-usb.sh gives the
+# filesystem the whole of the stick, whatever this says.
 DISK_MB ?= 128
 
 # Size of the kernel heap arena, in MiB.  Everything kmalloc() hands out comes
@@ -32,6 +34,10 @@ DISK_MB ?= 128
 # executable image while it loads.  It is reserved at boot whether it is used or
 # not.  4 is comfortable; below that, spawning several processes at once will
 # start to fail.
+#
+# A mounted volume also caches its block bitmap here: a megabyte of heap for
+# every 8 GiB of disk.  A stick bigger than about 64 GiB needs this raised, and
+# says so at boot rather than failing quietly.
 KHEAP_MB ?= 8
 
 # ---------------------------------------------------------------------------
