@@ -20,8 +20,17 @@
 #define USB_DESC_CONFIG        0x02
 
 #define USB_CLASS_MASS_STORAGE 0x08
-#define USB_SUBCLASS_SCSI      0x06
 #define USB_PROTOCOL_BULK_ONLY 0x50
+
+/* Mass storage subclasses that answer READ(10) and WRITE(10).  SCSI is what a
+ * USB stick says; the other two are what some of them say instead, and mean
+ * the same thing for the four commands used here. */
+static bool storage_subclass(uint8_t subclass)
+{
+    return subclass == 0x06 ||       /* SCSI transparent */
+           subclass == 0x05 ||       /* SFF-8070i        */
+           subclass == 0x02;         /* MMC / ATAPI      */
+}
 
 typedef struct {
     uint8_t  length;
@@ -330,7 +339,7 @@ static bool parse_configuration(const uint8_t *buf, uint32_t length,
                 (const usb_interface_descriptor_t *)(buf + off);
 
             in_interface = i->interface_class == USB_CLASS_MASS_STORAGE &&
-                           i->interface_subclass == USB_SUBCLASS_SCSI &&
+                           storage_subclass(i->interface_subclass) &&
                            i->interface_protocol == USB_PROTOCOL_BULK_ONLY;
 
             /* Only the first such interface is of interest; a second one would
@@ -368,9 +377,28 @@ static bool probe_device(void)
      * that the assumed one works for all of them. */
     usb_device_descriptor_t device;
 
+    /* The first eight bytes are all it takes to learn the packet size, and
+     * eight is what any endpoint 0 can carry whatever it settles on. */
+    if (!xhci_control(0x80, USB_REQ_GET_DESCRIPTOR, USB_DESC_DEVICE << 8, 0,
+                      &device, 8, true)) {
+        failure = "a device would not describe itself";
+        return false;
+    }
+
+    /* SuperSpeed states it as a power of two; everything slower states it
+     * plainly. */
+    uint16_t max_packet = device.max_packet0;
+    if (device.usb_version >= 0x0300)
+        max_packet = (uint16_t)(1u << (device.max_packet0 & 0x0F));
+
+    if (max_packet >= 8 && !xhci_set_max_packet(max_packet)) {
+        failure = "a device's packet size could not be set";
+        return false;
+    }
+
     if (!xhci_control(0x80, USB_REQ_GET_DESCRIPTOR, USB_DESC_DEVICE << 8, 0,
                       &device, sizeof(device), true)) {
-        failure = "a device would not describe itself";
+        failure = "a device would not describe itself in full";
         return false;
     }
 
@@ -383,23 +411,51 @@ static bool probe_device(void)
     usb_config_descriptor_t header;
 
     if (!xhci_control(0x80, USB_REQ_GET_DESCRIPTOR, USB_DESC_CONFIG << 8, 0,
-                      &header, sizeof(header), true))
+                      &header, sizeof(header), true)) {
+        failure = "a device would not say how it is configured";
         return false;
+    }
 
     uint32_t total = header.total_length;
-    if (total < sizeof(header) || total > sizeof(config_buffer))
+    if (total < sizeof(header) || total > sizeof(config_buffer)) {
+        failure = "a device describes itself in more detail than fits";
         return false;
+    }
 
     if (!xhci_control(0x80, USB_REQ_GET_DESCRIPTOR, USB_DESC_CONFIG << 8, 0,
-                      config_buffer, (uint16_t)total, true))
+                      config_buffer, (uint16_t)total, true)) {
+        failure = "a device would not repeat its configuration in full";
         return false;
+    }
+
+    /* What it says it is, whether or not it turns out to be usable.  On a
+     * machine where the disk is not found this is the line that says why: a
+     * hub, a keyboard, or a disk speaking a protocol this driver does not. */
+    kprintf("usb    : port %u: %x:%x, %u bytes of descriptors\n",
+            xhci_port(), device.vendor, device.product, total);
+
+    for (uint32_t off = header.length; off + 2 <= total; ) {
+        uint8_t size = config_buffer[off];
+        if (size < 2)
+            break;
+
+        if (config_buffer[off + 1] == 0x04) {      /* interface */
+            const usb_interface_descriptor_t *i =
+                (const usb_interface_descriptor_t *)(config_buffer + off);
+            kprintf("usb    :   interface %u.%u: class %u/%u/%x, %u endpoints\n",
+                    i->number, i->alternate, i->interface_class,
+                    i->interface_subclass, i->interface_protocol, i->endpoints);
+        }
+
+        off += size;
+    }
 
     uint8_t configuration;
     usb_endpoint_t bulk_in, bulk_out;
 
     if (!parse_configuration(config_buffer, total, &configuration,
                              &bulk_in, &bulk_out)) {
-        failure = "a device answered but is not a disk";
+        failure = "a device is not a disk, or speaks a protocol this cannot";
         return false;
     }
 

@@ -53,6 +53,11 @@ const char *xhci_error(void);
 bool xhci_control(uint8_t request_type, uint8_t request, uint16_t value,
                   uint16_t index, void *data, uint16_t length, bool in);
 
+/* Correct the controller's idea of endpoint 0's maximum packet size, once the
+ * device has been asked what it really is.  Until then it is a guess from how
+ * fast the port trained, and a wrong guess breaks every transfer after it. */
+bool xhci_set_max_packet(uint16_t max_packet);
+
 /* Configure the device: select `configuration` and make `in`/`out` usable for
  * bulk transfers.  Must be called before xhci_bulk(). */
 bool xhci_configure(uint8_t configuration, const usb_endpoint_t *in,

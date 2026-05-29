@@ -97,6 +97,7 @@ typedef struct {
 #define TRB_DISABLE_SLOT    10
 #define TRB_ADDRESS_DEVICE  11
 #define TRB_CONFIGURE_EP    12
+#define TRB_EVALUATE_CONTEXT 13
 #define TRB_RESET_EP        14
 #define TRB_TRANSFER_EVENT  32
 #define TRB_COMMAND_EVENT   33
@@ -590,6 +591,35 @@ bool xhci_control(uint8_t request_type, uint8_t request, uint16_t value,
     return code == COMPLETION_SUCCESS || code == COMPLETION_SHORT;
 }
 
+/* Tell the controller the real maximum packet size of endpoint 0.
+ *
+ * Until the device has been asked, all that is known is how fast the port
+ * trained, and the two do not always agree: a full-speed device may use 8 or
+ * 64, and a controller told the wrong one either splits packets the device does
+ * not expect or is handed more than it has room for.  The specification's
+ * answer is to read the first eight bytes of the device descriptor, which is
+ * all it takes to learn the size, and then say so.  */
+bool xhci_set_max_packet(uint16_t max_packet)
+{
+    if (!slot_id || !input_context)
+        return false;
+
+    memset(input_context, 0, PAGE_SIZE);
+
+    /* Only endpoint 0 is being changed. */
+    uint32_t *add = context_at(input_context, 0);
+    add[1] = 1u << 1;
+
+    uint32_t *ep0 = context_at(input_context, 2);
+    ep0[1] = (4u << 3) | ((uint32_t)max_packet << 16) | (3u << 1);
+    ep0[2] = (uint32_t)(uintptr_t)ep0_ring.trbs | ep0_ring.cycle;
+    ep0[4] = 8;
+
+    return command((uint64_t)(uintptr_t)input_context, 0,
+                   TRB_TYPE(TRB_EVALUATE_CONTEXT) | ((uint32_t)slot_id << 24),
+                   NULL);
+}
+
 bool xhci_configure(uint8_t configuration, const usb_endpoint_t *in,
                     const usb_endpoint_t *out)
 {
@@ -836,9 +866,18 @@ static int start_controller(int index)
                 connected++;
 
         if (connected) {
-            kprintf("usb    : controller %d, %u ports, %d with a device\n",
-                    index, max_ports, connected);
-            failure = "a device answered but is not a disk";
+            /* The ports with something on them, and the state each is in.  A
+             * disk that is plainly plugged in and still not found shows up
+             * here as a port that is connected but never enabled. */
+            kprintf("usb    : controller %d, %u ports;", index, max_ports);
+            for (uint32_t p = 1; p <= max_ports; p++) {
+                uint32_t sc = rd32(op, OP_PORTSC(p));
+                if (sc & PORTSC_CCS)
+                    kprintf(" %u:%x", p, sc);
+            }
+            kputs("\n");
+
+            failure = "a device is connected but none of them is a disk";
             return 1;
         }
     }
