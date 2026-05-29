@@ -115,6 +115,63 @@ static uint32_t sector_size = 512;
 static uint32_t next_tag = 1;
 static char     name[32];
 
+/* What each device turned out to be, kept so it can be shown again once the
+ * boot log has scrolled.  A machine that finds no disk is one where these few
+ * lines are the whole of the evidence, and they are worth more on screen at the
+ * end than halfway up a page nobody can scroll back through.
+ *
+ * Kept as numbers rather than text because the kernel has no way to format
+ * into a buffer, and adding one for this would be the tail wagging the dog. */
+#define REPORT_MAX 12
+
+enum { REPORT_DEVICE, REPORT_INTERFACE, REPORT_OUTCOME };
+
+typedef struct {
+    uint8_t     kind;
+    uint8_t     port;
+    uint16_t    vendor, product;
+    uint16_t    descriptor_bytes;
+    uint8_t     number, alternate;
+    uint8_t     cls, subclass, protocol, endpoints;
+    const char *why;
+} report_t;
+
+static report_t report[REPORT_MAX];
+static int      report_count;
+
+static report_t *report_next(uint8_t kind)
+{
+    if (report_count >= REPORT_MAX)
+        return NULL;
+
+    report_t *r = &report[report_count++];
+    memset(r, 0, sizeof(*r));
+    r->kind = kind;
+    return r;
+}
+
+void usbdisk_print_report(void)
+{
+    for (int i = 0; i < report_count; i++) {
+        const report_t *r = &report[i];
+
+        switch (r->kind) {
+        case REPORT_DEVICE:
+            kprintf("usb    : port %u: %x:%x, %u bytes of descriptors\n",
+                    r->port, r->vendor, r->product, r->descriptor_bytes);
+            break;
+        case REPORT_INTERFACE:
+            kprintf("usb    :   interface %u.%u: class %u/%u/%x, %u endpoints\n",
+                    r->number, r->alternate, r->cls, r->subclass, r->protocol,
+                    r->endpoints);
+            break;
+        default:
+            kprintf("usb    :   -> %s\n", r->why);
+            break;
+        }
+    }
+}
+
 /* Transfers go through these rather than the caller's buffer: the controller
  * reads them by physical address, and the identity map only reaches the first
  * gigabyte, which a user-supplied pointer need not be in. */
@@ -434,6 +491,14 @@ static bool probe_device(void)
     kprintf("usb    : port %u: %x:%x, %u bytes of descriptors\n",
             xhci_port(), device.vendor, device.product, total);
 
+    report_t *r = report_next(REPORT_DEVICE);
+    if (r) {
+        r->port = xhci_port();
+        r->vendor = device.vendor;
+        r->product = device.product;
+        r->descriptor_bytes = (uint16_t)total;
+    }
+
     for (uint32_t off = header.length; off + 2 <= total; ) {
         uint8_t size = config_buffer[off];
         if (size < 2)
@@ -442,9 +507,20 @@ static bool probe_device(void)
         if (config_buffer[off + 1] == 0x04) {      /* interface */
             const usb_interface_descriptor_t *i =
                 (const usb_interface_descriptor_t *)(config_buffer + off);
+
             kprintf("usb    :   interface %u.%u: class %u/%u/%x, %u endpoints\n",
                     i->number, i->alternate, i->interface_class,
                     i->interface_subclass, i->interface_protocol, i->endpoints);
+
+            report_t *ri = report_next(REPORT_INTERFACE);
+            if (ri) {
+                ri->number     = i->number;
+                ri->alternate  = i->alternate;
+                ri->cls        = i->interface_class;
+                ri->subclass   = i->interface_subclass;
+                ri->protocol   = i->interface_protocol;
+                ri->endpoints  = i->endpoints;
+            }
         }
 
         off += size;
@@ -498,7 +574,13 @@ bool usbdisk_init(void)
             if (probe_device())
                 return true;
 
-            kprintf("usb    : port %u: %s\n", xhci_port(), failure);
+            {
+                kprintf("usb    : port %u: %s\n", xhci_port(), failure);
+
+                report_t *ro = report_next(REPORT_OUTCOME);
+                if (ro)
+                    ro->why = failure;
+            }
         }
     } while (xhci_next_controller());
 

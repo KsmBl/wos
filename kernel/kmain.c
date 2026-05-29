@@ -296,6 +296,18 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     syscall_init();
     kputs("proc   : scheduler running, syscall gate open\n");
 
+    /* Last, so it is still on screen when the shell starts: a machine that
+     * found no disk is running from a copy of the filesystem in memory and
+     * losing every write at the next boot, and these few lines are the only
+     * evidence of why. */
+    if (!usbdisk_present() && wfs_on_ramdisk()) {
+        kputs("\n");
+        kprintf("usb    : no disk was found -- %s\n", usbdisk_error());
+        usbdisk_print_report();
+        kputs("usb    : the filesystem is a copy in memory; "
+              "writes will not survive a reboot\n\n");
+    }
+
     selftest_interrupts();
     selftest_memory();
     selftest_filesystem();

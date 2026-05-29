@@ -25,6 +25,11 @@ bool usbdisk_write_sectors(uint32_t lba, uint8_t count, const void *buf);
 /* Why no disk was found, in a few words.  Meaningless once one has been. */
 const char *usbdisk_error(void);
 
+/* Print what the probe saw: each device, what it claimed to be, and what became
+ * of it.  Kept so a machine that found no disk can show its working after the
+ * boot log has scrolled away. */
+void usbdisk_print_report(void);
+
 /* What the device calls itself, for the boot log: vendor and product from its
  * INQUIRY response, or "" if it never answered one. */
 const char *usbdisk_name(void);
