@@ -13,6 +13,7 @@ static uint64_t  bitmap_frames;     /* number of frames the bitmap covers */
 static uint64_t  bitmap_words;
 static uint64_t  total_frames;    /* frames the bitmap covers, holes included */
 static uint64_t  usable_frames;   /* of those, the ones that are really RAM   */
+static uint64_t  hole_frames;     /* and the ones that are not: total - usable */
 static uint64_t  used_frames;
 static uint64_t  reserved_frames;   /* used_frames once init finished */
 static uint64_t  heap_base;
@@ -264,7 +265,8 @@ void pmm_init(const struct multiboot_info *mbi)
      * with an address but no RAM behind it.  A PC with 8 GiB spreads it either
      * side of a two-gigabyte hole below 4 GiB, and counting that hole as memory
      * in use would report a machine two thirds full at boot. */
-    usable_frames = total_frames - used_frames;
+    hole_frames   = used_frames;
+    usable_frames = total_frames - hole_frames;
 
     /* Now take back everything that must never be handed out.  The heap follows
      * the bitmap, both inside the span found for them. */
@@ -295,7 +297,11 @@ void pmm_init(const struct multiboot_info *mbi)
             pmm_reserve_range(mods[i].mod_start, mods[i].mod_end);
     }
 
-    reserved_frames = used_frames;
+    /* What the kernel took, which is not what is marked used: everything that
+     * is not memory at all was marked used by the sweep above, and a machine
+     * with two gigabytes of hardware addresses between its memory banks would
+     * otherwise report the kernel as holding two gigabytes. */
+    reserved_frames = used_frames - hole_frames;
 
     if (heap_base + KHEAP_SIZE > FBCON_APERTURE)
         panic("kernel heap does not fit below the framebuffer window");
