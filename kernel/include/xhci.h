@@ -47,6 +47,12 @@ bool xhci_device_ready(void);
  * boot log.  Meaningless once something has been found. */
 const char *xhci_error(void);
 
+/* The completion code from the last event the controller posted.  1 is success
+ * and 13 a short packet; anything else is the controller's account of what went
+ * wrong, which is the only account there is.  4 is a transfer error, 5 babble,
+ * 6 a device that stopped answering, 11 a stall. */
+uint32_t xhci_last_code(void);
+
 /* A control transfer on endpoint 0.  `data` may be NULL for a request with no
  * data stage; `in` gives the direction of that stage.  Returns false if the
  * controller reported an error or the transfer did not complete. */

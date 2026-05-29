@@ -99,6 +99,7 @@ typedef struct {
 #define TRB_CONFIGURE_EP    12
 #define TRB_EVALUATE_CONTEXT 13
 #define TRB_RESET_EP        14
+#define TRB_SET_TR_DEQUEUE  16
 #define TRB_TRANSFER_EVENT  32
 #define TRB_COMMAND_EVENT   33
 #define TRB_PORT_EVENT      34
@@ -167,9 +168,16 @@ static bool ready;
  * way -- there is no device to ask afterwards. */
 static const char *failure = "not tried";
 
+/* The completion code the controller last reported, which is the only thing
+ * that says *why* a transfer failed: 4 is a transfer error, 5 a babble, 6 a
+ * device that stopped answering, 13 a short packet. */
+static uint32_t last_code;
+
 bool xhci_device_ready(void) { return ready; }
 
 const char *xhci_error(void) { return failure; }
+
+uint32_t xhci_last_code(void) { return last_code; }
 
 /* ------------------------------------------------------------------ *
  *  Register access
@@ -229,10 +237,25 @@ static bool ring_init(ring_t *r)
     return true;
 }
 
+/* Put a ring back to its first entry: nothing on it, and the next TRB written
+ * goes at the top with the cycle state it started life with. */
+static void ring_rewind(ring_t *r)
+{
+    r->index = 0;
+    r->cycle = 1;
+    memset(r->trbs, 0, PAGE_SIZE);
+    r->trbs[RING_USABLE].parameter = (uint64_t)(uintptr_t)r->trbs;
+    r->trbs[RING_USABLE].control   = TRB_TYPE(TRB_LINK) | TRB_TOGGLE | 1;
+}
+
 /* Put one TRB on a ring.  The cycle bit is written last, because that is the
- * bit the controller watches to decide the entry is real. */
-static void ring_push(ring_t *r, uint64_t parameter, uint32_t status,
-                      uint32_t control)
+ * bit the controller watches to decide the entry is real.
+ *
+ * Returns where it landed.  Every event the controller sends back names the TRB
+ * it belongs to, and that is the only reliable way to tell one transfer's
+ * events from the next one's. */
+static trb_t *ring_push(ring_t *r, uint64_t parameter, uint32_t status,
+                        uint32_t control)
 {
     trb_t *t = &r->trbs[r->index];
 
@@ -248,6 +271,8 @@ static void ring_push(ring_t *r, uint64_t parameter, uint32_t status,
         r->index = 0;
         r->cycle ^= 1;
     }
+
+    return t;
 }
 
 /* ------------------------------------------------------------------ *
@@ -288,16 +313,52 @@ static bool event_wait(trb_t *out, uint32_t ms)
     }
 }
 
-/* Wait for an event of a particular kind, discarding the others -- port status
- * changes arrive unasked for and are of no interest once a device is up. */
-static bool event_wait_type(trb_t *out, uint32_t type, uint32_t ms)
+/* Wait for the event belonging to one particular TRB.
+ *
+ * Not simply "the next event of the right kind": one transfer can raise more
+ * than one event, and taking the first and leaving the rest is how this driver
+ * used to lose track of itself.  A data stage asks for an interrupt on a short
+ * packet, and a short packet is the normal case -- a device asked for eighteen
+ * bytes of descriptor over a sixty-four byte endpoint sends one short packet --
+ * so the data stage raises an event of its own and the status stage raises a
+ * second.  Answering the first and returning left the second in the ring, where
+ * the *next* transfer read it as its own answer, one behind for the rest of the
+ * boot.  Whichever device happened to be handed a stale error was then reported
+ * as broken.
+ *
+ * Every event names the TRB it came from in its parameter field, and the rings
+ * live in identity-mapped memory, so that number is a pointer to compare
+ * against.  Events for other TRBs are folded in on the way past: a real error
+ * ends the wait immediately, since the TRBs behind it will not run.  Events of
+ * other kinds -- port status changes, which arrive unasked for -- are dropped.
+ */
+static bool event_wait_for(const trb_t *trb, uint32_t type, uint32_t ms,
+                           trb_t *out)
 {
+    uint64_t want = (uint64_t)(uintptr_t)trb;
+
     for (int i = 0; i < 64; i++) {
-        if (!event_wait(out, ms))
+        trb_t event;
+
+        if (!event_wait(&event, ms))
             return false;
-        if (TRB_TYPE_OF(out->control) == type)
+
+        if (TRB_TYPE_OF(event.control) != type)
+            continue;
+
+        uint32_t code = COMPLETION_OF(event.status);
+        last_code = code;
+
+        if (code != COMPLETION_SUCCESS && code != COMPLETION_SHORT)
+            return false;
+
+        if (event.parameter == want) {
+            if (out)
+                *out = event;
             return true;
+        }
     }
+
     return false;
 }
 
@@ -305,18 +366,10 @@ static bool event_wait_type(trb_t *out, uint32_t type, uint32_t ms)
 static bool command(uint64_t parameter, uint32_t status, uint32_t control,
                     trb_t *completion)
 {
-    trb_t event;
-
-    ring_push(&cmd_ring, parameter, status, control);
+    trb_t *trb = ring_push(&cmd_ring, parameter, status, control);
     doorbell[0] = 0;
 
-    if (!event_wait_type(&event, TRB_COMMAND_EVENT, 1000))
-        return false;
-
-    if (completion)
-        *completion = event;
-
-    return COMPLETION_OF(event.status) == COMPLETION_SUCCESS;
+    return event_wait_for(trb, TRB_COMMAND_EVENT, 1000, completion);
 }
 
 /* ------------------------------------------------------------------ *
@@ -440,43 +493,53 @@ static bool allocate_scratchpad(void)
     return true;
 }
 
+/* Reset one port and wait for the device on it to train.  False if nothing is
+ * there, or it never came up. */
+static bool reset_port(uint32_t p)
+{
+    uint32_t sc = rd32(op, OP_PORTSC(p));
+
+    if (!(sc & PORTSC_CCS))
+        return false;
+
+    /* Powered ports that are already enabled trained themselves, which is
+     * what a USB 3 port does on connect.  A USB 2 port needs telling. */
+    if (!(sc & PORTSC_PED)) {
+        wr32(op, OP_PORTSC(p), PORTSC_KEEP(sc) | PORTSC_PR);
+
+        for (int i = 0; i < 100; i++) {
+            pit_sleep(10);
+            sc = rd32(op, OP_PORTSC(p));
+            if (sc & PORTSC_PRC)
+                break;
+        }
+
+        /* Acknowledge the change bits, which stay set until written. */
+        wr32(op, OP_PORTSC(p), PORTSC_KEEP(sc) | PORTSC_PRC | PORTSC_CSC);
+        sc = rd32(op, OP_PORTSC(p));
+    }
+
+    if (!(sc & PORTSC_PED))
+        return false;
+
+    port_speed = PORTSC_SPEED(sc);
+
+    /* A device is allowed to take its time between the port coming up and
+     * being able to answer; the specification's figure is 10 ms, and nothing
+     * is lost by giving it more. */
+    pit_sleep(50);
+    return true;
+}
+
 /* Find the next port with something on it, reset it, and return its number.
  * Zero when there are no more. */
 static uint8_t find_port(void)
 {
     for (uint32_t p = port_cursor; p <= max_ports; p++) {
         port_cursor = p + 1;
-        uint32_t sc = rd32(op, OP_PORTSC(p));
 
-        if (!(sc & PORTSC_CCS))
-            continue;
-
-        /* Powered ports that are already enabled trained themselves, which is
-         * what a USB 3 port does on connect.  A USB 2 port needs telling. */
-        if (!(sc & PORTSC_PED)) {
-            wr32(op, OP_PORTSC(p), PORTSC_KEEP(sc) | PORTSC_PR);
-
-            for (int i = 0; i < 100; i++) {
-                pit_sleep(10);
-                sc = rd32(op, OP_PORTSC(p));
-                if (sc & PORTSC_PRC)
-                    break;
-            }
-
-            /* Acknowledge the change bits, which stay set until written. */
-            wr32(op, OP_PORTSC(p), PORTSC_KEEP(sc) | PORTSC_PRC | PORTSC_CSC);
-            sc = rd32(op, OP_PORTSC(p));
-        }
-
-        if (sc & PORTSC_PED) {
-            port_speed = PORTSC_SPEED(sc);
-
-            /* A device is allowed to take its time between the port coming up
-             * and being able to answer; the specification's figure is 10 ms,
-             * and nothing is lost by giving it more. */
-            pit_sleep(50);
+        if (reset_port(p))
             return (uint8_t)p;
-        }
     }
 
     port_cursor = max_ports + 1;
@@ -518,11 +581,7 @@ static bool address_device(void)
     if (!ep0_ring.trbs && !ring_init(&ep0_ring))
         return false;
 
-    ep0_ring.index = 0;
-    ep0_ring.cycle = 1;
-    memset(ep0_ring.trbs, 0, PAGE_SIZE);
-    ep0_ring.trbs[RING_USABLE].parameter = (uint64_t)(uintptr_t)ep0_ring.trbs;
-    ep0_ring.trbs[RING_USABLE].control = TRB_TYPE(TRB_LINK) | TRB_TOGGLE | 1;
+    ring_rewind(&ep0_ring);
 
     dcbaa[slot_id] = (uint64_t)(uintptr_t)device_context;
 
@@ -553,12 +612,30 @@ static bool address_device(void)
  *  Transfers
  * ------------------------------------------------------------------ */
 
-bool xhci_control(uint8_t request_type, uint8_t request, uint16_t value,
-                  uint16_t index, void *data, uint16_t length, bool in)
+/* Recover endpoint 0 after a transfer went wrong.
+ *
+ * A failed control transfer leaves the endpoint halted with the TRBs behind the
+ * failure still on the ring, and every later transfer on it fails the same way.
+ * Resetting the endpoint and pointing it back at the start of an empty ring is
+ * what makes a second attempt an attempt rather than an echo. */
+static void reset_ep0(void)
 {
     if (!slot_id)
-        return false;
+        return;
 
+    command(0, 0, TRB_TYPE(TRB_RESET_EP) | ((uint32_t)slot_id << 24)
+                | (1u << 16), NULL);
+
+    ring_rewind(&ep0_ring);
+
+    command((uint64_t)(uintptr_t)ep0_ring.trbs | 1, 0,
+            TRB_TYPE(TRB_SET_TR_DEQUEUE) | ((uint32_t)slot_id << 24)
+            | (1u << 16), NULL);
+}
+
+static bool control_once(uint8_t request_type, uint8_t request, uint16_t value,
+                         uint16_t index, void *data, uint16_t length, bool in)
+{
     /* The setup packet travels inside the TRB rather than being pointed at. */
     uint64_t setup = (uint64_t)request_type
                    | ((uint64_t)request << 8)
@@ -576,19 +653,35 @@ bool xhci_control(uint8_t request_type, uint8_t request, uint16_t value,
         ring_push(&ep0_ring, (uint64_t)(uintptr_t)data, length,
                   TRB_TYPE(TRB_DATA) | TRB_ISP | (in ? TRB_DIR_IN : 0));
 
-    /* The status stage runs the opposite way to the data, and is the one that
-     * asks for an interrupt: its completion means the whole thing is done. */
-    ring_push(&ep0_ring, 0, 0,
-              TRB_TYPE(TRB_STATUS) | TRB_IOC | (in ? 0 : TRB_DIR_IN));
+    /* The status stage runs the opposite way to the data, and is the last TRB
+     * of the transfer: its event is the one that says the whole thing is done,
+     * and the one this waits for. */
+    trb_t *status = ring_push(&ep0_ring, 0, 0,
+                              TRB_TYPE(TRB_STATUS) | TRB_IOC |
+                              (in ? 0 : TRB_DIR_IN));
 
     doorbell[slot_id] = 1;                 /* endpoint 0 */
 
-    trb_t event;
-    if (!event_wait_type(&event, TRB_TRANSFER_EVENT, 1000))
+    return event_wait_for(status, TRB_TRANSFER_EVENT, 1000, NULL);
+}
+
+bool xhci_control(uint8_t request_type, uint8_t request, uint16_t value,
+                  uint16_t index, void *data, uint16_t length, bool in)
+{
+    if (!slot_id)
         return false;
 
-    uint32_t code = COMPLETION_OF(event.status);
-    return code == COMPLETION_SUCCESS || code == COMPLETION_SHORT;
+    if (control_once(request_type, request, value, index, data, length, in))
+        return true;
+
+    /* Once more, from a clean endpoint.  Devices that have just been reset are
+     * within their rights to not answer the first thing asked of them, and a
+     * disk that is only slow to wake is worth more than the microsecond saved
+     * by giving up here. */
+    reset_ep0();
+    pit_sleep(20);
+
+    return control_once(request_type, request, value, index, data, length, in);
 }
 
 /* Tell the controller the real maximum packet size of endpoint 0.
@@ -612,7 +705,11 @@ bool xhci_set_max_packet(uint16_t max_packet)
 
     uint32_t *ep0 = context_at(input_context, 2);
     ep0[1] = (4u << 3) | ((uint32_t)max_packet << 16) | (3u << 1);
-    ep0[2] = (uint32_t)(uintptr_t)ep0_ring.trbs | ep0_ring.cycle;
+    /* Where the ring has got to, not where it starts: a controller that takes
+     * this field at its word would otherwise be sent back over TRBs it has
+     * already run. */
+    ep0[2] = (uint32_t)(uintptr_t)&ep0_ring.trbs[ep0_ring.index]
+           | ep0_ring.cycle;
     ep0[4] = 8;
 
     return command((uint64_t)(uintptr_t)input_context, 0,
@@ -687,17 +784,12 @@ bool xhci_bulk(bool in, void *data, uint32_t length)
     if (length > 0x10000)
         return false;
 
-    ring_push(ring, (uint64_t)(uintptr_t)data, length,
-              TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_ISP);
+    trb_t *trb = ring_push(ring, (uint64_t)(uintptr_t)data, length,
+                           TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_ISP);
 
     doorbell[slot_id] = dci;
 
-    trb_t event;
-    if (!event_wait_type(&event, TRB_TRANSFER_EVENT, 5000))
-        return false;
-
-    uint32_t code = COMPLETION_OF(event.status);
-    return code == COMPLETION_SUCCESS || code == COMPLETION_SHORT;
+    return event_wait_for(trb, TRB_TRANSFER_EVENT, 5000, NULL);
 }
 
 bool xhci_clear_stall(bool in)
@@ -716,12 +808,15 @@ bool xhci_clear_stall(bool in)
     if (!xhci_control(0x02, 0x01, 0, address, NULL, 0, false))
         return false;
 
-    /* Both sides are back to the start of the ring now. */
-    ring->index = 0;
-    ring->cycle = 1;
-    memset(ring->trbs, 0, PAGE_SIZE);
-    ring->trbs[RING_USABLE].parameter = (uint64_t)(uintptr_t)ring->trbs;
-    ring->trbs[RING_USABLE].control = TRB_TYPE(TRB_LINK) | TRB_TOGGLE | 1;
+    /* Both sides are back to the start of the ring now -- the driver's end
+     * here, and the controller's with the command below.  Without the second
+     * half the controller carries on from wherever it stopped, which is behind
+     * everything written after this. */
+    ring_rewind(ring);
+
+    command((uint64_t)(uintptr_t)ring->trbs | 1, 0,
+            TRB_TYPE(TRB_SET_TR_DEQUEUE) | ((uint32_t)slot_id << 24)
+            | ((uint32_t)dci << 16), NULL);
 
     return true;
 }
@@ -939,17 +1034,28 @@ bool xhci_next_device(void)
     if (!op)
         return false;
 
-    root_port = find_port();
-    if (!root_port)
-        return false;
+    for (;;) {
+        root_port = find_port();
+        if (!root_port)
+            return false;
 
-    if (!address_device()) {
-        kprintf("usb    : port %u would not take an address\n", root_port);
+        if (address_device())
+            return true;
+
+        /* Once more from a fresh reset.  A device that has just been powered
+         * up is allowed to be slow about its first request, and the cost of
+         * asking twice is a tenth of a second against missing the disk. */
+        pit_sleep(100);
+        if (reset_port(root_port) && address_device())
+            return true;
+
+        /* And on to the next port either way: one device that will not answer
+         * used to end the search, and the disk is rarely the first thing
+         * plugged into a machine. */
+        kprintf("usb    : port %u would not take an address (xhci code %u)\n",
+                root_port, last_code);
         failure = "a device would not take an address";
-        return false;
     }
-
-    return true;
 }
 
 uint8_t xhci_port(void) { return root_port; }

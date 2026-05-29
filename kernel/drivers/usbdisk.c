@@ -575,7 +575,11 @@ bool usbdisk_init(void)
                 return true;
 
             {
-                kprintf("usb    : port %u: %s\n", xhci_port(), failure);
+                /* The completion code with it: "would not describe itself" is
+                 * as far as this driver can see, and the controller's number
+                 * for what went wrong is the rest of the sentence. */
+                kprintf("usb    : port %u: %s (xhci code %u)\n",
+                        xhci_port(), failure, xhci_last_code());
 
                 report_t *ro = report_next(REPORT_OUTCOME);
                 if (ro)
