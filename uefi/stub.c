@@ -445,15 +445,7 @@ static int overlaps(uint64_t start, uint64_t len, uint64_t lo, uint64_t hi)
 static void convert_memory_map(struct handoff *h, uint64_t map_size,
                                uint64_t descriptor_size)
 {
-    uint64_t keep_lo = KERNEL_LOAD_ADDRESS, keep_hi = KERNEL_MEM_END;
-    uint64_t mod_lo = 0, mod_hi = 0;
-    uint64_t self_lo = (uint64_t)h, self_hi = (uint64_t)h + sizeof(*h);
     uint32_t count = 0;
-
-    if (h->mbi.flags & MB_FLAG_MODS) {
-        mod_lo = h->module.mod_start;
-        mod_hi = h->module.mod_end;
-    }
 
     for (uint64_t off = 0; off + descriptor_size <= map_size && count < MAX_MMAP_ENTRIES;
          off += descriptor_size) {
@@ -467,11 +459,20 @@ static void convert_memory_map(struct handoff *h, uint64_t map_size,
         if (!len)
             continue;
 
-        if (type == MB_MEMORY_AVAILABLE &&
-            (overlaps(start, len, keep_lo, keep_hi) ||
-             overlaps(start, len, self_lo, self_hi) ||
-             (mod_hi && overlaps(start, len, mod_lo, mod_hi))))
-            type = MB_MEMORY_RESERVED;
+        /* Nothing here is marked reserved on the kernel's behalf.
+         *
+         * It is tempting to: the kernel image, this block and the filesystem
+         * image all sit in memory the firmware calls available.  But the
+         * firmware describes memory in the regions it allocated them from, and
+         * those three came out of one such region -- so reserving the region
+         * that holds any of them reserves all of it, and a 128 MiB filesystem
+         * image disappears from the machine's memory because a 36 KiB
+         * structure shares a descriptor with it.
+         *
+         * The kernel reserves all three itself, by address, exactly: its own
+         * image from its linker symbols, and the rest from the very structure
+         * this is building.  One place doing it precisely beats two doing it
+         * roughly. */
 
         /* The firmware hands out dozens of small regions and the kernel reads
          * a bounded number, so runs of the same kind are merged. */
