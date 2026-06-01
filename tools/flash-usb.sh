@@ -20,11 +20,12 @@
 # WOS's own loader, because GRUB cannot hand over to this kernel under UEFI at
 # all (docs/usb.md).
 #
-# The kernel has no USB driver and cannot read the stick it booted from, so the
-# filesystem is loaded into memory before it starts -- by GRUB as a Multiboot
-# module, or by the UEFI loader reading it off the volume.  Changes to it are
-# lost at power off unless the machine also has an ATA disk holding a WFS
-# volume, which the kernel prefers when it finds one.
+# The kernel reads partition 2 through its own xHCI driver, so what is written
+# there survives a power off.  /boot/wos.img is the fallback for a controller
+# the driver cannot use: loaded into memory before the kernel starts -- by GRUB
+# as a Multiboot module, or by the UEFI loader reading it off the volume -- and
+# lost at power off.  It is deliberately small; the stick's own partition is
+# where the space is.
 #
 #   usage: sudo tools/flash-usb.sh [options]
 #
@@ -58,6 +59,21 @@ MODE=install
 DEVICE=""
 SHOW_ALL=0
 ASSUME_YES=0
+
+# How big the copy in /boot may be.
+#
+# That copy is the fallback: it is read into RAM before the kernel starts, on a
+# machine whose USB controller the kernel cannot drive, and it stays in RAM for
+# the whole boot.  So it costs its own size in memory, and it has a ceiling it
+# cannot be seen above at all -- the loader has to place it under the 768 MiB
+# mark, because that is the part of memory the kernel identity maps.
+#
+# build/wos.img is whatever DISK_MB says, which is meant for `make run` and can
+# easily be gigabytes.  Copying that here made the loader fail to place it and
+# the machine boot with no filesystem whatsoever.  A separate small one is made
+# instead when the built image is too big; the real filesystem is partition 2,
+# which gets the whole stick regardless.
+FALLBACK_MB=64
 
 die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 info() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -102,6 +118,10 @@ if [[ $EUID -ne 0 ]]; then
     exec sudo -- "$SELF" "${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}"
 fi
 
+# What actually goes to /boot/wos.img.  build/wos.img unless that is over the
+# ceiling, in which case a small one built for the purpose.
+BOOTIMG="$IMG"
+
 case $MODE in
     install)
         for f in "$KERNEL" "$EFIAPP" "$IMG" "$GRUBCFG"; do
@@ -109,6 +129,16 @@ case $MODE in
         done
         [[ -d /usr/lib/grub/i386-pc ]] || \
             die "no /usr/lib/grub/i386-pc -- install GRUB's BIOS target (grub-pc / grub2-pc)"
+
+        if (( $(stat -c %s "$IMG") > FALLBACK_MB * 1024 * 1024 )); then
+            [[ -x $MKWFS ]] || die "$MKWFS is missing; run make first"
+            [[ -d $ROOTFS ]] || die "$ROOTFS is missing; run make first"
+
+            info "-- $(basename "$IMG") is $(numfmt --to=iec "$(stat -c %s "$IMG")"); building a ${FALLBACK_MB} MiB one for /boot"
+            BOOTIMG=$(mktemp /tmp/wos-boot-XXXXXX.img)
+            trap 'rm -f "$BOOTIMG"' EXIT
+            "$MKWFS" "$BOOTIMG" "$FALLBACK_MB" "$ROOTFS" >/dev/null
+        fi
         ;;
     iso) [[ -f $ISO ]] || die "no $ISO -- run 'make' first" ;;
     img) [[ -f $IMG ]] || die "no $IMG -- run 'make' first" ;;
@@ -193,13 +223,13 @@ lsblk -o PATH,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINTS "$DEVICE" | sed 's/^/  /'
 echo
 case $MODE in
     install)
-        img_bytes=$(stat -c %s "$IMG")
+        img_bytes=$(stat -c %s "$BOOTIMG")
         (( dev_bytes >= img_bytes + 128 * 1024 * 1024 )) || \
             die "$DEVICE is too small: the filesystem alone is $(numfmt --to=iec "$img_bytes")"
         echo "  a FAT32 boot partition and a WFS partition WOS reads and writes"
         echo "  $KERNEL  -> /boot/kernel.elf   (BIOS: GRUB loads this)"
         echo "  $EFIAPP  -> /EFI/BOOT/BOOTX64.EFI   (UEFI: the firmware loads this)"
-        echo "  $IMG  -> /boot/wos.img  ($(numfmt --to=iec "$img_bytes"), loaded into RAM at boot)"
+        echo "  $BOOTIMG  -> /boot/wos.img  ($(numfmt --to=iec "$img_bytes"), the fallback, loaded into RAM at boot)"
         ;;
     iso) echo "  $ISO  -> $DEVICE (whole device, hybrid ISO)" ;;
     img) echo "  $IMG  -> $DEVICE at LBA 0 (raw WFS volume, not bootable)" ;;
@@ -273,7 +303,7 @@ install)
     # still there at the next boot.  It cannot live inside the FAT partition --
     # WOS has no FAT driver, and the copy in /boot is only what the loader
     # hands over on a machine whose USB the kernel cannot drive.
-    img_sectors=$(( ($(stat -c %s "$IMG") + 511) / 512 ))
+    img_sectors=$(( ($(stat -c %s "$BOOTIMG") + 511) / 512 ))
     esp_sectors=$(( img_sectors + 65536 ))          # the image, plus room
 
     total_sectors=$(blockdev --getsz "$DEVICE")
@@ -310,6 +340,7 @@ EOF
     cleanup() {
         mountpoint -q "$mnt" 2>/dev/null && umount "$mnt" || true
         rmdir "$mnt" 2>/dev/null || true
+        [[ $BOOTIMG == "$IMG" ]] || rm -f "$BOOTIMG"
     }
     trap cleanup EXIT
 
@@ -318,7 +349,7 @@ EOF
 
     info "-- copying the kernel and its filesystem"
     cp "$KERNEL" "$mnt/boot/kernel.elf"
-    cp "$IMG"    "$mnt/boot/wos.img"
+    cp "$BOOTIMG" "$mnt/boot/wos.img"
     cp "$GRUBCFG" "$mnt/boot/grub/grub.cfg"
 
     info "-- installing GRUB for BIOS"
@@ -383,17 +414,22 @@ Booting it
 
   Secure Boot must be off; the UEFI loader is unsigned.
 
-The filesystem is in RAM
-  GRUB loads /boot/wos.img as a Multiboot module and the kernel mounts it from
-  memory, because it has no USB driver and cannot read the stick it booted
-  from.  The boot log says so:
+Where the filesystem comes from
+  Partition 2 is the real one: the kernel drives the stick's xHCI controller
+  itself, reads and writes that partition, and what is written there is still
+  there next time.  The boot log says so:
+
+      wfs    : mounted from the USB device, ...
+
+  If the controller is one the driver cannot use, it falls back to the copy in
+  /boot, read into RAM before the kernel starts:
 
       wfs    : mounted in RAM (changes are not saved), ...
 
-  Everything works normally -- the apps are all there -- but nothing written
-  survives a reboot.  If the machine has a PATA/SATA disk in IDE/legacy
-  (compatibility) mode, not AHCI, the kernel finds it, prefers it, and writes
-  to it persistently:
+  Everything works the same in that case -- the apps are all there -- but
+  nothing written survives a reboot, and the boot log says which device got in
+  the way.  A PATA/SATA disk in IDE/legacy (compatibility) mode, not AHCI, is
+  the third option, and the kernel prefers it over RAM:
 
       sudo tools/flash-usb.sh --mode img --device /dev/sdX   # erases that disk
 

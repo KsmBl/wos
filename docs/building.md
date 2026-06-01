@@ -80,10 +80,11 @@ rather than skipping them at runtime, so `kernel/selftest.c` compiles to nothing
 and the kernel is about 40 KiB smaller. The boot goes straight from the driver
 log to the shell.
 
-`DISK_MB` is worth setting when booting from USB. There is no USB driver, so
-the whole filesystem image is loaded into RAM and stays there for the life of
-the boot — a 64 MiB image costs 64 MiB of memory, and the installed system uses
-about 4 MiB of it. See [`usb.md`](usb.md#memory).
+`DISK_MB` sizes the image `make run` boots from. It is not the size of a
+flashed USB stick — `flash-usb.sh` gives the filesystem the whole stick — and
+it is not the size of the fallback copy in `/boot` either, which that script
+caps at 64 MiB because the loader has to place it in low memory. See
+[`usb.md`](usb.md#memory).
 
 Changing either setting rebuilds what depends on it: every kernel object for
 `SELFTEST`, the image for `DISK_MB`. Neither can be noticed from a timestamp,

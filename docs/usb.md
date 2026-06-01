@@ -186,8 +186,14 @@ The stick is written with two of them:
 Partition 2 is made to fit the stick, not to match the image the build
 produced: `flash-usb.sh` gives it everything left after the boot partition and
 formats it there, so a 64 GB stick is a 64 GB disk. `DISK_MB` sizes the image
-that `make run` boots from and the copy the loader carries as a fallback; it
-does not limit what a flashed stick holds.
+that `make run` boots from; it does not limit what a flashed stick holds.
+
+Nor does it size the copy in `/boot`. That copy is read into RAM before the
+kernel starts and has to sit below the 768 MiB mark, which is as far as the
+kernel's identity map reaches — a `DISK_MB=2048` image cannot go there at all,
+and a machine handed one boots with no filesystem and no shell. So
+`flash-usb.sh` builds its own 64 MiB one whenever `build/wos.img` is larger,
+and says that it did.
 
 Making a volume that size costs nothing, because free space on a fresh
 filesystem is blocks nobody has written: `mkwfs` writes the metadata and the
@@ -222,6 +228,40 @@ What the USB support does and does not cover:
 - **What is plugged in at boot is what there is.** Nothing is watched for
   afterwards.
 
+When no disk is found, every port says why, with the controller's completion
+code for the last thing that happened on it:
+
+```
+usb    : port 6: ba:565a, 760 bytes of descriptors
+usb    :   interface 0.0: class 14/1/0, 1 endpoints
+usb    : port 6: a device is not a disk, or speaks a protocol this cannot (xhci code 1)
+```
+
+Code 1 is success and 13 a short packet — those two mean the driver got its
+answer and did not like it, as above, where the device is a webcam. Anything
+else is the controller's account of a transfer that failed: 4 a transfer error,
+5 babble, 6 a device that stopped answering, 11 a stall.
+
+### One transfer, more than one event
+
+The trap that cost the most here: a transfer can raise several events, and
+taking the first one and returning leaves the rest for the next transfer to
+mistake for its own.
+
+A data stage asks for an interrupt on a short packet, and a short packet is the
+*normal* case — eighteen bytes of device descriptor over a sixty-four byte
+endpoint is one short packet — so the data stage raises an event and the status
+stage raises a second. Answering the first put the driver one event behind for
+the rest of the boot, and whichever device happened to be handed a stale error
+was reported as broken. On the machine this was found on, that device was the
+boot stick, and it looked exactly like a stick the driver could not talk to.
+
+Every event names the TRB it came from, and the rings are in identity-mapped
+memory, so that number is a pointer to compare against. The driver now waits
+for the event belonging to the last TRB of the transfer it posted, folds in
+what it passes on the way, and stops at the first real error — at which point
+the endpoint is reset and the transfer tried once more from a clean ring.
+
 ## /ramdisk
 
 One directory is deliberately not on the stick. `/ramdisk` is held in memory and
@@ -250,10 +290,17 @@ machine, it is:
 | framebuffer window | 4 MiB (16 MiB before this was sized to the display) |
 | kernel, low megabyte, frame bitmap, boot info | ~1.6 MiB |
 
-The filesystem image is nearly all of it, and it is not overhead: there is no
-USB driver, so the image the loader read is the disk, held in memory for the
-life of the boot. `make DISK_MB=16` builds a smaller one — the installed system
-is about 4 MiB — and gets most of it back.
+The filesystem image is nearly all of it, and on a machine where the USB driver
+works none of it is needed: the kernel mounts the stick, hands the image's
+memory back, and says so —
+
+```
+ramdisk: released 64.0 MiB; the volume is on a real device
+```
+
+It is only held for the life of the boot on a machine that fell back to it,
+where it *is* the disk. `flash-usb.sh` writes a 64 MiB one; the installed
+system is about 4 MiB of that.
 
 The framebuffer window costs memory for a subtler reason: it lives inside the
 identity map (it has to, so the console can print no matter which process is

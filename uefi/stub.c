@@ -376,7 +376,20 @@ static void load_filesystem(struct handoff *h)
 
     if (bs->allocate_pages(ALLOCATE_MAX_ADDRESS, EFI_LOADER_DATA, pages, &addr)
         != EFI_SUCCESS) {
-        print(u"WOS: not enough low memory for the filesystem image\r\n");
+        /* Almost always because the image is simply bigger than the ceiling:
+         * it has to sit in the part of memory the kernel identity maps, and a
+         * multi-gigabyte one never can.  The kernel then boots with no
+         * filesystem and no shell, which on screen looks like nothing at all
+         * went wrong -- so this says what happened and waits to be read, since
+         * the kernel clears the screen a moment later. */
+        print(u"WOS: the filesystem image is ");
+        print_dec(info->file_size / (1024 * 1024));
+        print(u" MiB and will not fit below ");
+        print_dec(LOW_LIMIT / (1024 * 1024));
+        print(u" MiB\r\n");
+        print(u"WOS: booting without a filesystem; "
+              u"rebuild with a smaller DISK_MB\r\n");
+        bs->stall(5 * 1000 * 1000);
         file->close(file);
         return;
     }
