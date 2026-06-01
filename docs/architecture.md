@@ -118,6 +118,40 @@ completes and no further IRQs would arrive.
 A fault in ring 3 kills that process and says which one; a fault in ring 0
 panics, because there is nothing sensible to continue with.
 
+One general protection fault is not a fault at all. Reading a model-specific
+register the processor does not implement is the only way to find out that it
+does not implement it, so `kernel/arch/msr.S` puts each such instruction at an
+exported address and the handler resumes at the fixup just past it. That is
+what lets the kernel ask about the clock and the temperature on a machine that
+has them without dying on one that has not — most often a hypervisor, which
+faults on every register it was not told to emulate.
+
+## Processors
+
+`kernel/arch/cpu.c` answers three separate questions from three different
+places.
+
+**How many there are** comes from the ACPI processor list, and from CPUID on a
+machine that has no such list. WOS runs on the processor it booted on and
+never starts the others, so they are reported as present and offline rather
+than left out — a monitor that showed one core on an eight-core machine would
+simply be wrong.
+
+**How fast one is going** comes from APERF and MPERF, sampled on every timer
+tick. MPERF counts at the base clock and APERF at whatever the core is really
+being clocked at, so their ratio scales the one known frequency into the real
+one. The timestamp counter cannot do this: it deliberately runs at a fixed rate
+however fast the core goes, which is what makes it a good clock and useless as
+a speedometer. Where the counters are missing, the base clock CPUID quotes is
+reported instead, tagged as such.
+
+**How hot it is** comes from the on-die sensor, which reports not a temperature
+but a distance: how many degrees below the point at which this part throttles
+itself the core currently is.
+
+Timer ticks are counted as busy or idle depending on whether the scheduler had
+anything to run, which is where a CPU usage figure comes from.
+
 ## Processes and scheduling
 
 A **process** owns an address space, a working directory and a descriptor
