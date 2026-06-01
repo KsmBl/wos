@@ -296,6 +296,29 @@ const char *whuman(unsigned long bytes)
     return buf;
 }
 
+const char *wclock_string(unsigned int khz)
+{
+    static char slots[WHUMAN_SLOTS][16];
+    static int  next;
+
+    char *buf = slots[next];
+    next = (next + 1) % WHUMAN_SLOTS;
+
+    if (khz == 0)
+        return "-";
+
+    /* Two decimals in gigahertz: one is not enough to tell neighbouring steps
+     * of a processor's clock apart, and 1.9 GHz next to 1.9 GHz reads as a
+     * meter that is not working. */
+    if (khz >= 1000000)
+        wsnprintf(buf, sizeof(slots[0]), "%u.%02uGHz",
+                  khz / 1000000, (khz % 1000000) / 10000);
+    else
+        wsnprintf(buf, sizeof(slots[0]), "%uMHz", khz / 1000);
+
+    return buf;
+}
+
 const char *wstrerror(int err)
 {
     switch (err) {

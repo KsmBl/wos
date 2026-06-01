@@ -325,6 +325,63 @@ int wproclist(wprocmem_t *out, int max);
 int wdiskinfo(wdiskinfo_t *out);
 
 /* ==================================================================== *
+ *  Processors
+ * ==================================================================== */
+
+/**
+ * Report what the machine's processor is and what it is capable of.
+ *
+ * `count` is every logical processor the firmware listed; `online` is how many
+ * the kernel is actually running on, which is one.  See wcpulist() for why the
+ * difference is worth showing rather than hiding.
+ *
+ * @param out Filled in with the core counts, the tick rate the usage counters
+ *            advance at, the base, minimum and maximum clocks the machine
+ *            admits to, and the CPU's own name.  A clock of 0 means this
+ *            machine would not say.
+ * @return 0 on success, or `-W_EFAULT`.
+ */
+int wcpuinfo(wcpuinfo_t *out);
+
+/**
+ * Read the per-core figures: clock, temperature and how busy each one is.
+ *
+ * WOS starts only the processor it booted on, so the other cores come back
+ * with `online` clear, no clock and no temperature -- a reading has to be
+ * taken by the core it describes, and nothing is running there to take it.
+ * They are still listed, because they are still part of the machine.
+ *
+ * `busy_ticks` and `idle_ticks` count since boot.  A load figure is the change
+ * in `busy_ticks` over the change in both, between two samples:
+ *
+ * @code
+ *     wcpu_t before[W_CPU_MAX], after[W_CPU_MAX];
+ *     int n = wcpulist(before, W_CPU_MAX);
+ *     ... wait a second ...
+ *     wcpulist(after, W_CPU_MAX);
+ *
+ *     unsigned busy = after[0].busy_ticks - before[0].busy_ticks;
+ *     unsigned idle = after[0].idle_ticks - before[0].idle_ticks;
+ *     unsigned percent = (busy + idle) ? busy * 100 / (busy + idle) : 0;
+ * @endcode
+ *
+ * @param out Array of at least @p max entries.
+ * @param max Most entries to write; `W_CPU_MAX` is always enough.
+ * @return The number of cores written, or `-W_EFAULT`.
+ */
+int wcpulist(wcpu_t *out, int max);
+
+/**
+ * Format a clock rate in kilohertz for people: 1900000 becomes "1.90GHz",
+ * 400000 becomes "400MHz", and 0 becomes "-".
+ *
+ * @param khz Rate to format.
+ * @return A pointer into the same rotating set of static buffers whuman()
+ *         uses, with the same rules. Not reentrant.
+ */
+const char *wclock_string(unsigned int khz);
+
+/* ==================================================================== *
  *  Processes
  * ==================================================================== */
 

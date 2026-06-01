@@ -146,6 +146,57 @@ typedef struct {
 } wdiskinfo_t;
 
 /* ------------------------------------------------------------------ *
+ *  Processors
+ *
+ *  One wcpu_t per logical processor the machine reported, whether or not the
+ *  kernel is running anything on it.  WOS starts only the processor it booted
+ *  on, so the rest are listed with `online` clear and nothing to say about
+ *  them: a reading has to be taken by the core it describes, and no code runs
+ *  there to take it.
+ * ------------------------------------------------------------------ */
+
+#define W_CPU_MAX 64        /* longest processor list the kernel will report */
+
+/* Where a clock reading came from, so a program can say what it is showing
+ * rather than implying a precision it has not got. */
+#define W_CLOCK_NONE  0     /* nothing could be measured                     */
+#define W_CLOCK_APERF 1     /* measured over the last tick: the real clock   */
+#define W_CLOCK_TSC   2     /* the timestamp counter's rate: the base clock, */
+                            /* which is what the core runs at only when it   */
+                            /* is neither throttled nor in turbo             */
+#define W_CLOCK_CPUID 3     /* the base clock CPUID quoted, never measured   */
+
+/* temp_c when the machine has no thermal sensor this core can read. */
+#define W_TEMP_UNKNOWN (-1000)
+
+typedef struct {
+    int32_t  id;             /* 0-based index, and the position in the list */
+    uint32_t apic_id;        /* what the firmware calls it                  */
+    uint32_t online;         /* 1 if the kernel executes on this core       */
+    uint32_t clock_khz;      /* current clock, 0 when unknown               */
+    uint32_t clock_source;   /* W_CLOCK_*: how clock_khz was arrived at     */
+    int32_t  temp_c;         /* degrees Celsius, or W_TEMP_UNKNOWN          */
+    int32_t  temp_max_c;     /* the temperature the CPU throttles itself at */
+    uint32_t busy_ticks;     /* timer ticks spent running something         */
+    uint32_t idle_ticks;     /* timer ticks spent with nothing to run       */
+} wcpu_t;
+
+/* Both tick counts are cumulative since boot and wrap the way the timer does;
+ * a program shows a load by taking two samples and dividing the difference in
+ * busy_ticks by the difference in both.  A single sample is the average since
+ * boot, which is a different and much less interesting number. */
+
+typedef struct {
+    int32_t  count;          /* logical processors the machine has     */
+    int32_t  online;         /* how many of them the kernel runs on    */
+    uint32_t tick_hz;        /* rate the tick counts above advance at  */
+    uint32_t base_khz;       /* the clock the part is specified at     */
+    uint32_t min_khz;        /* slowest the machine says it will go, 0 */
+    uint32_t max_khz;        /* fastest, including turbo, 0 if unknown */
+    char     brand[52];      /* what the CPU calls itself, or empty    */
+} wcpuinfo_t;
+
+/* ------------------------------------------------------------------ *
  *  Users, roles and permissions
  *
  *  Every process runs as a user, identified by a uid.  Root is uid 0 and
@@ -246,7 +297,9 @@ typedef struct {
 #define WSYS_TCP_CLOSE  47
 #define WSYS_TIME_GET   48
 #define WSYS_TIME_SET   49
-#define WSYS_MAX        50
+#define WSYS_CPUINFO    50
+#define WSYS_CPULIST    51
+#define WSYS_MAX        52
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

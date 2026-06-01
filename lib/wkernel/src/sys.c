@@ -28,6 +28,16 @@ int wdiskinfo(wdiskinfo_t *out)
     return wsyscall1(WSYS_DISKINFO, (long)out);
 }
 
+int wcpuinfo(wcpuinfo_t *out)
+{
+    return wsyscall1(WSYS_CPUINFO, (long)out);
+}
+
+int wcpulist(wcpu_t *out, int max)
+{
+    return wsyscall2(WSYS_CPULIST, (long)out, max);
+}
+
 int wspawn(const char *path, char *const argv[])
 {
     return wsyscall2(WSYS_SPAWN, (long)path, (long)argv);
