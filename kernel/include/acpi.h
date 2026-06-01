@@ -29,4 +29,16 @@ void acpi_power_info(uint16_t *port, uint16_t *sleep_type);
 /* Ask the chipset for soft-off.  Returns only if the machine ignored it. */
 void acpi_power_off(void);
 
+/* Copy the table with this four-character signature out of physical memory,
+ * or NULL if the machine has not got one.  The caller owns the copy and frees
+ * it with kfree(); `length_out` receives its length in bytes.
+ *
+ * Reaching a table means mapping a window over physical memory that shadows
+ * the identity map while it is open, so this is for boot time only, before
+ * anything else is running to notice.  Subsystems that need ACPI data at
+ * runtime read it once during their own init and keep what they found.
+ *
+ * Only valid after acpi_init(); before that there is no root table to search. */
+void *acpi_table(const char *signature, uint32_t *length_out);
+
 #endif /* WOS_ACPI_H */
