@@ -27,6 +27,7 @@
 #include "net.h"
 #include "rtc.h"
 #include "acpi.h"
+#include "cpu.h"
 #include "user.h"
 #include "proc.h"
 #include "sched.h"
@@ -193,6 +194,11 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
         else
             kputs("acpi   : no soft-off found; the machine can only halt\n");
     }
+
+    /* After ACPI, which is where the processor list comes from, and after the
+     * timer, which is what a clock gets measured against. */
+    cpu_init();
+    cpu_print_report();
 
     /* Move the console onto a linear framebuffer for crisp text at real
      * resolutions.  Needs paging (to map the aperture) and PCI, both up now.

@@ -21,6 +21,14 @@ bool sched_active(void) { return active; }
 
 thread_t *sched_current_thread(void) { return current; }
 
+/* Before the scheduler starts, the boot context is doing real work and there
+ * is no idle thread yet -- so those ticks count as busy, which is what they
+ * are. */
+bool sched_current_is_idle(void)
+{
+    return active && current && current == idle_thread;
+}
+
 void sched_add(thread_t *t)
 {
     if (!run_queue) {
