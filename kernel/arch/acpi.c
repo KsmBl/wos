@@ -347,8 +347,11 @@ static uint16_t pm1_address(uint32_t legacy, const struct acpi_gas *extended)
     return 0;
 }
 
-static const struct acpi_fadt *find_fadt(const struct acpi_header *root,
-                                         bool xsdt)
+/* Walk the root table's list and copy out the first entry whose signature
+ * matches.  `min_length` rejects a table too short to hold what the caller is
+ * about to read out of it. */
+static struct acpi_header *find_table(const struct acpi_header *root, bool xsdt,
+                                      const char *signature, uint32_t min_length)
 {
     uint32_t entries = (root->length - sizeof(*root)) / (xsdt ? 8 : 4);
     const uint8_t *list = (const uint8_t *)(root + 1);
@@ -368,14 +371,39 @@ static const struct acpi_fadt *find_fadt(const struct acpi_header *root,
         if (!table)
             continue;
 
-        if (memcmp(table->signature, "FACP", 4) == 0 &&
-            table->length >= FADT_MINIMUM)
-            return (const struct acpi_fadt *)table;
+        if (memcmp(table->signature, signature, 4) == 0 &&
+            table->length >= min_length)
+            return table;
 
         kfree(table);
     }
 
     return NULL;
+}
+
+/* Where the root table was, so a later caller can go back for a table this
+ * file has no interest in itself. */
+static uint64_t root_phys;
+static bool     root_is_xsdt;
+
+void *acpi_table(const char *signature, uint32_t *length_out)
+{
+    if (length_out)
+        *length_out = 0;
+    if (!root_phys)
+        return NULL;
+
+    struct acpi_header *root = copy_table(root_phys);
+    if (!root)
+        return NULL;
+
+    struct acpi_header *table =
+        find_table(root, root_is_xsdt, signature, sizeof(*root));
+    kfree(root);
+
+    if (table && length_out)
+        *length_out = table->length;
+    return table;
 }
 
 void acpi_init(const struct multiboot_info *mbi)
@@ -406,7 +434,13 @@ void acpi_init(const struct multiboot_info *mbi)
     if (!root)
         return;
 
-    const struct acpi_fadt *fadt = find_fadt(root, xsdt);
+    /* Remember how to get back here: acpi_table() serves the tables other
+     * subsystems want -- the MADT for the processor list, and the rest. */
+    root_phys    = xsdt ? rsdp->xsdt_address : rsdp->rsdt_address;
+    root_is_xsdt = xsdt;
+
+    const struct acpi_fadt *fadt =
+        (const struct acpi_fadt *)find_table(root, xsdt, "FACP", FADT_MINIMUM);
     kfree(root);
     if (!fadt)
         return;

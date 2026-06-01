@@ -1,6 +1,7 @@
 /* 8254 PIT driver. */
 
 #include "pit.h"
+#include "cpu.h"
 #include "isr.h"
 #include "pic.h"
 #include "io.h"
@@ -24,6 +25,12 @@ __attribute__((weak)) void sched_tick(regs_t *regs)
 static void pit_irq(regs_t *regs)
 {
     ticks++;
+
+    /* Before the scheduler gets a chance to switch away: the tick that just
+     * elapsed belongs to whatever was running during it, not to whatever runs
+     * next. */
+    cpu_tick();
+
     sched_tick(regs);
 }
 

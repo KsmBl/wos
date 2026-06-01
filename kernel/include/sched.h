@@ -29,4 +29,9 @@ void sched_wake(wait_reason_t reason);
 /* True once the scheduler is running; before that, blocking is not possible. */
 bool sched_active(void);
 
+/* True when the processor has nothing to run and is sitting in the idle
+ * thread.  This is what makes a tick countable as busy or not, and so is the
+ * whole basis of a CPU usage figure. */
+bool sched_current_is_idle(void);
+
 #endif /* WOS_SCHED_H */

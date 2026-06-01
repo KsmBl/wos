@@ -345,6 +345,83 @@ typedef struct {
 
 ---
 
+# Processors
+
+## `int wcpuinfo(wcpuinfo_t *out)`
+
+What the machine's processor is, and what it says it can do.
+
+```c
+typedef struct {
+    int32_t  count;      /* logical processors the machine has     */
+    int32_t  online;     /* how many of them the kernel runs on    */
+    uint32_t tick_hz;    /* rate the usage counters advance at     */
+    uint32_t base_khz;   /* the clock the part is specified at     */
+    uint32_t min_khz;    /* slowest the machine says it will go, 0 */
+    uint32_t max_khz;    /* fastest, including turbo, 0 if unknown */
+    char     brand[52];  /* what the CPU calls itself, or empty    */
+} wcpuinfo_t;
+```
+
+A clock of 0 means the machine would not say. That is common inside a
+hypervisor, which answers CPUID but not the model-specific registers the rest
+of the figures live in.
+
+**Returns** 0, or `-W_EFAULT`.
+
+## `int wcpulist(wcpu_t *out, int max)`
+
+The per-core figures. `max` is the size of the array; `W_CPU_MAX` is always
+enough.
+
+```c
+typedef struct {
+    int32_t  id;           /* 0-based, and the position in the list       */
+    uint32_t apic_id;      /* what the firmware calls it                  */
+    uint32_t online;       /* 1 if the kernel executes on this core       */
+    uint32_t clock_khz;    /* current clock, 0 when unknown               */
+    uint32_t clock_source; /* W_CLOCK_*: how clock_khz was arrived at     */
+    int32_t  temp_c;       /* degrees Celsius, or W_TEMP_UNKNOWN          */
+    int32_t  temp_max_c;   /* the temperature the CPU throttles itself at */
+    uint32_t busy_ticks;   /* timer ticks spent running something         */
+    uint32_t idle_ticks;   /* timer ticks spent with nothing to run       */
+} wcpu_t;
+```
+
+WOS starts only the processor it booted on, so every other core comes back with
+`online` clear, no clock and no temperature: a reading has to be taken by the
+core it describes, and nothing is running there to take it. They are listed
+anyway, because they are part of the machine.
+
+`clock_source` says how much the clock is worth:
+
+| Value | Meaning |
+|---|---|
+| `W_CLOCK_APERF` | measured over the last tick — the real clock |
+| `W_CLOCK_TSC` | the timestamp counter's rate, i.e. the base clock, timed at boot |
+| `W_CLOCK_CPUID` | the base clock CPUID quoted, never measured |
+| `W_CLOCK_NONE` | nothing could be established |
+
+`busy_ticks` and `idle_ticks` are cumulative since boot, and wrap the way the
+timer does. A load figure is the change in `busy_ticks` over the change in
+both, between two samples — a single sample gives the average since boot, which
+is a different and much less interesting number.
+
+```c
+wcpu_t before[W_CPU_MAX], after[W_CPU_MAX];
+int n = wcpulist(before, W_CPU_MAX);
+/* ... wait a second ... */
+wcpulist(after, W_CPU_MAX);
+
+unsigned busy = after[0].busy_ticks - before[0].busy_ticks;
+unsigned idle = after[0].idle_ticks - before[0].idle_ticks;
+unsigned percent = (busy + idle) ? busy * 100 / (busy + idle) : 0;
+```
+
+**Returns** the number of cores written, or `-W_EFAULT`.
+
+---
+
 # Processes
 
 ## `int wspawn(const char *path, char *const argv[])`
@@ -551,6 +628,14 @@ Format a byte count for people: `268435456` becomes `256.0M`.
 **Returns** a pointer into a rotating set of eight static buffers, so up to
 eight results can be live in a single `wprintf()` call. Past that the earliest
 buffer is reused and that argument prints the wrong value. Not reentrant.
+
+### `const char *wclock_string(unsigned int khz)`
+
+Format a clock rate for people: `1900000` becomes `1.90GHz`, `400000` becomes
+`400MHz`, and `0` becomes `-`. Two decimal places in gigahertz, because one is
+not enough to tell neighbouring steps of a processor's clock apart.
+
+Same rotating buffers, and the same rules, as `whuman()`.
 
 ### `const char *wstrerror(int err)`
 

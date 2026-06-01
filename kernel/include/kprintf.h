@@ -27,6 +27,10 @@ void kputs(const char *s);
  * Returns one of a small rotating set of static buffers, so up to four
  * results can be live in a single kprintf call. Not reentrant. */
 const char *fmt_bytes(uint64_t bytes);
+
+/* Format a clock rate in kilohertz, e.g. "1.90 GHz" or "400 MHz", and
+ * "unknown" for zero.  Same rotating buffers, same rules, as fmt_bytes(). */
+const char *fmt_khz(uint32_t khz);
 void kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void kvprintf(const char *fmt, va_list ap);
 

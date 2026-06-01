@@ -19,6 +19,7 @@
 #include "pmm.h"
 #include "kheap.h"
 #include "isr.h"
+#include "cpu.h"
 #include "pit.h"
 #include "power.h"
 #include "keyboard.h"
@@ -240,6 +241,25 @@ static int64_t sys_diskinfo(uint64_t out)
 
     wfs_statfs((wdiskinfo_t *)out);
     return 0;
+}
+
+static int64_t sys_cpuinfo(uint64_t out)
+{
+    if (!user_range_ok((void *)out, sizeof(wcpuinfo_t), true))
+        return -W_EFAULT;
+
+    cpu_info((wcpuinfo_t *)out);
+    return 0;
+}
+
+static int64_t sys_cpulist(uint64_t out, uint64_t max)
+{
+    if (max > W_CPU_MAX)
+        max = W_CPU_MAX;
+    if (!user_range_ok((void *)out, max * sizeof(wcpu_t), true))
+        return -W_EFAULT;
+
+    return cpu_list((wcpu_t *)out, (int)max);
 }
 
 /* Copy a user argv array into the kernel.  Fills `args` (NULL-terminated) with
@@ -797,6 +817,8 @@ static void syscall_handler(regs_t *regs)
     case WSYS_TCP_CLOSE: r = sys_tcp_close(regs->rdi); break;
     case WSYS_TIME_GET:  r = sys_time_get(regs->rdi); break;
     case WSYS_TIME_SET:  r = sys_time_set(regs->rdi); break;
+    case WSYS_CPUINFO:   r = sys_cpuinfo(regs->rdi); break;
+    case WSYS_CPULIST:   r = sys_cpulist(regs->rdi, regs->rsi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

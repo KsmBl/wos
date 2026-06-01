@@ -9,6 +9,7 @@
 #include "vga.h"
 #include "fbcon.h"
 #include "serial.h"
+#include "string.h"
 #include "io.h"
 
 void kputc(char c)
@@ -126,6 +127,39 @@ const char *fmt_bytes(uint64_t bytes)
     for (const char *u = units[unit]; *u && pos + 1 < sizeof(slots[0]); u++)
         buf[pos++] = *u;
     buf[pos] = '\0';
+
+    return buf;
+}
+
+/* Format a clock in kilohertz the way a datasheet writes it: 3401000 becomes
+ * "3.40 GHz".  Two decimal places, because one is not enough to tell two steps
+ * of a processor's clock apart. */
+const char *fmt_khz(uint32_t khz)
+{
+    static char slots[4][16];
+    static int  next_slot;
+
+    char  *buf = slots[next_slot];
+    size_t cap = sizeof(slots[0]);
+    next_slot  = (next_slot + 1) % 4;
+
+    if (khz == 0)
+        return "unknown";
+
+    size_t pos = 0;
+
+    if (khz >= 1000000) {
+        append_uint(buf, &pos, cap, khz / 1000000);
+        buf[pos++] = '.';
+        uint32_t hundredths = (khz % 1000000) / 10000;
+        if (hundredths < 10)
+            buf[pos++] = '0';
+        append_uint(buf, &pos, cap, hundredths);
+        strlcpy(buf + pos, " GHz", cap - pos);
+    } else {
+        append_uint(buf, &pos, cap, khz / 1000);
+        strlcpy(buf + pos, " MHz", cap - pos);
+    }
 
     return buf;
 }
