@@ -65,8 +65,33 @@ static void page_fault_handler(regs_t *regs)
     fault_in_process(regs, "page fault");
 }
 
+/* The two MSR instructions in msr.S, and where to resume when one of them
+ * faults because this machine has not got that register. */
+extern const char msr_read_insn[], msr_read_fixup[];
+extern const char msr_write_insn[], msr_write_fixup[];
+
+static bool resume_from_msr_fault(regs_t *regs)
+{
+    if (regs->rip == (uint64_t)msr_read_insn) {
+        regs->rip = (uint64_t)msr_read_fixup;
+        return true;
+    }
+    if (regs->rip == (uint64_t)msr_write_insn) {
+        regs->rip = (uint64_t)msr_write_fixup;
+        return true;
+    }
+    return false;
+}
+
 static void gpf_handler(regs_t *regs)
 {
+    /* Reading a model-specific register the CPU does not implement is a
+     * question that was asked and answered with "no", not a bug: msr.S puts
+     * each such instruction at a known address and this resumes just past it.
+     * See the comment there. */
+    if (resume_from_msr_fault(regs))
+        return;
+
     kprintf("\ngeneral protection fault (selector %04lx)\n",
             regs->err_code & 0xFFFF);
     fault_in_process(regs, "general protection fault");
