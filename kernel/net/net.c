@@ -2,6 +2,7 @@
 
 #include "net.h"
 #include "rtl8139.h"
+#include "cpu.h"
 #include "pit.h"
 #include "io.h"
 #include "string.h"
@@ -52,54 +53,30 @@ static inline uint64_t rdtsc(void)
     return ((uint64_t)hi << 32) | lo;
 }
 
-/* Calibrate the timestamp counter against the PIT, so a round trip can be
- * timed finely.  Interrupts are already on by the time net_init runs. */
-/* The waits are bounded, because they depend on the timer interrupt actually
- * arriving.  It does on every machine this has run on, but a firmware that
- * left interrupts routed through the IOAPIC rather than the legacy PIC would
- * leave the tick count frozen, and an unbounded wait here hangs the boot
- * outright.  A rough figure is better than that: the calibration only paces
- * network timeouts.
+#define TSC_PER_US_GUESS 1000u         /* 1 GHz, if nothing could be timed */
+
+/* How many timestamp counter cycles go by in a microsecond, so a round trip
+ * can be timed finely.
  *
- * The bound is on spins that made no progress, not on the calibration as a
- * whole.  A budget for the whole thing has to be larger than the number of
- * times a fast machine can go round this loop in 200 ms, which is a number
- * that grows with every CPU -- and when it runs out on a healthy machine, it
- * declares a working timer frozen. */
-#define CALIBRATION_SPINS 200000000u
-#define TSC_PER_US_GUESS  1000u        /* 1 GHz, if the timer never ticks */
-
-/* Wait for the tick count to change.  False if it never did. */
-static bool wait_for_tick(void)
-{
-    uint32_t t = pit_ticks();
-
-    for (uint32_t spins = 0; spins <= CALIBRATION_SPINS; spins++)
-        if (pit_ticks() != t)
-            return true;
-
-    return false;
-}
-
+ * cpu_init() has already worked the rate out -- by asking the processor, or by
+ * timing it against the interval timer when the processor would not say -- and
+ * ran long before this.  A machine where even that failed leaves the figure at
+ * zero, and a guess is better here than nothing: the calibration only paces
+ * network timeouts. */
 static void calibrate_tsc(void)
 {
-    /* Start on a tick edge, so the interval measured is a whole number of
-     * ticks and not part of one. */
-    if (wait_for_tick()) {
-        uint64_t c0 = rdtsc();
+    uint32_t khz = cpu_tsc_khz();
 
-        for (int i = 0; i < 20; i++)         /* 20 ticks == 200 ms */
-            if (!wait_for_tick())
-                goto no_timer;
-
-        uint64_t per_us = (rdtsc() - c0) / (20u * 10u * 1000u);
-        tsc_per_us = per_us ? per_us : 1;
+    if (!khz) {
+        tsc_per_us = TSC_PER_US_GUESS;
+        kputs("net    : the timestamp counter's rate is unknown; "
+              "timeouts are approximate\n");
         return;
     }
 
-no_timer:
-    tsc_per_us = TSC_PER_US_GUESS;
-    kputs("net    : timer not ticking; TSC left uncalibrated\n");
+    tsc_per_us = khz / 1000;
+    if (!tsc_per_us)
+        tsc_per_us = 1;
 }
 
 /* The Internet checksum (RFC 1071).  Summing native 16-bit words and storing
