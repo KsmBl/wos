@@ -28,6 +28,11 @@ int wdiskinfo(wdiskinfo_t *out)
     return wsyscall1(WSYS_DISKINFO, (long)out);
 }
 
+int wdisklist(wdisk_t *out, int max)
+{
+    return wsyscall2(WSYS_DISKLIST, (long)out, max);
+}
+
 int wcpuinfo(wcpuinfo_t *out)
 {
     return wsyscall1(WSYS_CPUINFO, (long)out);

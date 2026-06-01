@@ -65,6 +65,10 @@ int vfs_read(struct process *p, int fd, void *buf, uint32_t len);
 int vfs_write(struct process *p, int fd, const void *buf, uint32_t len);
 int vfs_lseek(struct process *p, int fd, int32_t offset, int whence);
 int vfs_stat(struct process *p, const char *path, wstat_t *out);
+
+/* Describe every mounted filesystem, up to `max` of them.  Returns how many
+ * were written.  Needs no process: what is mounted is the same for everyone. */
+int vfs_disklist(wdisk_t *out, int max);
 int vfs_unlink(struct process *p, const char *path);
 int vfs_mkdir(struct process *p, const char *path);
 int vfs_rmdir(struct process *p, const char *path);

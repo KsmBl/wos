@@ -324,6 +324,20 @@ int wproclist(wprocmem_t *out, int max);
  */
 int wdiskinfo(wdiskinfo_t *out);
 
+/**
+ * Report every mounted filesystem, not just the one the system is on.
+ *
+ * WOS mounts two: the disk at `/`, and the one held in memory at `/ramdisk`
+ * that starts empty and is gone at the next boot.  Each entry says where it is
+ * mounted, what it is, whether what is written to it survives a reboot, and
+ * the same usage figures wdiskinfo() gives for the disk alone.
+ *
+ * @param out Array of at least @p max entries.
+ * @param max Most entries to write; `W_DISK_MAX` is always enough.
+ * @return The number of filesystems written, or `-W_EFAULT`.
+ */
+int wdisklist(wdisk_t *out, int max);
+
 /* ==================================================================== *
  *  Processors
  * ==================================================================== */

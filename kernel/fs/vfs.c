@@ -73,6 +73,46 @@ static int fs_lookup(const char *abs, uint32_t *ino)
     return ramfs_owns(abs) ? ramfs_lookup(abs, ino) : wfs_lookup(abs, ino);
 }
 
+/* Both of them, with the space each is using.
+ *
+ * This is the only place that knows there are two filesystems and where each
+ * one hangs, so it is the only place that can list them.  wfs_statfs() answers
+ * for the disk and ramfs_statfs() for the one in memory; neither knows the
+ * other exists. */
+int vfs_disklist(wdisk_t *out, int max)
+{
+    int n = 0;
+
+    if (n < max && wfs_mounted()) {
+        const char *device;
+
+        switch (wfs_source()) {
+        case WFS_SOURCE_ATA:     device = "ATA disk";        break;
+        case WFS_SOURCE_USB:     device = "USB disk";        break;
+        case WFS_SOURCE_RAMDISK: device = "copy in memory";  break;
+        default:                 device = "disk";            break;
+        }
+
+        memset(&out[n], 0, sizeof(out[n]));
+        strlcpy(out[n].mount, "/", sizeof(out[n].mount));
+        strlcpy(out[n].device, device, sizeof(out[n].device));
+        out[n].persistent = wfs_on_ramdisk() ? 0 : 1;
+        wfs_statfs(&out[n].usage);
+        n++;
+    }
+
+    if (n < max) {
+        memset(&out[n], 0, sizeof(out[n]));
+        strlcpy(out[n].mount, RAMFS_MOUNT, sizeof(out[n].mount));
+        strlcpy(out[n].device, "memory", sizeof(out[n].device));
+        out[n].persistent = 0;
+        ramfs_statfs(&out[n].usage);
+        n++;
+    }
+
+    return n;
+}
+
 static int fs_create(const char *abs, uint16_t type, uint32_t *ino)
 {
     return ramfs_owns(abs) ? ramfs_create(abs, type, ino)
