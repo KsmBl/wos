@@ -899,7 +899,8 @@ static inline int lseek(int fd, int off, int whence) { return wlseek(fd, off, wh
  *
  * Supports `%d` `%i` (signed), `%u` (unsigned), `%x` `%X` (hex), `%c`, `%s`,
  * `%p` and `%%`.  A width and the flags `-` (left align) and `0` (zero pad)
- * are honoured, so `%-12s` and `%6u` line columns up.
+ * are honoured, so `%-12s` and `%6u` line columns up.  A precision on `%s`
+ * truncates it, so `%.20s` and `%.*s` cut text to a column.
  *
  * @param fmt Format string, followed by its arguments.
  * @return The number of characters written.

@@ -126,6 +126,26 @@ static void format(struct sink *s, const char *fmt, va_list ap)
                 width = width * 10 + (*fmt++ - '0');
         }
 
+        /* A precision, which for %s is the most characters to take from the
+         * string.  Full-screen programs need it: text that has to stop at a
+         * column has to be cut somewhere, and cutting it here beats every
+         * caller copying into a buffer to do the same thing by hand. */
+        int precision = -1;
+
+        if (*fmt == '.') {
+            fmt++;
+            if (*fmt == '*') {
+                precision = va_arg(ap, int);
+                fmt++;
+            } else {
+                precision = 0;
+                while (*fmt >= '0' && *fmt <= '9')
+                    precision = precision * 10 + (*fmt++ - '0');
+            }
+            if (precision < 0)
+                precision = -1;       /* a negative one is no precision */
+        }
+
         /* Length modifiers. 'z' is here because wsize_t is 64-bit. */
         while (*fmt == 'l' || *fmt == 'z') {
             is_long = 1;
@@ -177,6 +197,9 @@ static void format(struct sink *s, const char *fmt, va_list ap)
             if (!str)
                 str = "(null)";
             int len = (int)strlen(str);
+
+            if (precision >= 0 && len > precision)
+                len = precision;
 
             if (!left)
                 sink_pad(s, width - len, ' ');

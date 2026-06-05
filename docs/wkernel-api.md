@@ -590,6 +590,13 @@ and `*` takes the width from the argument list, so columns line up:
 wprintf("%-12s %6u %s\n", name, size, whuman(bytes));
 ```
 
+A precision truncates `%s`, which is how a full-screen program cuts text at a
+column without copying it into a buffer first:
+
+```c
+wprintf("%.*s", width, title);      /* at most `width` characters */
+```
+
 There is no floating point: WOS never enables the FPU.
 
 ### `int wfprintf(int fd, const char *fmt, ...)`
