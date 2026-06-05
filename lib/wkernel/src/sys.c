@@ -114,6 +114,11 @@ void wyield(void)
     wsyscall0(WSYS_YIELD);
 }
 
+void wsleep(int ms)
+{
+    wsyscall1(WSYS_SLEEP, ms);
+}
+
 int wconsole_raw(int mode)
 {
     return wsyscall1(WSYS_CONSOLE, mode);

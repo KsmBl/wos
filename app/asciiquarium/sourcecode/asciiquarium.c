@@ -274,7 +274,7 @@ int main(int argc, char **argv)
         unsigned start = wticks();
         while (wticks() - start < 12) {
             if (drained_quit()) { quit = 1; break; }
-            wyield();
+            wsleep(10);        /* wait for the frame, do not spin for it */
         }
     }
 

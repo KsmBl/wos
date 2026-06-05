@@ -502,6 +502,21 @@ static int64_t sys_yield(void)
     return 0;
 }
 
+/* Wait without running.  Rounded up to whole ticks, because that is the only
+ * clock the scheduler has: asking for less than one tick still costs one. */
+static int64_t sys_sleep(uint64_t ms)
+{
+    if ((int64_t)ms <= 0)
+        return sys_yield();
+
+    uint32_t ticks = (uint32_t)((ms * PIT_HZ + 999) / 1000);
+    if (ticks == 0)
+        ticks = 1;
+
+    sched_sleep_until(pit_ticks() + ticks);
+    return 0;
+}
+
 static int64_t sys_console(uint64_t mode)
 {
     if (mode != W_CONSOLE_CANONICAL && mode != W_CONSOLE_RAW)
@@ -803,6 +818,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_SBRK:      r = sys_sbrk(regs->rdi); break;
     case WSYS_TICKS:     r = sys_ticks(); break;
     case WSYS_YIELD:     r = sys_yield(); break;
+    case WSYS_SLEEP:     r = sys_sleep(regs->rdi); break;
     case WSYS_CONSOLE:   r = sys_console(regs->rdi); break;
     case WSYS_POLLIN:    r = sys_pollin(regs->rdi); break;
     case WSYS_GETUID:    r = sys_getuid(); break;

@@ -8,6 +8,7 @@
 #include "sched.h"
 #include "gdt.h"
 #include "isr.h"
+#include "pit.h"
 #include "kprintf.h"
 
 extern void switch_context(uint64_t *save_rsp, uint64_t new_rsp);
@@ -162,6 +163,43 @@ void sched_wake(wait_reason_t reason)
     } while (t != run_queue);
 }
 
+/* Put the current thread to sleep until `until_tick`.
+ *
+ * A program with nothing to do until some moment has to be able to say so.
+ * Spinning on sched_yield() would do the waiting, but the processor would be
+ * fully occupied doing it -- and with the idle thread no longer taking a
+ * timeslice of its own, nothing else would ever stop the machine running flat
+ * out to wait. */
+void sched_sleep_until(uint32_t until_tick)
+{
+    if (!active) {
+        while ((int32_t)(pit_ticks() - until_tick) < 0)
+            __asm__ volatile("sti; hlt");
+        return;
+    }
+
+    current->wake_at = until_tick;
+    sched_block(WAIT_TIME);
+}
+
+/* Wake anything whose deadline has passed.  The comparison is on the signed
+ * difference so that it keeps working across the tick counter's wrap. */
+static void wake_expired(uint32_t now)
+{
+    thread_t *t = run_queue;
+    if (!t)
+        return;
+
+    do {
+        if (t->state == THREAD_BLOCKED && t->wait_reason == WAIT_TIME &&
+            (int32_t)(now - t->wake_at) >= 0) {
+            t->state       = THREAD_READY;
+            t->wait_reason = WAIT_NONE;
+        }
+        t = t->next;
+    } while (t != run_queue);
+}
+
 /* Called from the timer IRQ. Overrides the weak stub in pit.c. */
 void sched_tick(regs_t *regs)
 {
@@ -172,6 +210,8 @@ void sched_tick(regs_t *regs)
 
     if (current)
         current->cpu_ticks++;
+
+    wake_expired(pit_ticks());
 
     /* One timeslice is one tick (10 ms). Short, but this system spends most
      * of its time waiting for a key anyway. */

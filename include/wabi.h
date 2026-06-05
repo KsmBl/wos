@@ -313,7 +313,8 @@ typedef struct {
 #define WSYS_CPUINFO    50
 #define WSYS_CPULIST    51
 #define WSYS_DISKLIST   52
-#define WSYS_MAX        53
+#define WSYS_SLEEP      53
+#define WSYS_MAX        54
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

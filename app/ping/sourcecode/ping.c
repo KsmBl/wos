@@ -55,9 +55,7 @@ static void print_ms(unsigned int us)
 
 static void delay_ms(unsigned int ms)
 {
-    unsigned int until = wuptime_ms() + ms;
-    while (wuptime_ms() < until)
-        wyield();
+    wsleep((int)ms);
 }
 
 int main(int argc, char **argv)

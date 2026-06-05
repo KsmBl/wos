@@ -574,8 +574,36 @@ unsigned int wuptime_ms(void);
 /**
  * Give up the rest of this timeslice to another runnable process.
  * Purely an optimisation; the scheduler preempts anyway.
+ *
+ * This is not a way to wait.  A loop that yields is still a process asking to
+ * run, and while it goes round the processor is fully occupied doing nothing.
+ * Use wsleep() to wait.
  */
 void wyield(void);
+
+/**
+ * Stop running until @p ms milliseconds have passed.
+ *
+ * The process is taken off the run queue entirely, so the machine can be
+ * genuinely idle while it waits -- which is what makes a CPU usage figure mean
+ * something, and on a laptop is the difference between a fan that runs and one
+ * that does not.
+ *
+ * The wait is rounded up to whole timer ticks (10 ms), and returns as soon as
+ * possible after the deadline rather than exactly on it: the process has to be
+ * scheduled again like any other.
+ *
+ * @param ms Milliseconds to wait.  Zero or less is a wyield().
+ *
+ * @code
+ *     while (running) {
+ *         redraw();
+ *         while (!wpollin(W_STDIN) && wticks() < until)
+ *             wsleep(20);        // 50 times a second, not as fast as it can
+ *     }
+ * @endcode
+ */
+void wsleep(int ms);
 
 /**
  * Switch the console between line-buffered and raw input.
