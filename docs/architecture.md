@@ -176,6 +176,17 @@ The scheduler is round-robin over a circular run queue, preempting every tick
 waking a thread is a single state change. The boot context is adopted as the
 idle thread, so there is always something runnable.
 
+The idle thread is skipped too, and reached only as the fallback when nothing
+else can run. It is a member of the queue like any other thread, so taking it
+in turn gave it a full timeslice between every two slices of real work — which
+it spends halted until the next timer interrupt. A machine with one process to
+run was idle half the time with something ready to go throughout.
+
+That leaves a program with nothing to do no way to stand down, since yielding
+in a loop is still asking to run. `wsleep()` is the answer: the thread blocks
+on `WAIT_TIME` with a deadline, and the timer wakes it. Everything that waits —
+a frame interval, a poll for a keystroke, a gap between pings — waits that way.
+
 ## Syscalls
 
 `int 0x80`, with the call number in `rax` and arguments in the System V

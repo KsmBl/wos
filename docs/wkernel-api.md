@@ -343,6 +343,26 @@ typedef struct {
 
 **Returns** 0, or `-W_EFAULT`. If no disk is mounted every field is zero.
 
+## `int wdisklist(wdisk_t *out, int max)`
+
+Every mounted filesystem, not just the one the system is on. WOS mounts two:
+the disk at `/`, and the one held in memory at `/ramdisk` that starts empty and
+is gone at the next boot.
+
+```c
+typedef struct {
+    char        mount[28];    /* where it appears: "/" or "/ramdisk"      */
+    char        device[24];   /* what it is: "ATA disk", "memory", ...    */
+    uint32_t    persistent;   /* 0 when what is written is gone at reboot */
+    uint32_t    pad;
+    wdiskinfo_t usage;
+} wdisk_t;
+```
+
+`max` is the size of the array; `W_DISK_MAX` is always enough.
+
+**Returns** the number of filesystems written, or `-W_EFAULT`.
+
 ---
 
 # Processors
@@ -487,6 +507,28 @@ be met. A negative `increment` returns memory to the system.
 
 Give up the rest of this timeslice. Purely an optimisation — the scheduler
 preempts anyway.
+
+This is not a way to wait. A loop that yields is still a process asking to run,
+and the processor is fully occupied going round it.
+
+## `void wsleep(int ms)`
+
+Stop running for `ms` milliseconds. The process leaves the run queue entirely,
+so the machine can be genuinely idle while it waits — which is what makes a CPU
+usage figure mean anything, and on a laptop is the difference between a fan
+that runs and one that does not.
+
+Rounded up to whole timer ticks (10 ms), and it returns as soon as possible
+after the deadline rather than exactly on it: the process has to be scheduled
+again like any other. Zero or less is a `wyield()`.
+
+A full-screen program that must stay responsive sleeps in short slices rather
+than one long one:
+
+```c
+while (!wpollin(W_STDIN) && wticks() < until)
+    wsleep(20);        /* 50 times a second, not as fast as it can go */
+```
 
 ## `int wconsole_raw(int mode)`
 
