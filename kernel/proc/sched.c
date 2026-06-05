@@ -71,7 +71,13 @@ void sched_init(thread_t *idle)
 }
 
 /* Find the next thread that can run, starting after `from`.
- * Falls back to the idle thread when everything else is blocked. */
+ * Falls back to the idle thread when everything else is blocked.
+ *
+ * The idle thread is skipped rather than taken in turn.  It sits in the run
+ * queue like any other thread, and round-robin would hand it a full timeslice
+ * between every two slices of real work -- which it spends halted, waiting for
+ * the timer.  A machine with one process to run was idle half the time with
+ * something ready to go the whole while. */
 static thread_t *pick_next(thread_t *from)
 {
     if (!run_queue)
@@ -82,7 +88,7 @@ static thread_t *pick_next(thread_t *from)
         t = run_queue;
 
     for (int i = 0; i < MAX_THREADS + 1; i++) {
-        if (t->state == THREAD_READY)
+        if (t != idle_thread && t->state == THREAD_READY)
             return t;
         /* The current thread may keep running if nothing else is ready. */
         if (t == from && t->state == THREAD_RUNNING)
