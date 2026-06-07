@@ -43,6 +43,11 @@ int wcpulist(wcpu_t *out, int max)
     return wsyscall2(WSYS_CPULIST, (long)out, max);
 }
 
+int wcpufreq(int khz)
+{
+    return wsyscall1(WSYS_CPUFREQ, khz);
+}
+
 int wspawn(const char *path, char *const argv[])
 {
     return wsyscall2(WSYS_SPAWN, (long)path, (long)argv);

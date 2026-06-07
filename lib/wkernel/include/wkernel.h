@@ -386,6 +386,26 @@ int wcpuinfo(wcpuinfo_t *out);
 int wcpulist(wcpu_t *out, int max);
 
 /**
+ * Ask the processor to run at a particular clock.
+ *
+ * The request is clamped to the range wcpuinfo() reported and rounded to a
+ * step the hardware can take -- `step_khz`, usually 100 MHz -- so the clock
+ * that comes back is rarely the exact one asked for.
+ *
+ * There is one clock and every process on the machine runs on it, so this
+ * needs root or the `editfreq` role: a slow machine is slow for everybody, and
+ * a fast one is hot for everybody.
+ *
+ * @param khz  The clock to hold, in kilohertz.  Zero or less hands the
+ *             decision back to the hardware's own judgement.
+ * @return The clock settled on in kHz (0 for automatic), `-W_EPERM` without
+ *         the role, or `-W_ENODEV` on a machine whose clock cannot be set --
+ *         which is the usual answer inside a hypervisor, where the registers
+ *         that carry the request are not emulated.
+ */
+int wcpufreq(int khz);
+
+/**
  * Format a clock rate in kilohertz for people: 1900000 becomes "1.90GHz",
  * 400000 becomes "400MHz", and 0 becomes "-".
  *

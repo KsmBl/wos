@@ -15,17 +15,32 @@
 #define MSR_PLATFORM_INFO      0x0CE   /* the ratios the part is built for  */
 #define MSR_MPERF              0x0E7   /* ticks at the base clock           */
 #define MSR_APERF              0x0E8   /* ticks at the clock actually run   */
+#define MSR_PERF_CTL           0x199   /* ask for a clock, the old way      */
 #define MSR_THERM_STATUS       0x19C   /* the digital thermal sensor        */
 #define MSR_TEMPERATURE_TARGET 0x1A2   /* where that sensor counts down from */
 #define MSR_TURBO_RATIO_LIMIT  0x1AD   /* fastest ratio with one core busy  */
+#define MSR_PM_ENABLE          0x770   /* is hardware-managed control on?   */
+#define MSR_HWP_CAPABILITIES   0x771   /* the range it will work within     */
+#define MSR_HWP_REQUEST        0x774   /* ask for a clock, the new way      */
 
 /* Defined in msr.S: a read or write that returns false instead of faulting on
  * a machine without that register. */
 extern bool msr_try_read(uint32_t msr, uint64_t *out);
+extern bool msr_try_write(uint32_t msr, uint64_t value);
 
 /* CPUID leaf 6 (thermal and power management). */
 #define CPUID_THERM_DTS   (1u << 0)    /* EAX: digital thermal sensor       */
+#define CPUID_THERM_HWP   (1u << 7)    /* EAX: hardware-managed performance */
 #define CPUID_THERM_APERF (1u << 0)    /* ECX: APERF/MPERF are implemented  */
+
+/* IA32_PM_ENABLE bit 0: hardware-managed performance states are switched on,
+ * which is what decides whether IA32_HWP_REQUEST or the older IA32_PERF_CTL is
+ * the register the processor is listening to. */
+#define HWP_ENABLE (1ull << 0)
+
+/* The three performance fields of IA32_HWP_REQUEST, in ratio units: minimum,
+ * maximum and desired.  Writing the same value to all three pins the clock. */
+#define HWP_PERF_FIELDS 0x00FFFFFFull
 
 /* When the temperature target register is missing, 100 degrees is the value
  * Intel's parts have used throughout the range this kernel can run on.  It is
@@ -79,6 +94,11 @@ static uint32_t bus_khz = BUS_KHZ_DEFAULT;
 static bool base_is_quoted;      /* base_khz came from CPUID, not a stopwatch */
 static bool have_aperf;          /* APERF/MPERF can be read                */
 static bool have_dts;            /* the thermal sensor can be read         */
+static bool have_hwp;            /* the processor manages its own clock,
+                                  * and takes requests through HWP_REQUEST */
+static bool can_set_clock;       /* there is a register here to write      */
+static uint32_t pinned_khz;      /* what the clock was last held at, 0 for
+                                  * whatever the hardware decides           */
 static int  temp_target = TEMPERATURE_TARGET_DEFAULT;
 
 static bool ready;               /* cpu_init() has run                     */
@@ -303,6 +323,189 @@ static void find_ratio_limits(void)
         if (turbo && turbo * bus_khz > max_khz)
             max_khz = turbo * bus_khz;
     }
+
+    /* A processor managing its own clock states the range it will work in
+     * directly, and that is the range a request has to fall inside. */
+    if (have_hwp && msr_try_read(MSR_HWP_CAPABILITIES, &value) && value) {
+        uint32_t highest = value & 0xFF;
+        uint32_t lowest  = (value >> 24) & 0xFF;
+
+        if (lowest)
+            min_khz = lowest * bus_khz;
+        if (highest && highest * bus_khz > max_khz)
+            max_khz = highest * bus_khz;
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Asking for a different clock
+ * ------------------------------------------------------------------ */
+
+/* Which register this machine takes clock requests through, if any.
+ *
+ * Two mechanisms, and only one of them is listened to at a time.  A processor
+ * with hardware-managed performance states switched on decides its own clock
+ * and takes a range through IA32_HWP_REQUEST; the older arrangement has the
+ * operating system name a ratio in IA32_PERF_CTL.  Writing to the one that is
+ * not in force is not an error and not a change either -- the write lands and
+ * nothing happens -- so which is which has to be established here rather than
+ * discovered from the clock afterwards. */
+/* Can this register be read, and then written back exactly as it was?
+ *
+ * Being readable is not enough.  A hypervisor answers some of these registers
+ * and faults on writing them, so the only way to know a request could be made
+ * is to make one -- and putting back the value that is already there is a
+ * request for what the machine is doing anyway, which changes nothing whether
+ * it works or not. */
+static bool writable(uint32_t msr)
+{
+    uint64_t value;
+
+    return msr_try_read(msr, &value) && msr_try_write(msr, value);
+}
+
+static void find_clock_control(void)
+{
+    uint64_t value;
+
+    if (have_hwp && msr_try_read(MSR_PM_ENABLE, &value) && (value & HWP_ENABLE)) {
+        can_set_clock = writable(MSR_HWP_REQUEST);
+        if (can_set_clock)
+            return;
+    }
+
+    have_hwp      = false;
+    can_set_clock = writable(MSR_PERF_CTL);
+}
+
+/* Turn a clock into the ratio the hardware actually deals in: every step is a
+ * multiple of the bus reference, so 1750 MHz on a 100 MHz bus is a request for
+ * either 1.7 or 1.8 GHz and nothing in between. */
+static uint32_t ratio_for(uint32_t khz)
+{
+    uint32_t ratio = (khz + bus_khz / 2) / bus_khz;
+
+    if (ratio < 1)
+        ratio = 1;
+    if (ratio > 255)
+        ratio = 255;
+    return ratio;
+}
+
+/* Check that the request is still there after being made.
+ *
+ * A register that accepts a write and forgets it is exactly what a hypervisor
+ * provides: KVM answers IA32_PERF_CTL rather than faulting on it, so the write
+ * lands, nothing happens, and without this the machine would report a clock it
+ * had been told to hold and was never going to.  Only the field that was
+ * written is compared; the rest of the register belongs to the hardware. */
+static bool request_took(uint32_t msr, uint32_t shift, uint32_t ratio)
+{
+    uint64_t value;
+
+    if (!msr_try_read(msr, &value))
+        return false;
+
+    if (((value >> shift) & 0xFF) == ratio)
+        return true;
+
+    /* Nothing here is listening, and nothing will be later either. */
+    can_set_clock = false;
+    return false;
+}
+
+int cpu_set_khz(uint32_t khz)
+{
+    uint64_t value;
+
+    if (!can_set_clock || !bus_khz)
+        return -W_ENODEV;
+
+    if (min_khz && khz < min_khz)
+        khz = min_khz;
+    if (max_khz && khz > max_khz)
+        khz = max_khz;
+
+    uint32_t ratio = ratio_for(khz);
+
+    if (have_hwp) {
+        if (!msr_try_read(MSR_HWP_REQUEST, &value))
+            return -W_EIO;
+
+        /* Floor, ceiling and target all at one value: a range of one is how
+         * this interface is told to hold still. */
+        value &= ~HWP_PERF_FIELDS;
+        value |= ratio | (ratio << 8) | (ratio << 16);
+
+        if (!msr_try_write(MSR_HWP_REQUEST, value)) {
+            can_set_clock = false;
+            return -W_ENODEV;
+        }
+        if (!request_took(MSR_HWP_REQUEST, 16, ratio))
+            return -W_ENODEV;
+    } else {
+        if (!msr_try_read(MSR_PERF_CTL, &value))
+            return -W_EIO;
+
+        value &= ~0xFF00ull;
+        value |= (uint64_t)ratio << 8;
+
+        if (!msr_try_write(MSR_PERF_CTL, value)) {
+            can_set_clock = false;
+            return -W_ENODEV;
+        }
+        if (!request_took(MSR_PERF_CTL, 8, ratio))
+            return -W_ENODEV;
+    }
+
+    pinned_khz = ratio * bus_khz;
+    return (int)pinned_khz;
+}
+
+int cpu_set_automatic(void)
+{
+    uint64_t value;
+
+    if (!can_set_clock)
+        return -W_ENODEV;
+
+    if (have_hwp) {
+        if (!msr_try_read(MSR_HWP_CAPABILITIES, &value))
+            return -W_EIO;
+
+        uint32_t highest = value & 0xFF;
+        uint32_t lowest  = (value >> 24) & 0xFF;
+
+        if (!msr_try_read(MSR_HWP_REQUEST, &value))
+            return -W_EIO;
+
+        /* The whole range back, and a desired performance of zero, which is
+         * this interface's way of saying "you decide". */
+        value &= ~HWP_PERF_FIELDS;
+        value |= lowest | (highest << 8);
+
+        if (!msr_try_write(MSR_HWP_REQUEST, value)) {
+            can_set_clock = false;
+            return -W_ENODEV;
+        }
+    } else {
+        /* Without hardware management there is no "decide for yourself": the
+         * ratio in the register is the whole policy, so the honest equivalent
+         * is to ask for the fastest the part is rated at. */
+        if (!msr_try_read(MSR_PERF_CTL, &value))
+            return -W_EIO;
+
+        value &= ~0xFF00ull;
+        value |= (uint64_t)ratio_for(max_khz ? max_khz : base_khz) << 8;
+
+        if (!msr_try_write(MSR_PERF_CTL, value)) {
+            can_set_clock = false;
+            return -W_ENODEV;
+        }
+    }
+
+    pinned_khz = 0;
+    return 0;
 }
 
 /* Both performance counters, read together so the ratio between them covers
@@ -430,12 +633,15 @@ void cpu_info(wcpuinfo_t *out)
 {
     memset(out, 0, sizeof(*out));
 
-    out->count    = core_count;
-    out->online   = ready ? 1 : 0;
-    out->tick_hz  = PIT_HZ;
-    out->base_khz = base_khz;
-    out->min_khz  = min_khz;
-    out->max_khz  = max_khz;
+    out->count      = core_count;
+    out->online     = ready ? 1 : 0;
+    out->tick_hz    = PIT_HZ;
+    out->base_khz   = base_khz;
+    out->min_khz    = min_khz;
+    out->max_khz    = max_khz;
+    out->settable   = can_set_clock ? 1 : 0;
+    out->step_khz   = can_set_clock ? bus_khz : 0;
+    out->pinned_khz = pinned_khz;
     strlcpy(out->brand, brand, sizeof(out->brand));
 }
 
@@ -489,6 +695,13 @@ void cpu_print_report(void)
             have_dts ? "from the on-die sensor"
                      : "not readable here -- no thermal sensor");
 
+    kprintf("cpu    : clock %s\n",
+            !can_set_clock ? "cannot be set on this machine"
+                           : have_hwp ? "settable, through hardware-managed "
+                                        "performance states"
+                                      : "settable, through the performance "
+                                        "control register");
+
     if (core_count > 1)
         kprintf("cpu    : running on core %d; the other %d are listed but "
                 "never started\n", boot_core, core_count - 1);
@@ -514,10 +727,12 @@ void cpu_init(void)
     if (max_leaf >= 6) {
         cpuid_leaf(6, 0, r);
         have_dts   = (r[0] & CPUID_THERM_DTS) != 0;
+        have_hwp   = (r[0] & CPUID_THERM_HWP) != 0;
         have_aperf = (r[2] & CPUID_THERM_APERF) != 0;
     }
 
     find_tsc_rate();
+    find_clock_control();
     find_ratio_limits();
     if (have_dts)
         find_thermal_target();
