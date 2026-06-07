@@ -1,21 +1,22 @@
 /* adduser -- create a user, asking for a password.
  *
- *   adduser [-a] [-u] <name>
+ *   adduser [-a] [-u] [-f] <name>
  *
- * -a grants appeditor (write access to /app) and -u usereditor (write access
- * to /userconfig: adding users, setting passwords and changing roles). Root
- * and holders of usereditor may run this; anyone else is refused by the
- * kernel, not by this program.
+ * -a grants appeditor (write access to /app), -u usereditor (write access to
+ * /userconfig: adding users, setting passwords and changing roles) and -f
+ * editfreq (changing the processor's clock). Root and holders of usereditor
+ * may run this; anyone else is refused by the kernel, not by this program.
  */
 
 #include <wkernel.h>
 
 static void usage(void)
 {
-    wfprintf(W_STDERR, "usage: adduser [-a] [-u] <name>\n");
+    wfprintf(W_STDERR, "usage: adduser [-a] [-u] [-f] <name>\n");
     wfprintf(W_STDERR, "  -a  appeditor:  may write under /app\n");
     wfprintf(W_STDERR, "  -u  usereditor: may write /userconfig -- add users,\n");
     wfprintf(W_STDERR, "                  set passwords and change roles\n");
+    wfprintf(W_STDERR, "  -f  editfreq:   may change the processor's clock\n");
 }
 
 int main(int argc, char **argv)
@@ -29,6 +30,7 @@ int main(int argc, char **argv)
                 switch (*f) {
                 case 'a': roles |= W_ROLE_APPEDITOR;  break;
                 case 'u': roles |= W_ROLE_USEREDITOR; break;
+                case 'f': roles |= W_ROLE_EDITFREQ;   break;
                 default:
                     wfprintf(W_STDERR, "adduser: invalid option -- '%c'\n", *f);
                     return 1;
@@ -89,9 +91,10 @@ int main(int argc, char **argv)
     if (roles == 0)
         wprintf("  roles    none -- may write only in its own home\n");
     else
-        wprintf("  roles   %s%s\n",
+        wprintf("  roles   %s%s%s\n",
                 (roles & W_ROLE_APPEDITOR)  ? " appeditor"  : "",
-                (roles & W_ROLE_USEREDITOR) ? " usereditor" : "");
+                (roles & W_ROLE_USEREDITOR) ? " usereditor" : "",
+                (roles & W_ROLE_EDITFREQ)   ? " editfreq"   : "");
 
     return 0;
 }

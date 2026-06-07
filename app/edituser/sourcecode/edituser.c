@@ -23,6 +23,7 @@ static const struct {
     { "appeditor",  W_ROLE_APPEDITOR,  "may write under /app" },
     { "usereditor", W_ROLE_USEREDITOR, "may write /userconfig: add users, "
                                        "set passwords, change roles" },
+    { "editfreq",   W_ROLE_EDITFREQ,   "may change the processor's clock" },
 };
 
 #define ROLE_COUNT ((int)(sizeof(role_table) / sizeof(role_table[0])))
