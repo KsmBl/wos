@@ -1,10 +1,11 @@
-/* split -- run two terminals side by side, a tiny terminal multiplexer.
+/* split -- run two terminals at once, a tiny terminal multiplexer.
  *
- * The screen is divided into a left and a right pane, each running its own
- * shell.  The keyboard talks to one pane at a time; Ctrl-W Ctrl-W moves between
- * them, the way the split in vim's :term does, and Ctrl-W q quits.  A pane
- * whose shell exits freezes with [exited] in its status; when both have gone,
- * split leaves.
+ * The screen is divided in two, each half running its own shell.  Which way it
+ * is divided follows the shape of the display: side by side when it is wider
+ * than it is tall, one above the other when it is not.  The keyboard talks to
+ * one pane at a time; Ctrl-W Ctrl-W moves between them, the way the split in
+ * vim's :term does, and Ctrl-W q quits.  A pane whose shell exits freezes with
+ * [exited] in its status; when both have gone, split leaves.
  *
  * Both panes are real, separate processes running at once -- the point of the
  * program, and a visible demonstration of preemptive multitasking: type in one
@@ -21,18 +22,31 @@
 #include <wkernel.h>
 #include <wterm.h>
 
-/* Layout: two panes over a status row, a separator column between them.  The
+/* Layout: two panes over a status row, with a separator between them.  The
  * sizes are computed from the console size, read at startup, so split follows
  * whatever text mode is in force. */
 static int con_w = W_CONSOLE_WIDTH;
 static int con_h = W_CONSOLE_HEIGHT;
-static int CONTENT_H;    /* pane height, above the status row */
-static int STATUS_ROW;   /* the bottom status line            */
-static int LEFT_W;       /* left pane width                   */
-static int SEP_COL;      /* separator column                  */
-static int RIGHT_X;      /* first column of the right pane    */
-static int RIGHT_W;      /* right pane width                  */
+static int CONTENT_H;    /* the rows the panes have, above the status line */
+static int STATUS_ROW;   /* the bottom status line                        */
 
+/* Which way the screen is cut, and where each pane sits.  A pane is a
+ * rectangle: first row, first column, and its size. */
+static int stacked;                          /* 0 = side by side, 1 = one
+                                              * above the other            */
+static int sep;                              /* the separator's row or
+                                              * column, whichever applies  */
+static struct { int y, x, h, w; } pane_at[2];
+
+/* Cut the screen across its longer side, so that neither pane ends up long and
+ * thin.
+ *
+ * The comparison is in pixels rather than characters, because a character cell
+ * is twice as tall as it is wide and the two answers differ: 80x25 characters
+ * is a display half again wider than it is tall, which wants two panes side by
+ * side, while 80x50 characters is the same screen made taller than it is wide,
+ * which wants them stacked.  Splitting the long side keeps each pane as close
+ * to the shape of the whole screen as it can be. */
 static void layout_init(void)
 {
     int rows = 0, cols = 0;
@@ -42,10 +56,35 @@ static void layout_init(void)
     }
     CONTENT_H  = con_h - 1;
     STATUS_ROW = con_h;
-    LEFT_W     = (con_w - 1) / 2;
-    SEP_COL    = LEFT_W + 1;
-    RIGHT_X    = SEP_COL + 1;
-    RIGHT_W    = con_w - RIGHT_X + 1;
+
+    stacked = con_h * W_CELL_HEIGHT > con_w * W_CELL_WIDTH;
+
+    if (stacked) {
+        int top = (CONTENT_H - 1) / 2;
+
+        sep = top + 1;
+        pane_at[0].y = 1;       pane_at[0].x = 1;
+        pane_at[0].h = top;     pane_at[0].w = con_w;
+        pane_at[1].y = sep + 1; pane_at[1].x = 1;
+        pane_at[1].h = CONTENT_H - sep;
+        pane_at[1].w = con_w;
+    } else {
+        int left = (con_w - 1) / 2;
+
+        sep = left + 1;
+        pane_at[0].y = 1;         pane_at[0].x = 1;
+        pane_at[0].h = CONTENT_H; pane_at[0].w = left;
+        pane_at[1].y = 1;         pane_at[1].x = sep + 1;
+        pane_at[1].h = CONTENT_H; pane_at[1].w = con_w - sep;
+    }
+}
+
+/* What to call each pane in its status field, which depends on where it is. */
+static const char *pane_name(int i)
+{
+    if (stacked)
+        return i == 0 ? "top" : "bottom";
+    return i == 0 ? "left" : "right";
 }
 
 static struct wterm pane[2];
@@ -92,10 +131,13 @@ static void find_shell(void)
     }
 }
 
-static int start_pane(int i, int ox, int cols)
+static int start_pane(int i)
 {
     char *const argv[] = { shell_name, 0 };
-    return wterm_start(&pane[i], shell_path, argv, 1, ox, CONTENT_H, cols);
+
+    return wterm_start(&pane[i], shell_path, argv,
+                       pane_at[i].y, pane_at[i].x,
+                       pane_at[i].h, pane_at[i].w);
 }
 
 static void draw_field(int row, int col, int width, int fg, int bg,
@@ -126,25 +168,36 @@ static void draw_chrome(void)
         return;
     }
 
-    /* Separator column. */
+    /* The separator: a column between two panes side by side, a row between
+     * two stacked ones. */
     wcolor(W_BLUE | W_BRIGHT, W_DEFAULT);
-    for (int row = 1; row <= CONTENT_H; row++) {
-        wgotoxy(row, SEP_COL);
-        wprintf("|");
+    if (stacked) {
+        wgotoxy(sep, 1);
+        for (int col = 1; col <= con_w; col++)
+            wprintf("-");
+    } else {
+        for (int row = 1; row <= CONTENT_H; row++) {
+            wgotoxy(row, sep);
+            wprintf("|");
+        }
     }
     wcolor_reset();
 
-    /* Status labels, the focused one highlighted. */
+    /* Status labels, the focused one highlighted.  They sit side by side on
+     * the one status line whichever way the panes are arranged: two lines to
+     * say two short things would cost a row of terminal. */
+    int half = con_w / 2;
+
     for (int i = 0; i < 2; i++) {
         char label[42];
         wsnprintf(label, sizeof(label), " %s: %s%s",
-                  i == 0 ? "left" : "right", shell_name,
+                  pane_name(i), shell_name,
                   pane[i].open ? "" : " [exited]");
 
         int fg = (focus == i) ? W_BLACK : W_WHITE;
         int bg = (focus == i) ? W_CYAN  : W_BLUE;
-        int col   = (i == 0) ? 1 : RIGHT_X;
-        int width = (i == 0) ? LEFT_W : RIGHT_W;
+        int col   = (i == 0) ? 1 : half + 1;
+        int width = (i == 0) ? half : con_w - half;
         draw_field(STATUS_ROW, col, width, fg, bg, label);
     }
 }
@@ -177,8 +230,7 @@ int main(int argc, char **argv)
     wcolor_reset();
     wcls();
 
-    if (start_pane(0, 1, LEFT_W) < 0 ||
-        start_pane(1, RIGHT_X, RIGHT_W) < 0) {
+    if (start_pane(0) < 0 || start_pane(1) < 0) {
         wconsole_raw(prev);
         wcls();
         wfprintf(W_STDERR, "split: cannot start a shell\n");
@@ -233,7 +285,11 @@ int main(int argc, char **argv)
             ctrl_w_pending = 0;
             if (key == 'q' || key == 'Q')
                 break;                          /* Ctrl-W q quits */
-            if (key == 0x17 || key == 'w' || key == 'h' || key == 'l') {
+            /* Every direction moves to the other pane, since there are only
+             * two of them and which keys point at which depends on the
+             * layout. */
+            if (key == 0x17 || key == 'w' ||
+                key == 'h' || key == 'l' || key == 'j' || key == 'k') {
                 if (pane[!focus].open) {        /* only switch to a live pane */
                     focus = !focus;
                     chrome_dirty = 1;

@@ -836,10 +836,10 @@ negative number, ...), 2 if there is no expression.
 split
 ```
 
-Run two terminals side by side -- a tiny terminal multiplexer, in the spirit of
-tmux or screen. Each pane is its own shell: the login shell, so
-[`chsh`](#chsh) decides which one appears, the same as a fresh login or `su`
-gives you. The status label says which it is.
+Run two terminals at once -- a tiny terminal multiplexer, in the spirit of tmux
+or screen. Each pane is its own shell: the login shell, so [`chsh`](#chsh)
+decides which one appears, the same as a fresh login or `su` gives you. The
+status label says which it is.
 
 ```
 whell -- the WOS shell.      |whell -- the WOS shell.
@@ -850,20 +850,45 @@ root@wos:/home/root#         |
  left: whell                  right: whell
 ```
 
+**Which way the screen is cut follows the shape of the display**, so that
+neither pane ends up long and thin: side by side when the screen is wider than
+it is tall, one above the other when it is not. The panes are then labelled
+`top` and `bottom` instead of `left` and `right`.
+
+The comparison is in pixels rather than characters, and the two answers differ
+because a character cell is twice as tall as it is wide. The default 80x25 grid
+is 640x400 pixels — half again wider than it is tall, so the panes go side by
+side. `textmode 80 50` makes the same screen 640x800, taller than it is wide,
+and `split` then stacks them:
+
+```
+whell -- the WOS shell. Type `help` for an introduction.
+root@wos:/home/root# _
+
+--------------------------------------------------------
+whell -- the WOS shell. Type `help` for an introduction.
+root@wos:/home/root#
+
+ top: whell                    bottom: whell
+```
+
 The keyboard talks to one pane at a time; the highlighted status label shows
 which.
 
 | Key | Effect |
 |---|---|
-| `Ctrl-W Ctrl-W` | switch the keyboard to the other pane (also `Ctrl-W w`) |
+| `Ctrl-W Ctrl-W` | switch the keyboard to the other pane (also `Ctrl-W w`, `h`, `j`, `k`, `l`) |
 | `Ctrl-W q` | quit, closing both shells |
+
+Every direction key moves to the other pane rather than a particular one: there
+are only two, and which way they lie depends on the layout.
 
 When one shell exits (`exit`), the split goes away and the surviving terminal
 takes over the whole screen — you are left with just that one, full size, and
 it keeps running. When it too exits, `split` leaves.
 
-The survivor really is widened, not just re-centred: `split` resizes its
-emulator to the full width and tells the shell its new size, so a program you
+The survivor really is resized, not just re-centred: `split` resizes its
+emulator to the whole screen and tells the shell its new size, so a program you
 start afterwards (say `ls`, or `asciiquarium`) uses all 80 columns rather than
 the old half.
 
@@ -873,8 +898,9 @@ while it animates: preemptive multitasking you can watch.
 
 Each terminal is a `wterm` from the shared library, the same emulator vim's
 `:term` uses. `split` just arranges two of them and routes the keyboard between
-them, which is why the two features behave identically. A pane is 40 columns
-wide, so a program that insists on 80 wraps inside it.
+them, which is why the two features behave identically. Side by side, a pane is
+40 columns wide, so a program that insists on 80 wraps inside it; stacked, each
+pane has the full width and about half the rows.
 
 **Exit status:** 0.
 

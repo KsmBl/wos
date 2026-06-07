@@ -337,6 +337,13 @@ typedef struct {
 #define W_CONSOLE_MAX_WIDTH  240
 #define W_CONSOLE_MAX_HEIGHT 75
 
+/* The character cell, in pixels.  The console draws an 8x16 font, so a cell is
+ * twice as tall as it is wide -- which a program dividing the screen has to
+ * know, because a grid of 80x25 characters is a display that is wider than it
+ * is tall, and one of 80x50 is a display that is taller than it is wide. */
+#define W_CELL_WIDTH   8
+#define W_CELL_HEIGHT 16
+
 /* Special keys returned by wgetkey().  They start above 0xFF so they cannot
  * collide with an ordinary character. */
 #define W_KEY_UP     0x100
