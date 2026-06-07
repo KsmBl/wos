@@ -440,6 +440,24 @@ unsigned percent = (busy + idle) ? busy * 100 / (busy + idle) : 0;
 
 **Returns** the number of cores written, or `-W_EFAULT`.
 
+## `int wcpufreq(int khz)`
+
+Ask the processor to run at a particular clock. Zero or less hands the decision
+back to the hardware.
+
+The request is clamped to the range `wcpuinfo()` reported and rounded to a step
+the hardware can take — `step_khz`, usually 100 MHz — so the clock that comes
+back is rarely the exact one asked for.
+
+There is one clock and every process on the machine runs on it, so this needs
+root or the `editfreq` role: a slow machine is slow for everybody, and a fast
+one is hot for everybody.
+
+**Returns** the clock settled on in kHz (0 for automatic), `-W_EPERM` without
+the role, or `-W_ENODEV` on a machine whose clock cannot be set — the usual
+answer inside a hypervisor, where the registers carrying the request are not
+emulated.
+
 ---
 
 # Processes

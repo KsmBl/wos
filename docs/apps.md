@@ -32,6 +32,7 @@ which is the price of having no shared libraries.
 | [`lynx`](#lynx) | browse the web as text |
 | [`shutdown`](#shutdown) | power the machine off |
 | [`uptime`](#uptime) | how long the machine has been running |
+| [`cpufreq`](#cpufreq) | show the processor's clock, and change it |
 | [`whoami`](#whoami) | print the current user and what it may do |
 | [`passwd`](#passwd) | change a password |
 | [`su`](#su) | start a shell as another user |
@@ -903,6 +904,78 @@ them, which is why the two features behave identically. Side by side, a pane is
 pane has the full width and about half the rows.
 
 **Exit status:** 0.
+
+---
+
+# cpufreq
+
+```
+cpufreq [get | set <MHz> | inc <MHz> | dec <MHz> | auto | tui]
+```
+
+Show the processor's clock, and change it.
+
+```
+root@wos:/home/root# cpufreq
+cpu    : Intel(R) Core(TM) i7-8665U CPU @ 1.90GHz
+core 0 : 1.90GHz (measured), 47C of 100C
+range  : 400MHz to 4.10GHz, in steps of 100MHz
+setting: automatic -- the hardware chooses
+root@wos:/home/root# cpufreq set 1200
+clock: held at 1.20GHz
+root@wos:/home/root# cpufreq inc 400
+clock: held at 1.60GHz
+root@wos:/home/root# cpufreq auto
+clock: back to the hardware's own judgement
+```
+
+| Command | Effect |
+|---|---|
+| `get` (or nothing) | what each core is doing, the range, and what the clock is being held at |
+| `set <MHz>` | hold the clock there |
+| `inc <MHz>` | ask for that much more than it is doing now |
+| `dec <MHz>` | ask for that much less |
+| `auto` | hand the decision back to the hardware |
+| `tui` | a full-screen slider |
+
+Everything is in megahertz. The hardware moves in steps of its bus reference —
+100 MHz on anything recent — so a request lands on the nearest step rather than
+exactly where it was pointed, and the reply says where it went. Requests
+outside the range the machine admits to are clamped to it.
+
+`tui` is the same thing to watch rather than to type at:
+
+```
+ cpufreq   Intel(R) Core(TM) i7-8665U CPU @ 1.90GHz
+
+    400MHz [|||||||||||||||                         ] 4.10GHz
+
+  now    1.90GHz   held at 1.20GHz   temp 47C
+
+ up/dn  One step  home/end  Slowest / fastest  a  Automatic  q  Quit
+```
+
+**Changing the clock needs root or the [`editfreq`](users.md#roles) role.**
+There is one clock and every process on the machine runs on it: a slow machine
+is slow for everybody, and a fast one is hot for everybody. Reading it needs
+nothing.
+
+Many machines will not let it be set at all, and say so rather than pretending:
+
+```
+root@wos:/home/root# cpufreq set 1200
+cpufreq: this machine does not let the clock be set
+```
+
+That is the usual answer inside a hypervisor. The request goes to a
+model-specific register — `IA32_HWP_REQUEST` on a processor that manages its
+own clock, `IA32_PERF_CTL` on an older one — and a hypervisor that does not
+emulate them faults on the write, or accepts it and forgets. Both are detected:
+the kernel writes back the value that is already there at boot to see whether
+writing works at all, and reads a request back afterwards to see whether it
+stuck.
+
+**Exit status:** 0, or 1 if the request was refused or impossible.
 
 ---
 
