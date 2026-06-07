@@ -206,6 +206,12 @@ typedef struct {
     uint32_t base_khz;       /* the clock the part is specified at     */
     uint32_t min_khz;        /* slowest the machine says it will go, 0 */
     uint32_t max_khz;        /* fastest, including turbo, 0 if unknown */
+    uint32_t settable;       /* 1 if the clock can be asked to change  */
+    uint32_t step_khz;       /* the smallest step it moves in, 0 if it
+                              * cannot be set at all                   */
+    uint32_t pinned_khz;     /* what it was last pinned to, 0 for the
+                              * hardware's own choice                  */
+    uint32_t pad;
     char     brand[52];      /* what the CPU calls itself, or empty    */
 } wcpuinfo_t;
 
@@ -230,6 +236,12 @@ typedef struct {
                                       * NOT the password files themselves --
                                       * those stay root-only, for reading as
                                       * well as writing.                      */
+#define W_ROLE_EDITFREQ   (1u << 2)  /* may change the processor's clock.  Not
+                                      * a file permission like the two above:
+                                      * the clock is one setting the whole
+                                      * machine shares, so changing it affects
+                                      * everybody's programs and the heat the
+                                      * hardware makes.                       */
 
 typedef struct {
     uint32_t uid;
@@ -314,7 +326,8 @@ typedef struct {
 #define WSYS_CPULIST    51
 #define WSYS_DISKLIST   52
 #define WSYS_SLEEP      53
-#define WSYS_MAX        54
+#define WSYS_CPUFREQ    54
+#define WSYS_MAX        55
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

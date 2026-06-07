@@ -262,6 +262,25 @@ static int64_t sys_cpuinfo(uint64_t out)
     return 0;
 }
 
+/* Change the processor's clock.
+ *
+ * There is one clock and every process on the machine runs on it, so this is
+ * not something a user can be left to do to themselves: a slow machine is slow
+ * for everybody, and a fast one is hot for everybody.  Root, or the editfreq
+ * role.
+ *
+ * A khz of 0 hands the decision back to the hardware. */
+static int64_t sys_cpufreq(uint64_t khz)
+{
+    if (!user_has_role(proc_current()->uid, W_ROLE_EDITFREQ))
+        return -W_EPERM;
+
+    if ((int64_t)khz <= 0)
+        return cpu_set_automatic();
+
+    return cpu_set_khz((uint32_t)khz);
+}
+
 static int64_t sys_cpulist(uint64_t out, uint64_t max)
 {
     if (max > W_CPU_MAX)
@@ -846,6 +865,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_DISKLIST:  r = sys_disklist(regs->rdi, regs->rsi); break;
     case WSYS_CPUINFO:   r = sys_cpuinfo(regs->rdi); break;
     case WSYS_CPULIST:   r = sys_cpulist(regs->rdi, regs->rsi); break;
+    case WSYS_CPUFREQ:   r = sys_cpufreq(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

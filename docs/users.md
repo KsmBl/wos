@@ -85,8 +85,15 @@ Roles are a bitmask, so a user can hold several.
 |---|---|
 | `appeditor` | write access under `/app` — installing and editing programs |
 | `usereditor` | write access to `/userconfig` — creating users, setting anyone's password, changing roles |
+| `editfreq` | changing the processor's clock, with [`cpufreq`](apps.md#cpufreq) |
 
 Root holds no roles and needs none: every check short-circuits on uid 0.
+
+The first two are write access to a place in the filesystem. `editfreq` is not:
+there is one processor clock and every process on the machine runs on it, so a
+slow machine is slow for everybody and a fast one is hot for everybody. It is a
+role for the same reason the other two are — something a user should be able to
+be trusted with individually, without being made root.
 
 ## Passwords
 
@@ -187,7 +194,7 @@ that password to anything first, so asking would be theatre.
 | `passwd [user]` | change your own password, or another's if permitted |
 | `su [user]` | start a shell as another user (default `root`) |
 | `chsh [shell]`, `chsh -u <user> <shell>` | change a login shell; your own, or anyone's with `-u` if permitted |
-| `adduser [-a] [-u] <name>` | create a user, asking for a password; `-a` grants appeditor, `-u` usereditor |
+| `adduser [-a] [-u] [-f] <name>` | create a user, asking for a password; `-a` grants appeditor, `-u` usereditor, `-f` editfreq |
 | `edituser <name> [+role] [-role]` | add or remove roles; with no change, prints what they hold |
 
 Each user has a **login shell** — the program started for them at boot (root)

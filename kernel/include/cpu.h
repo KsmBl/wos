@@ -35,6 +35,23 @@ void cpu_info(wcpuinfo_t *out);
  * is running on, and left unknown for the rest. */
 int cpu_list(wcpu_t *out, int max);
 
+/* Ask this processor to run at `khz`, clamped to the range it says it will
+ * work in and rounded to a step it can actually take.  Returns the clock it
+ * settled on in kHz, or -W_ENODEV on a machine with no register to write --
+ * which is the usual answer inside a hypervisor.
+ *
+ * The request applies to the processor that executes it, because that is what
+ * a model-specific register is.  With only the boot core running, that is the
+ * whole machine.
+ *
+ * Permission is the caller's business, not this function's: it is checked at
+ * the syscall, where there is a process to check it against. */
+int cpu_set_khz(uint32_t khz);
+
+/* Give the clock back to the hardware's own judgement.  Returns 0, or
+ * -W_ENODEV as above. */
+int cpu_set_automatic(void);
+
 /* The rate the timestamp counter advances at, in kHz.  Fixed, and unrelated to
  * how fast the core is currently going -- which is exactly what makes it
  * useful for timing short intervals.  Zero before cpu_init(). */

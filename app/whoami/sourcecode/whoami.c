@@ -30,6 +30,8 @@ int main(int argc, char **argv)
             wprintf(" appeditor");
         if (me.roles & W_ROLE_USEREDITOR)
             wprintf(" usereditor");
+        if (me.roles & W_ROLE_EDITFREQ)
+            wprintf(" editfreq");
         wprintf("\n");
 
         wprintf("write : /home/%s\n", me.name);
