@@ -39,7 +39,8 @@ typedef enum {
     WAIT_NONE = 0,
     WAIT_INPUT,      /* console input; woken by the keyboard IRQ    */
     WAIT_CHILD,      /* a child to exit; woken by process teardown  */
-    WAIT_PIPE        /* pipe space or data; woken by the other end  */
+    WAIT_PIPE,       /* pipe space or data; woken by the other end  */
+    WAIT_TIME        /* a deadline; woken by the timer              */
 } wait_reason_t;
 
 struct process;
@@ -61,6 +62,7 @@ typedef struct thread {
     uint64_t        user_stack;
 
     uint64_t        cpu_ticks;
+    uint32_t        wake_at;           /* tick to wake on, for WAIT_TIME */
     struct thread  *next;              /* run queue link */
 } thread_t;
 

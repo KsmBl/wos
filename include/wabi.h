@@ -145,6 +145,19 @@ typedef struct {
     uint32_t free_inodes;
 } wdiskinfo_t;
 
+/* One mounted filesystem.  wdiskinfo() reports the disk the system is on;
+ * this is every one of them, which on a running WOS means that disk and the
+ * one in memory over /ramdisk. */
+#define W_DISK_MAX 8
+
+typedef struct {
+    char        mount[28];    /* where it appears: "/" or "/ramdisk"      */
+    char        device[24];   /* what it is: "ATA disk", "memory", ...    */
+    uint32_t    persistent;   /* 0 when what is written is gone at reboot */
+    uint32_t    pad;
+    wdiskinfo_t usage;
+} wdisk_t;
+
 /* ------------------------------------------------------------------ *
  *  Processors
  *
@@ -299,7 +312,9 @@ typedef struct {
 #define WSYS_TIME_SET   49
 #define WSYS_CPUINFO    50
 #define WSYS_CPULIST    51
-#define WSYS_MAX        52
+#define WSYS_DISKLIST   52
+#define WSYS_SLEEP      53
+#define WSYS_MAX        54
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

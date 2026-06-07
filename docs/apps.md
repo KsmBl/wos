@@ -452,12 +452,14 @@ A full-screen process and resource monitor. It refreshes once a second and
 redraws immediately when a key is pressed.
 
 ```
- htop   a process monitor for WOS                      Uptime 00:00:08
+ htop   Intel(R) Core(TM) i7-8665U CPU @ 1.90GHz          up 12 secs
 
-  Mem [|                              5.3M/255.8M]
-  Dsk [|                             476.0K/64.0M]
+ CPU0    [|||||||                       38.4%  1.90GHz  47C]
+ Mem     [|                                    9.3M/255.4M]
+ /       [|                                       7.7M/2.0G]
+ /ramdisk[                                        0B/246.1M]
 
-  Tasks: 2      Threads: 2      Kernel: 5.1M
+  Tasks: 2      Threads: 2      Kernel: 9.1M
 
    PID COMMAND       RESIDENT     CODE     DATA     HEAP    STACK  THR
      6 whell           100.0K    20.0K     8.0K       0B    64.0K    1
@@ -465,6 +467,26 @@ redraws immediately when a key is pressed.
 
  up/dn  Select  q  Quit   r  Refresh now
 ```
+
+Every logical processor the machine has gets a bar: how busy it was over the
+last second, what it is clocked at, and how hot it is. WOS runs on the
+processor it booted on and never starts the others, so those are drawn grey and
+say `not started` — they are part of the machine, and a monitor that listed
+only the core it happens to be running on would report a four-core laptop as a
+single-core one.
+
+The clock and the temperature are left out rather than shown as zero when the
+machine will not report them. Inside a hypervisor that is the usual answer: the
+counters the real clock is measured from and the on-die thermal sensor are both
+model-specific registers, and KVM faults on the ones it was not told to
+emulate. What is shown then is the base clock the CPU quotes.
+
+Each mounted filesystem gets its own bar, labelled by where it is mounted: the
+disk at `/`, and the scratch space in memory at `/ramdisk`. They fill up
+independently, and one figure covering both would describe neither.
+
+The meters lay themselves out in as many columns as the console is wide enough
+for, and the process table takes whatever rows are left.
 
 | Key | Effect |
 |---|---|
@@ -483,7 +505,10 @@ include the process's own page tables.
 
 The display stays responsive because it never blocks: it polls with
 `wpollin()` between repaints rather than waiting inside `wread()`, which would
-freeze the clock until someone pressed a key.
+freeze the clock until someone pressed a key. Between polls it sleeps rather
+than spinning, so the machine really is idle while htop is on screen — a
+monitor that pinned the processor at 100% just by being open would be
+measuring itself.
 
 **Exit status:** 0.
 

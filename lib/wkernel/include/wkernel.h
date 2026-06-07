@@ -324,6 +324,20 @@ int wproclist(wprocmem_t *out, int max);
  */
 int wdiskinfo(wdiskinfo_t *out);
 
+/**
+ * Report every mounted filesystem, not just the one the system is on.
+ *
+ * WOS mounts two: the disk at `/`, and the one held in memory at `/ramdisk`
+ * that starts empty and is gone at the next boot.  Each entry says where it is
+ * mounted, what it is, whether what is written to it survives a reboot, and
+ * the same usage figures wdiskinfo() gives for the disk alone.
+ *
+ * @param out Array of at least @p max entries.
+ * @param max Most entries to write; `W_DISK_MAX` is always enough.
+ * @return The number of filesystems written, or `-W_EFAULT`.
+ */
+int wdisklist(wdisk_t *out, int max);
+
 /* ==================================================================== *
  *  Processors
  * ==================================================================== */
@@ -560,8 +574,36 @@ unsigned int wuptime_ms(void);
 /**
  * Give up the rest of this timeslice to another runnable process.
  * Purely an optimisation; the scheduler preempts anyway.
+ *
+ * This is not a way to wait.  A loop that yields is still a process asking to
+ * run, and while it goes round the processor is fully occupied doing nothing.
+ * Use wsleep() to wait.
  */
 void wyield(void);
+
+/**
+ * Stop running until @p ms milliseconds have passed.
+ *
+ * The process is taken off the run queue entirely, so the machine can be
+ * genuinely idle while it waits -- which is what makes a CPU usage figure mean
+ * something, and on a laptop is the difference between a fan that runs and one
+ * that does not.
+ *
+ * The wait is rounded up to whole timer ticks (10 ms), and returns as soon as
+ * possible after the deadline rather than exactly on it: the process has to be
+ * scheduled again like any other.
+ *
+ * @param ms Milliseconds to wait.  Zero or less is a wyield().
+ *
+ * @code
+ *     while (running) {
+ *         redraw();
+ *         while (!wpollin(W_STDIN) && wticks() < until)
+ *             wsleep(20);        // 50 times a second, not as fast as it can
+ *     }
+ * @endcode
+ */
+void wsleep(int ms);
 
 /**
  * Switch the console between line-buffered and raw input.
@@ -885,7 +927,8 @@ static inline int lseek(int fd, int off, int whence) { return wlseek(fd, off, wh
  *
  * Supports `%d` `%i` (signed), `%u` (unsigned), `%x` `%X` (hex), `%c`, `%s`,
  * `%p` and `%%`.  A width and the flags `-` (left align) and `0` (zero pad)
- * are honoured, so `%-12s` and `%6u` line columns up.
+ * are honoured, so `%-12s` and `%6u` line columns up.  A precision on `%s`
+ * truncates it, so `%.20s` and `%.*s` cut text to a column.
  *
  * @param fmt Format string, followed by its arguments.
  * @return The number of characters written.

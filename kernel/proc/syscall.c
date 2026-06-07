@@ -243,6 +243,16 @@ static int64_t sys_diskinfo(uint64_t out)
     return 0;
 }
 
+static int64_t sys_disklist(uint64_t out, uint64_t max)
+{
+    if (max > W_DISK_MAX)
+        max = W_DISK_MAX;
+    if (!user_range_ok((void *)out, max * sizeof(wdisk_t), true))
+        return -W_EFAULT;
+
+    return vfs_disklist((wdisk_t *)out, (int)max);
+}
+
 static int64_t sys_cpuinfo(uint64_t out)
 {
     if (!user_range_ok((void *)out, sizeof(wcpuinfo_t), true))
@@ -489,6 +499,21 @@ static int64_t sys_ticks(void)
 static int64_t sys_yield(void)
 {
     sched_yield();
+    return 0;
+}
+
+/* Wait without running.  Rounded up to whole ticks, because that is the only
+ * clock the scheduler has: asking for less than one tick still costs one. */
+static int64_t sys_sleep(uint64_t ms)
+{
+    if ((int64_t)ms <= 0)
+        return sys_yield();
+
+    uint32_t ticks = (uint32_t)((ms * PIT_HZ + 999) / 1000);
+    if (ticks == 0)
+        ticks = 1;
+
+    sched_sleep_until(pit_ticks() + ticks);
     return 0;
 }
 
@@ -793,6 +818,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_SBRK:      r = sys_sbrk(regs->rdi); break;
     case WSYS_TICKS:     r = sys_ticks(); break;
     case WSYS_YIELD:     r = sys_yield(); break;
+    case WSYS_SLEEP:     r = sys_sleep(regs->rdi); break;
     case WSYS_CONSOLE:   r = sys_console(regs->rdi); break;
     case WSYS_POLLIN:    r = sys_pollin(regs->rdi); break;
     case WSYS_GETUID:    r = sys_getuid(); break;
@@ -817,6 +843,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_TCP_CLOSE: r = sys_tcp_close(regs->rdi); break;
     case WSYS_TIME_GET:  r = sys_time_get(regs->rdi); break;
     case WSYS_TIME_SET:  r = sys_time_set(regs->rdi); break;
+    case WSYS_DISKLIST:  r = sys_disklist(regs->rdi, regs->rsi); break;
     case WSYS_CPUINFO:   r = sys_cpuinfo(regs->rdi); break;
     case WSYS_CPULIST:   r = sys_cpulist(regs->rdi, regs->rsi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;

@@ -840,7 +840,7 @@ int main(int argc, char **argv)
         place_cursor();
 
         if (!wpollin(W_STDIN)) {
-            wyield();                 /* nothing to do; give the child a turn */
+            wsleep(5);                /* nothing to do; let the machine idle */
             continue;
         }
 

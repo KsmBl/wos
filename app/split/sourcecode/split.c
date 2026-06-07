@@ -220,7 +220,7 @@ int main(int argc, char **argv)
         }
 
         if (!wpollin(W_STDIN)) {
-            wyield();                           /* let the shells run */
+            wsleep(5);                          /* let the shells run */
             continue;
         }
 
