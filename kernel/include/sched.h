@@ -26,6 +26,10 @@ void sched_block(wait_reason_t reason);
 /* Make every thread blocked on `reason` runnable again. Safe from an IRQ. */
 void sched_wake(wait_reason_t reason);
 
+/* Block on `reason`, but no longer than `until_tick`.  Whichever comes first
+ * wakes the thread. */
+void sched_block_until(wait_reason_t reason, uint32_t until_tick);
+
 /* Block the current thread until the tick counter reaches `until_tick`.
  * Returns as soon as possible after that, not exactly then: the thread has to
  * be scheduled again like any other. */
