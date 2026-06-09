@@ -33,6 +33,7 @@ which is the price of having no shared libraries.
 | [`shutdown`](#shutdown) | power the machine off |
 | [`uptime`](#uptime) | how long the machine has been running |
 | [`cpufreq`](#cpufreq) | show the processor's clock, and change it |
+| [`battery`](#battery) | say whether the machine has a battery, and what it is |
 | [`whoami`](#whoami) | print the current user and what it may do |
 | [`passwd`](#passwd) | change a password |
 | [`su`](#su) | start a shell as another user |
@@ -976,6 +977,65 @@ writing works at all, and reads a request back afterwards to see whether it
 stuck.
 
 **Exit status:** 0, or 1 if the request was refused or impossible.
+
+---
+
+# battery
+
+```
+battery [-s]
+```
+
+Say whether this machine has a battery, and what it is.
+
+```
+root@wos:/home/root# battery
+battery  : present
+pack     : LGC DELL AB01
+chemistry: lithium ion
+when new : 45.0 Wh at 11.4 V
+fitted   : Rear
+charge   : not readable
+```
+
+On a machine with no battery, which is every virtual one:
+
+```
+root@wos:/home/root# battery
+No battery: this machine runs on mains.
+```
+
+`-s` prints a single line — `none`, or `present, charge unknown` — for a prompt
+or a script.
+
+## Why there is no percentage
+
+Every laptop built this century reports its charge through an ACPI method,
+`_BST`, which reads the embedded controller and returns a package. Calling one
+means interpreting AML bytecode, and WOS has no interpreter: the one piece of
+AML the kernel reads is the sleep type for soft-off, which is a constant
+sitting in a fixed shape, not a program.
+
+So the charge is missing rather than guessed at, and everything else is read
+without executing anything:
+
+| Fact | Where it comes from |
+|---|---|
+| there is a battery | a `PNP0C0A` device, or a `_BST` method, named in the DSDT |
+| there is a mains adapter | an `ACPI0003` device, or a `_PSR` method |
+| maker, name, chemistry, capacity, voltage, where it is fitted | the SMBIOS tables, structure type 22 |
+
+The two sources answer slightly different questions and both are used. SMBIOS
+describes the machine as it was built, so a laptop sold with its battery
+removed still carries the structure; ACPI describes what the firmware is
+willing to talk to. Either saying yes is taken as a battery being present.
+
+Writing the AML interpreter would be the way to finish this, and it is a large
+piece of work: a namespace, operation regions, embedded-controller
+transactions, and enough of the language to run a method that was written
+assuming a complete implementation.
+
+**Exit status:** 0.
 
 ---
 

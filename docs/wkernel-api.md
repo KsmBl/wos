@@ -458,6 +458,37 @@ the role, or `-W_ENODEV` on a machine whose clock cannot be set — the usual
 answer inside a hypervisor, where the registers carrying the request are not
 emulated.
 
+## `int wbattery(wbattery_t *out)`
+
+The machine's battery, as far as the firmware describes it.
+
+```c
+typedef struct {
+    uint32_t present;        /* 1 if this machine has a battery at all   */
+    uint32_t state;          /* W_BATTERY_*                              */
+    int32_t  charge_percent; /* -1 when it cannot be read                */
+    int32_t  ac_online;      /* 1 on mains, 0 on battery, -1 not known   */
+    uint32_t design_mwh;     /* what it holds when new, 0 unknown        */
+    uint32_t design_mv;      /* nominal voltage in millivolts, 0 unknown */
+    uint32_t chemistry;      /* W_BATTERY_CHEM_*                         */
+    uint32_t pad;
+    char     name[32];       /* the pack's device name, or empty         */
+    char     maker[32];      /* who made it, or empty                    */
+    char     location[32];   /* where it sits, e.g. "Rear"               */
+} wbattery_t;
+```
+
+`charge_percent` is almost always -1, and that is not a failure. Every laptop
+reports its charge through an ACPI method that reads the embedded controller,
+and calling one means interpreting AML bytecode, which WOS has no interpreter
+for. Everything static is read out of the firmware's tables; the one figure
+that changes minute to minute is the one that needs the interpreter, so it is
+reported as unknown rather than guessed at. `state` and `ac_online` are unknown
+for the same reason. See [`battery`](apps.md#battery).
+
+**Returns** 0, or `-W_EFAULT`. Every field is zeroed first, so an absent battery
+reads as `present == 0` and nothing else.
+
 ---
 
 # Processes
