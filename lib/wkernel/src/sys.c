@@ -43,6 +43,11 @@ int wcpulist(wcpu_t *out, int max)
     return wsyscall2(WSYS_CPULIST, (long)out, max);
 }
 
+int wbattery(wbattery_t *out)
+{
+    return wsyscall1(WSYS_BATTERY, (long)out);
+}
+
 int wcpufreq(int khz)
 {
     return wsyscall1(WSYS_CPUFREQ, khz);

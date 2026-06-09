@@ -406,6 +406,28 @@ int wcpulist(wcpu_t *out, int max);
 int wcpufreq(int khz);
 
 /**
+ * Report the machine's battery, as far as the firmware describes it.
+ *
+ * `present` says whether there is one at all -- the difference between a
+ * laptop and a desktop, and the part of the question that can always be
+ * answered. The pack's maker, name, chemistry, design capacity and nominal
+ * voltage come from the SMBIOS tables where the firmware provides them.
+ *
+ * `charge_percent` is almost always -1, and that is not a failure. Every
+ * laptop reports its charge through an ACPI method that reads the embedded
+ * controller, and calling one means interpreting AML bytecode, which WOS has
+ * no interpreter for. Everything static is read; the one figure that changes
+ * minute to minute is the one that needs the interpreter, so it is reported as
+ * unknown rather than guessed at. `state` and `ac_online` are unknown for the
+ * same reason.
+ *
+ * @param out Filled in with what was found; every field is zeroed first, so an
+ *            absent battery reads as `present == 0` and nothing else.
+ * @return 0 on success, or `-W_EFAULT`.
+ */
+int wbattery(wbattery_t *out);
+
+/**
  * Format a clock rate in kilohertz for people: 1900000 becomes "1.90GHz",
  * 400000 becomes "400MHz", and 0 becomes "-".
  *
