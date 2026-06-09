@@ -152,7 +152,7 @@ void acpi_power_info(uint16_t *port, uint16_t *sleep_type)
 #define WINDOW_SIZE (8UL * 1024 * 1024)
 
 /* Copy `len` bytes of physical memory into freshly allocated heap memory. */
-static void *copy_physical(uint64_t phys, uint64_t len)
+void *acpi_copy_physical(uint64_t phys, uint64_t len)
 {
     if (!len || len > WINDOW_SIZE)
         return NULL;
@@ -205,7 +205,7 @@ static bool checksum_ok(const void *data, uint64_t len)
 /* Read a table's header to learn its length, then copy the whole thing. */
 static struct acpi_header *copy_table(uint64_t phys)
 {
-    struct acpi_header *head = copy_physical(phys, sizeof(*head));
+    struct acpi_header *head = acpi_copy_physical(phys, sizeof(*head));
     if (!head)
         return NULL;
 
@@ -215,7 +215,7 @@ static struct acpi_header *copy_table(uint64_t phys)
     if (len < sizeof(struct acpi_header))
         return NULL;
 
-    struct acpi_header *table = copy_physical(phys, len);
+    struct acpi_header *table = acpi_copy_physical(phys, len);
     if (!table)
         return NULL;
 
@@ -332,6 +332,57 @@ static bool parse_s5(const uint8_t *aml, uint32_t len)
 }
 
 /* ------------------------------------------------------------------ *
+ *  Is there a battery?
+ * ------------------------------------------------------------------ */
+
+static bool have_battery;
+static bool have_ac_adapter;
+
+bool acpi_has_battery(void)    { return have_battery; }
+bool acpi_has_ac_adapter(void) { return have_ac_adapter; }
+
+/* Look for a name rather than run anything.
+ *
+ * A control-method battery is declared as a device with the hardware id
+ * PNP0C0A, and every one of them carries a _BST method to report its state and
+ * a _BIF or _BIX to describe it.  A mains adapter is ACPI0003, with a _PSR
+ * method saying whether it is plugged in.  All of those are four-character
+ * names sitting in the bytecode, and finding one means the object is declared;
+ * it says nothing about what calling it would return, which is a question this
+ * kernel cannot ask.
+ *
+ * The hardware id itself appears either as the string or, more often, as the
+ * compressed EISA form -- PNP0C0A packs into the four bytes 41 D0 0C 0A -- so
+ * both are worth looking for.  A four-byte pattern could occur by accident in
+ * a hundred kilobytes of bytecode, which is why the method names carry the
+ * weight: a machine with a _BST and a _BIF has a battery. */
+static bool aml_contains(const uint8_t *aml, uint32_t len, const char *needle,
+                         uint32_t needle_len)
+{
+    if (len < needle_len)
+        return false;
+
+    for (uint32_t i = 0; i + needle_len <= len; i++)
+        if (memcmp(aml + i, needle, needle_len) == 0)
+            return true;
+
+    return false;
+}
+
+static void scan_for_battery(const uint8_t *aml, uint32_t len)
+{
+    /* PNP0C0A and ACPI0003, in the packed form the compiler emits. */
+    static const char battery_eisaid[4] = { 0x41, (char)0xD0, 0x0C, 0x0A };
+
+    have_battery = aml_contains(aml, len, "_BST", 4) ||
+                   aml_contains(aml, len, battery_eisaid, 4) ||
+                   aml_contains(aml, len, "PNP0C0A", 7);
+
+    have_ac_adapter = aml_contains(aml, len, "_PSR", 4) ||
+                      aml_contains(aml, len, "ACPI0003", 8);
+}
+
+/* ------------------------------------------------------------------ *
  *  Bringing it together
  * ------------------------------------------------------------------ */
 
@@ -413,7 +464,7 @@ void acpi_init(const struct multiboot_info *mbi)
 
     /* The UEFI loader passes the address on; a BIOS boot has to go looking. */
     if (mbi->flags & MB_FLAG_WOS_RSDP) {
-        struct rsdp *from_firmware = copy_physical(mbi->rsdp, sizeof(copy));
+        struct rsdp *from_firmware = acpi_copy_physical(mbi->rsdp, sizeof(copy));
         if (!from_firmware)
             return;
         copy = *from_firmware;
@@ -465,6 +516,11 @@ void acpi_init(const struct multiboot_info *mbi)
 
     have_s5 = parse_s5((const uint8_t *)(dsdt + 1),
                        dsdt->length - sizeof(*dsdt));
+
+    /* While it is here and copied out: the same bytecode says whether this
+     * machine has a battery. */
+    scan_for_battery((const uint8_t *)(dsdt + 1), dsdt->length - sizeof(*dsdt));
+
     kfree(dsdt);
 }
 

@@ -28,6 +28,7 @@
 #include "rtc.h"
 #include "acpi.h"
 #include "cpu.h"
+#include "battery.h"
 #include "user.h"
 #include "proc.h"
 #include "sched.h"
@@ -199,6 +200,12 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
      * timer, which is what a clock gets measured against. */
     cpu_init();
     cpu_print_report();
+
+    /* Also from the firmware's tables, and for the same reason it has to
+     * happen here: the window they are read through cannot be opened once
+     * anything else is running. */
+    battery_init();
+    battery_print_report();
 
     /* Move the console onto a linear framebuffer for crisp text at real
      * resolutions.  Needs paging (to map the aperture) and PCI, both up now.

@@ -41,4 +41,22 @@ void acpi_power_off(void);
  * Only valid after acpi_init(); before that there is no root table to search. */
 void *acpi_table(const char *signature, uint32_t *length_out);
 
+/* Copy `len` bytes of physical memory onto the heap, through the same window
+ * and with the same boot-time-only restriction.  The firmware leaves more than
+ * ACPI tables above the identity map -- the SMBIOS structures, for one -- and
+ * this is how they are reached.  NULL if the range cannot be mapped or the heap
+ * is full; the caller frees what it gets. */
+void *acpi_copy_physical(uint64_t phys, uint64_t len);
+
+/* What the machine's own description says about a battery.
+ *
+ * Both are read out of the DSDT during acpi_init(), by looking for the objects
+ * a battery and a mains adapter are declared with.  Neither says anything
+ * about the charge: that comes from a method which reads the embedded
+ * controller, and running one means interpreting bytecode.  Whether the
+ * machine has a battery at all is still worth knowing, and is the difference
+ * between a laptop and a desktop. */
+bool acpi_has_battery(void);
+bool acpi_has_ac_adapter(void);
+
 #endif /* WOS_ACPI_H */
