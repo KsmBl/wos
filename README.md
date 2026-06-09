@@ -84,15 +84,21 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 - **Commands as programs**: `ls`, `pwd`, `cat`, `free`, `df`, `ps`, `touch`,
   `mkdir`, `rm`, `clear` and `shutdown` each live in `/app`, behaving as they
   do on Linux. Both shells run the same ones.
+- **The hardware, honestly**: `cpufreq` reads the processor's clock and holds
+  it at a speed; `battery` says what the firmware knows about the pack. Both
+  report what the machine will not tell them as unknown, rather than as a
+  number nobody measured.
 - **Users and roles**: every process runs as a user, `root` may do anything,
   and everyone else writes only in their own `/home` directory unless a role
-  says otherwise — `appeditor` for `/app`, `usereditor` for `/userconfig`.
+  says otherwise — `appeditor` for `/app`, `usereditor` for `/userconfig`,
+  `editfreq` for the processor's clock.
   `/kernel` is root-only. Passwords live in `/userconfig/<name>/password`,
   readable and writable by root and the kernel alone, so `passwd` and `su`
   need no setuid.
 - **Applications**: `fish` (a shell that colours commands as you type and
   suggests from history), `vim` (a modal editor), `htop` (a live process
-  monitor) and `fastfetch` (system information). These are WOS-native programs
+  monitor, with a meter per core and per filesystem) and `fastfetch` (system
+  information). These are WOS-native programs
   in the spirit of the originals — see [`docs/apps.md`](docs/apps.md) for what
   the upstream versions would need that WOS does not have.
 
