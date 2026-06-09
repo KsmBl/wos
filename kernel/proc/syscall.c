@@ -20,6 +20,7 @@
 #include "kheap.h"
 #include "isr.h"
 #include "cpu.h"
+#include "battery.h"
 #include "pit.h"
 #include "power.h"
 #include "keyboard.h"
@@ -279,6 +280,15 @@ static int64_t sys_cpufreq(uint64_t khz)
         return cpu_set_automatic();
 
     return cpu_set_khz((uint32_t)khz);
+}
+
+static int64_t sys_battery(uint64_t out)
+{
+    if (!user_range_ok((void *)out, sizeof(wbattery_t), true))
+        return -W_EFAULT;
+
+    battery_info((wbattery_t *)out);
+    return 0;
 }
 
 static int64_t sys_cpulist(uint64_t out, uint64_t max)
@@ -866,6 +876,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_CPUINFO:   r = sys_cpuinfo(regs->rdi); break;
     case WSYS_CPULIST:   r = sys_cpulist(regs->rdi, regs->rsi); break;
     case WSYS_CPUFREQ:   r = sys_cpufreq(regs->rdi); break;
+    case WSYS_BATTERY:   r = sys_battery(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

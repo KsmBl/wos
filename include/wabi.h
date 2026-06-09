@@ -216,6 +216,51 @@ typedef struct {
 } wcpuinfo_t;
 
 /* ------------------------------------------------------------------ *
+ *  The battery
+ * ------------------------------------------------------------------ */
+
+/* What the battery is doing.  UNKNOWN is the usual answer and not a failure:
+ * see the note on `charge_percent` below. */
+#define W_BATTERY_UNKNOWN     0
+#define W_BATTERY_CHARGING    1
+#define W_BATTERY_DISCHARGING 2
+#define W_BATTERY_FULL        3
+
+/* Chemistries SMBIOS distinguishes. */
+#define W_BATTERY_CHEM_UNKNOWN  0
+#define W_BATTERY_CHEM_LEAD     1
+#define W_BATTERY_CHEM_NICD     2
+#define W_BATTERY_CHEM_NIMH     3
+#define W_BATTERY_CHEM_LION     4
+#define W_BATTERY_CHEM_ZINCAIR  5
+#define W_BATTERY_CHEM_LIPOLY   6
+
+typedef struct {
+    uint32_t present;        /* 1 if this machine has a battery at all      */
+    uint32_t state;          /* W_BATTERY_*                                 */
+    int32_t  charge_percent; /* -1 when it cannot be read -- see below      */
+    int32_t  ac_online;      /* 1 on mains, 0 on battery, -1 not known      */
+    uint32_t design_mwh;     /* what it holds when new, 0 unknown           */
+    uint32_t design_mv;      /* nominal voltage in millivolts, 0 unknown    */
+    uint32_t chemistry;      /* W_BATTERY_CHEM_*                            */
+    uint32_t pad;
+    char     name[32];       /* the pack's device name, or empty            */
+    char     maker[32];      /* who made it, or empty                       */
+    char     location[32];   /* where it sits, e.g. "Rear"                  */
+} wbattery_t;
+
+/* Why charge_percent is usually -1:
+ *
+ * On every laptop built this century the charge is reported by an ACPI method
+ * that reads the embedded controller and returns a package.  Calling it means
+ * interpreting AML bytecode, and WOS has no interpreter -- the one piece of
+ * AML it reads is a constant in a fixed shape, not a program.  Everything in
+ * this structure that is static is read out of the firmware's tables; the one
+ * thing that changes minute to minute is the one thing that needs the
+ * interpreter.  It is reported as unknown rather than guessed at.
+ */
+
+/* ------------------------------------------------------------------ *
  *  Users, roles and permissions
  *
  *  Every process runs as a user, identified by a uid.  Root is uid 0 and
@@ -327,7 +372,8 @@ typedef struct {
 #define WSYS_DISKLIST   52
 #define WSYS_SLEEP      53
 #define WSYS_CPUFREQ    54
-#define WSYS_MAX        55
+#define WSYS_BATTERY    55
+#define WSYS_MAX        56
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0
