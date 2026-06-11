@@ -17,10 +17,12 @@ typedef enum {
     FD_FILE,
     FD_DIR,
     FD_CONSOLE,
-    FD_PIPE
+    FD_PIPE,
+    FD_SOCKET
 } fd_type_t;
 
 struct pipe;
+struct socket;
 
 typedef struct {
     fd_type_t type;
@@ -30,6 +32,7 @@ typedef struct {
     uint32_t  flags;       /* the W_O_* flags it was opened with          */
     struct pipe *pipe;     /* the pipe object, when type == FD_PIPE       */
     bool      write_end;   /* which end of that pipe this descriptor is   */
+    struct socket *sock;   /* the endpoint, when type == FD_SOCKET        */
 } file_t;
 
 struct process;
@@ -38,6 +41,21 @@ struct process;
  * in out[0] and the write descriptor in out[1].  Returns 0 or a negative
  * W_E* code. */
 int vfs_pipe(struct process *p, int out[2]);
+
+/* Take or release one reference to whatever a descriptor names.  Copying a
+ * file_t copies a reference, and these are what make that copy real: a pipe
+ * end or a socket endpoint has to know how many descriptors still name it.
+ *
+ * This is what descriptor passing is built on -- the copy that lands in
+ * another process is an ordinary reference, so either side may close its own
+ * without disturbing the other. */
+void vfs_fd_retain(file_t *f);
+void vfs_fd_drop(file_t *f);
+
+/* Put an already-referenced descriptor into a free slot of `p`'s table.
+ * Returns the descriptor number, or -W_EMFILE with the reference untouched --
+ * the caller still owns it and must drop it. */
+int vfs_fd_install(struct process *p, const file_t *f);
 
 /* Give a new process the standard three console descriptors. */
 void vfs_init_fds(struct process *p);
@@ -65,6 +83,30 @@ int vfs_read(struct process *p, int fd, void *buf, uint32_t len);
 int vfs_write(struct process *p, int fd, const void *buf, uint32_t len);
 int vfs_lseek(struct process *p, int fd, int32_t offset, int whence);
 int vfs_stat(struct process *p, const char *path, wstat_t *out);
+
+/* Local sockets, as descriptor numbers.  The address is a path, resolved the
+ * way every other path is; no file is created there.  vfs_listen needs write
+ * permission on the directory the address is in, because answering to a name
+ * is a kind of writing there.
+ *
+ * All return a descriptor, or a negative W_E* code. */
+int vfs_listen(struct process *p, const char *path);
+int vfs_connect(struct process *p, const char *path);
+int vfs_accept(struct process *p, int fd);
+
+/* Send and receive on a socket, carrying descriptors alongside the bytes.
+ * `fds` is an array of `fd_count` descriptor numbers going out, or where up to
+ * `*fd_count` arriving ones are written -- vfs_recv updates it to how many
+ * were installed.  Both return the byte count, or a negative W_E* code. */
+int vfs_send(struct process *p, int fd, const void *buf, uint32_t len,
+             const int *fds, int fd_count);
+int vfs_recv(struct process *p, int fd, void *buf, uint32_t len,
+             int *fds, int *fd_count);
+
+/* Wait until one of `count` descriptors is ready, or `timeout_ms` passes; a
+ * negative timeout waits forever and zero polls without blocking.  Returns how
+ * many have a non-zero `revents`. */
+int vfs_poll(struct process *p, wpollfd_t *fds, int count, int timeout_ms);
 
 /* Describe every mounted filesystem, up to `max` of them.  Returns how many
  * were written.  Needs no process: what is mounted is the same for everyone. */
