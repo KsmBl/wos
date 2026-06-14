@@ -325,6 +325,7 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     selftest_memory();
     selftest_filesystem();
     selftest_ramdisk();
+    selftest_sockets();
     selftest_processes();
 
     run_shell();
