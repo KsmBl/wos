@@ -43,6 +43,36 @@ int wcpulist(wcpu_t *out, int max)
     return wsyscall2(WSYS_CPULIST, (long)out, max);
 }
 
+int wlisten(const char *path)
+{
+    return (int)wsyscall1(WSYS_LISTEN, (long)path);
+}
+
+int wconnect(const char *path)
+{
+    return (int)wsyscall1(WSYS_CONNECT, (long)path);
+}
+
+int waccept(int fd)
+{
+    return (int)wsyscall1(WSYS_ACCEPT, fd);
+}
+
+int wsend(int fd, wmsg_t *msg)
+{
+    return (int)wsyscall2(WSYS_SEND, fd, (long)msg);
+}
+
+int wrecv(int fd, wmsg_t *msg)
+{
+    return (int)wsyscall2(WSYS_RECV, fd, (long)msg);
+}
+
+int wpoll(wpollfd_t *fds, int count, int timeout_ms)
+{
+    return (int)wsyscall3(WSYS_POLL, (long)fds, count, timeout_ms);
+}
+
 int wbattery(wbattery_t *out)
 {
     return wsyscall1(WSYS_BATTERY, (long)out);

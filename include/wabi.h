@@ -216,6 +216,56 @@ typedef struct {
 } wcpuinfo_t;
 
 /* ------------------------------------------------------------------ *
+ *  Local sockets
+ *
+ *  A connection-oriented byte stream between two processes, named by a path
+ *  in the filesystem, carrying file descriptors alongside the bytes.  That is
+ *  the shape of a Unix domain socket, and it is the shape because it is what
+ *  a display protocol needs: a client connects to a compositor by name, and
+ *  hands it a descriptor for a buffer of pixels rather than a copy of them.
+ *
+ *  The name is a path but not a file.  Nothing is created on the disk; the
+ *  path is the address a listener answers to, and it disappears when the
+ *  listener closes.
+ * ------------------------------------------------------------------ */
+
+/* Most descriptors one call can carry.  The same number libwayland uses, and
+ * for the same reason: it bounds the queue a peer can make you hold. */
+#define W_SEND_MAX_FDS 28
+
+/* One message: bytes, and the descriptors travelling with them.
+ *
+ * On wsend(), `fds` names `fd_count` open descriptors to pass; the receiver
+ * gets copies of them in its own table, and closing yours afterwards does not
+ * close its.  On wrecv(), `fds` is where up to `fd_count` arriving descriptors
+ * are written, and `fd_count` is updated to how many actually arrived.
+ *
+ * A descriptor is delivered no earlier than the byte it was sent with, so a
+ * receiver that has read the message describing a buffer is holding the
+ * buffer's descriptor by then, and never before. */
+typedef struct {
+    void    *buf;
+    uint32_t len;
+    int32_t  fd_count;
+    int32_t *fds;
+} wmsg_t;
+
+/* What a descriptor is waited on for, and what happened. */
+#define W_POLLIN   0x0001   /* reading would not block                     */
+#define W_POLLOUT  0x0002   /* writing would not block                     */
+#define W_POLLHUP  0x0004   /* the other end has gone (always reported)    */
+#define W_POLLERR  0x0008   /* the descriptor is not one that can be waited
+                             * on (always reported)                        */
+
+typedef struct {
+    int32_t fd;
+    int16_t events;         /* what to wait for: W_POLLIN | W_POLLOUT */
+    int16_t revents;        /* what is true now                       */
+} wpollfd_t;
+
+#define W_POLL_MAX 32       /* most descriptors one wpoll() can watch */
+
+/* ------------------------------------------------------------------ *
  *  The battery
  * ------------------------------------------------------------------ */
 
@@ -373,7 +423,13 @@ typedef struct {
 #define WSYS_SLEEP      53
 #define WSYS_CPUFREQ    54
 #define WSYS_BATTERY    55
-#define WSYS_MAX        56
+#define WSYS_LISTEN     56
+#define WSYS_CONNECT    57
+#define WSYS_ACCEPT     58
+#define WSYS_SEND       59
+#define WSYS_RECV       60
+#define WSYS_POLL       61
+#define WSYS_MAX        62
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0
