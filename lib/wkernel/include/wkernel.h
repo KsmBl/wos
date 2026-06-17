@@ -339,6 +339,110 @@ int wdiskinfo(wdiskinfo_t *out);
 int wdisklist(wdisk_t *out, int max);
 
 /* ==================================================================== *
+ *  Local sockets
+ *
+ *  A connection-oriented byte stream between two processes, named by a path,
+ *  able to carry file descriptors alongside the bytes -- a Unix domain
+ *  socket, in the shape WOS needs it.
+ *
+ *  A pipe reaches another process only by being inherited across a spawn,
+ *  which is enough for a shell and a terminal emulator and not enough for a
+ *  display server: a client has to find the compositor by name, having never
+ *  been its child, talk in both directions, and hand over a descriptor for a
+ *  buffer rather than a copy of it.
+ * ==================================================================== */
+
+/**
+ * Answer to @p path from now on.
+ *
+ * Nothing is created on the disk. The path is an address, and it is gone when
+ * the returned descriptor is closed. Answering to a name counts as writing
+ * where it lives, so this needs write permission on the directory -- which for
+ * an ordinary user means somewhere under their own home.
+ *
+ * @param path Address to listen on, e.g. "/ramdisk/wayland-0".
+ * @return A descriptor to accept connections on, `-W_EEXIST` if the name is
+ *         taken, `-W_EACCES`, `-W_ENFILE` or `-W_EMFILE`.
+ */
+int wlisten(const char *path);
+
+/**
+ * Connect to whoever is listening on @p path.
+ *
+ * Returns as soon as the connection is queued rather than waiting to be
+ * accepted, so a client may start sending immediately.
+ *
+ * @param path Address to connect to.
+ * @return A connected descriptor, `-W_ENOENT` if nothing is listening there,
+ *         `-W_EBUSY` if the listener's backlog is full, or `-W_EMFILE`.
+ */
+int wconnect(const char *path);
+
+/**
+ * Take the next connection waiting on a listening descriptor, blocking until
+ * one arrives. Use wpoll() first to wait for one without blocking here.
+ *
+ * @param fd A descriptor from wlisten().
+ * @return A connected descriptor, or `-W_EBADF`.
+ */
+int waccept(int fd);
+
+/**
+ * Send bytes, and optionally descriptors, on a connected socket.
+ *
+ * A descriptor passed this way is copied into the receiver's table with a
+ * reference of its own: closing yours afterwards does not close its. It is
+ * delivered no earlier than the byte it was sent with, so a receiver that has
+ * read the message describing a buffer holds that buffer's descriptor by then
+ * and never before.
+ *
+ * Blocks while the connection's buffer is full, like a write to a pipe.
+ *
+ * @param fd  A connected descriptor.
+ * @param msg `buf`/`len` are the bytes; `fds`/`fd_count` the descriptors to
+ *            pass, at most `W_SEND_MAX_FDS` of them.
+ * @return Bytes sent, `-W_EPIPE` once the far end has gone, or `-W_EBADF`.
+ */
+int wsend(int fd, wmsg_t *msg);
+
+/**
+ * Receive bytes, and any descriptors that arrived with them.
+ *
+ * @param fd  A connected descriptor.
+ * @param msg `buf`/`len` is where bytes go; `fds`/`fd_count` where arriving
+ *            descriptors go, with `fd_count` updated to how many there were.
+ * @return Bytes received, 0 once the far end has gone and nothing is left, or
+ *         `-W_EBADF`.
+ *
+ * @code
+ *     char     bytes[256];
+ *     int      fds[4];
+ *     wmsg_t   msg = { bytes, sizeof(bytes), 4, fds };
+ *
+ *     int n = wrecv(fd, &msg);
+ *     // n bytes in `bytes`, msg.fd_count descriptors in `fds`
+ * @endcode
+ */
+int wrecv(int fd, wmsg_t *msg);
+
+/**
+ * Wait until one of several descriptors is ready.
+ *
+ * Sockets, pipes and the console can all be waited on together, which is what
+ * a program serving several clients at once needs and what wpollin() -- one
+ * descriptor, no waiting -- cannot do.
+ *
+ * @param fds        Array of descriptors and the `W_POLL*` events wanted;
+ *                   `revents` is filled in with what is true now.
+ * @param count      How many, at most `W_POLL_MAX`.
+ * @param timeout_ms How long to wait: 0 returns at once, negative waits
+ *                   forever.
+ * @return How many entries came back with a non-zero `revents`, 0 on timeout,
+ *         or `-W_EINVAL` / `-W_EFAULT`.
+ */
+int wpoll(wpollfd_t *fds, int count, int timeout_ms);
+
+/* ==================================================================== *
  *  Processors
  * ==================================================================== */
 

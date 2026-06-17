@@ -15,6 +15,8 @@
 #include "ramfs.h"
 #include "proc.h"
 #include "sched.h"
+#include "socket.h"
+#include "pipe.h"
 #include "string.h"
 
 static uint32_t failures;
@@ -451,6 +453,118 @@ void selftest_ramdisk(void)
     if (failures)
         panic("%u RAM disk self-test failure(s)", failures);
     kputs("-- RAM disk self-test passed --\n");
+}
+
+/* Local sockets, exercised below the descriptor layer.
+ *
+ * Everything here happens without blocking, which is what makes it safe to run
+ * during a boot with nothing else to switch to: a connection is queued before
+ * it is accepted, and no buffer is ever filled. */
+void selftest_sockets(void)
+{
+    kputs("\n-- socket self-test --\n");
+    failures = 0;
+
+    int err = 0;
+    socket_t *listener = socket_listen("/selftest.sock", &err);
+    check(listener != NULL, "an address can be listened on");
+    if (!listener) {
+        panic("socket self-test cannot continue without a listener");
+    }
+
+    check(socket_listen("/selftest.sock", &err) == NULL && err == -W_EEXIST,
+          "the same address cannot be listened on twice");
+
+    check(socket_connect("/nobody-is-here.sock", &err) == NULL &&
+          err == -W_ENOENT, "connecting to nothing reports ENOENT");
+
+    socket_t *client = socket_connect("/selftest.sock", &err);
+    check(client != NULL, "a client can connect");
+
+    check(socket_pollin(listener), "the listener reports a connection waiting");
+
+    socket_t *server = socket_accept(listener, &err);
+    check(server != NULL, "the listener accepts it");
+
+    /* Bytes, both ways. */
+    const char *hello = "hello from the client";
+    char        buf[64];
+    int         fdn = 0;
+
+    check(socket_send(client, hello, (uint32_t)strlen(hello), NULL, 0) ==
+          (int)strlen(hello), "the client can send");
+    check(socket_pollin(server), "the server sees it waiting");
+
+    memset(buf, 0, sizeof(buf));
+    fdn = 0;
+    check(socket_recv(server, buf, sizeof(buf), NULL, &fdn) ==
+          (int)strlen(hello), "the server receives the same length");
+    check(strcmp(buf, hello) == 0, "and the same bytes");
+
+    const char *reply = "and back again";
+    check(socket_send(server, reply, (uint32_t)strlen(reply), NULL, 0) ==
+          (int)strlen(reply), "the server can reply");
+
+    memset(buf, 0, sizeof(buf));
+    fdn = 0;
+    check(socket_recv(client, buf, sizeof(buf), NULL, &fdn) ==
+          (int)strlen(reply), "the client receives the reply");
+    check(strcmp(buf, reply) == 0, "with the bytes intact");
+
+    /* A descriptor, passed across.  A pipe is the easiest thing to prove it
+     * with: write into one end here, pass the other, and read it out on the
+     * far side of the socket. */
+    pipe_t *p = pipe_create();
+    check(p != NULL, "a pipe can be created to pass across");
+
+    file_t passing;
+    memset(&passing, 0, sizeof(passing));
+    passing.type      = FD_PIPE;
+    passing.pipe      = p;
+    passing.write_end = false;               /* the read end travels */
+
+    check(pipe_write(p, "through the socket", 18) == 18,
+          "something is put into the pipe");
+
+    check(socket_send(client, "fd", 2, &passing, 1) == 2,
+          "the descriptor is sent with a message");
+
+    file_t arrived[2];
+    memset(buf, 0, sizeof(buf));
+    fdn = 2;
+    check(socket_recv(server, buf, sizeof(buf), arrived, &fdn) == 2,
+          "the message arrives");
+    check(fdn == 1, "and one descriptor with it");
+    check(arrived[0].type == FD_PIPE && arrived[0].pipe == p,
+          "which names the same pipe");
+
+    memset(buf, 0, sizeof(buf));
+    check(pipe_read(arrived[0].pipe, buf, sizeof(buf)) == 18 &&
+          memcmp(buf, "through the socket", 18) == 0,
+          "and reads out what was put in before it was sent");
+
+    /* The reference the send took, and the one the receive handed over. */
+    vfs_fd_drop(&arrived[0]);
+    pipe_unref(p, false);
+
+    /* Closing one end is visible from the other. */
+    socket_unref(client);
+    check(socket_pollin(server), "closing an end makes the other readable");
+    memset(buf, 0, sizeof(buf));
+    fdn = 0;
+    check(socket_recv(server, buf, sizeof(buf), NULL, &fdn) == 0,
+          "and a read there reports the end of the stream");
+    check(socket_hungup(server), "which is reported as a hangup");
+
+    socket_unref(server);
+    socket_unref(listener);
+
+    check(socket_connect("/selftest.sock", &err) == NULL && err == -W_ENOENT,
+          "the address is gone once the listener closes");
+
+    if (failures)
+        panic("%u socket self-test failure(s)", failures);
+    kputs("-- socket self-test passed --\n");
 }
 
 void selftest_processes(void)

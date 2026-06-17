@@ -151,6 +151,27 @@ void sched_block(wait_reason_t reason)
 
     current->state       = THREAD_BLOCKED;
     current->wait_reason = reason;
+    current->wake_at     = 0;          /* nothing but a wake will do */
+    schedule();
+}
+
+/* Block on `reason`, but no longer than `until_tick`.
+ *
+ * A poll needs both halves: it waits for whatever it is watching to become
+ * ready, and it has to come back anyway when the caller's timeout runs out --
+ * or when something whose readiness nobody announces, like a key arriving at
+ * the console, may have happened. */
+void sched_block_until(wait_reason_t reason, uint32_t until_tick)
+{
+    if (!active) {
+        while ((int32_t)(pit_ticks() - until_tick) < 0)
+            __asm__ volatile("sti; hlt");
+        return;
+    }
+
+    current->state       = THREAD_BLOCKED;
+    current->wait_reason = reason;
+    current->wake_at     = until_tick ? until_tick : 1;
     schedule();
 }
 
@@ -184,8 +205,7 @@ void sched_sleep_until(uint32_t until_tick)
         return;
     }
 
-    current->wake_at = until_tick;
-    sched_block(WAIT_TIME);
+    sched_block_until(WAIT_TIME, until_tick);
 }
 
 /* Wake anything whose deadline has passed.  The comparison is on the signed
@@ -197,7 +217,7 @@ static void wake_expired(uint32_t now)
         return;
 
     do {
-        if (t->state == THREAD_BLOCKED && t->wait_reason == WAIT_TIME &&
+        if (t->state == THREAD_BLOCKED && t->wake_at != 0 &&
             (int32_t)(now - t->wake_at) >= 0) {
             t->state       = THREAD_READY;
             t->wait_reason = WAIT_NONE;

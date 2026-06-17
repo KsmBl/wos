@@ -19,6 +19,7 @@ static inline void selftest_interrupts(void) { }
 static inline void selftest_memory(void)     { }
 static inline void selftest_filesystem(void) { }
 static inline void selftest_ramdisk(void)    { }
+static inline void selftest_sockets(void)    { }
 static inline void selftest_processes(void)  { }
 
 #else
@@ -34,6 +35,11 @@ void selftest_filesystem(void);
 /* The in-memory filesystem: that it stores what is written, and that it holds
  * no more memory than the files in it need. */
 void selftest_ramdisk(void);
+
+/* Local sockets: listening, connecting, bytes in both directions, a descriptor
+ * passed from one endpoint to the other, and what each end sees when the other
+ * closes. */
+void selftest_sockets(void);
 
 /* Spawns the `hello` test program in ring 3: checks argument passing, exit
  * status, preemption between two processes, and that a faulting process is

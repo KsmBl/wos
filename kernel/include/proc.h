@@ -40,7 +40,9 @@ typedef enum {
     WAIT_INPUT,      /* console input; woken by the keyboard IRQ    */
     WAIT_CHILD,      /* a child to exit; woken by process teardown  */
     WAIT_PIPE,       /* pipe space or data; woken by the other end  */
-    WAIT_TIME        /* a deadline; woken by the timer              */
+    WAIT_TIME,       /* a deadline; woken by the timer              */
+    WAIT_SOCKET      /* a socket to become readable, writable or to
+                      * accept a connection; woken by its peer      */
 } wait_reason_t;
 
 struct process;

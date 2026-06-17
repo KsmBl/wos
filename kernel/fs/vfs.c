@@ -3,6 +3,9 @@
 #include "vfs.h"
 #include "proc.h"
 #include "pipe.h"
+#include "socket.h"
+#include "sched.h"
+#include "pit.h"
 #include "wfs_kernel.h"
 #include "ramfs.h"
 #include "keyboard.h"
@@ -20,13 +23,34 @@ void vfs_init_fds(struct process *p)
         p->fds[i].type = FD_CONSOLE;
 }
 
-/* Release one descriptor, dropping a pipe reference if it holds one. */
-static void fd_release(file_t *f)
+void vfs_fd_retain(file_t *f)
 {
+    if (!f)
+        return;
+    if (f->type == FD_PIPE)
+        pipe_ref(f->pipe, f->write_end);
+    else if (f->type == FD_SOCKET)
+        socket_ref(f->sock);
+}
+
+void vfs_fd_drop(file_t *f)
+{
+    if (!f)
+        return;
     if (f->type == FD_PIPE)
         pipe_unref(f->pipe, f->write_end);
+    else if (f->type == FD_SOCKET)
+        socket_unref(f->sock);
+}
+
+/* Release one descriptor, dropping whatever reference it holds. */
+static void fd_release(file_t *f)
+{
+    vfs_fd_drop(f);
+
     f->type      = FD_NONE;
     f->pipe      = NULL;
+    f->sock      = NULL;
     f->write_end = false;
 }
 
@@ -54,8 +78,7 @@ void vfs_inherit_stdio(struct process *child, struct process *parent)
     for (int i = 0; i < 3; i++) {
         file_t *src = &parent->fds[i];
         child->fds[i] = *src;
-        if (src->type == FD_PIPE)
-            pipe_ref(src->pipe, src->write_end);
+        vfs_fd_retain(src);
     }
 }
 
@@ -167,6 +190,16 @@ static int fd_alloc(struct process *p)
     return -W_EMFILE;
 }
 
+int vfs_fd_install(struct process *p, const file_t *f)
+{
+    int fd = fd_alloc(p);
+    if (fd < 0)
+        return fd;
+
+    p->fds[fd] = *f;
+    return fd;
+}
+
 int vfs_pipe(struct process *p, int out[2])
 {
     int rfd = fd_alloc(p);
@@ -201,6 +234,231 @@ int vfs_pipe(struct process *p, int out[2])
     out[0] = rfd;
     out[1] = wfd;
     return 0;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Sockets
+ *
+ *  The descriptor layer's side of socket.c: turning endpoints into descriptor
+ *  numbers, and descriptor numbers back into endpoints.  A socket address is a
+ *  path, so it is resolved the way every other path is -- relative names work,
+ *  and a listener and a client that name the same place agree on it.
+ * ------------------------------------------------------------------ */
+
+/* Defined with the rest of the permission rules, far below. */
+static bool may_write(struct process *p, const char *abs);
+
+static int socket_fd(struct process *p, socket_t *s)
+{
+    file_t f;
+
+    memset(&f, 0, sizeof(f));
+    f.type = FD_SOCKET;
+    f.sock = s;
+
+    int fd = vfs_fd_install(p, &f);
+    if (fd < 0)
+        socket_unref(s);        /* nowhere to put it; give the endpoint up */
+
+    return fd;
+}
+
+/* Resolve a socket address.  It is a path, but no file is created or looked
+ * up: only the name matters, and only to whoever is listening on it. */
+static int socket_path(struct process *p, const char *path, char *out)
+{
+    return vfs_resolve(p, path, out, W_PATH_MAX + 1);
+}
+
+int vfs_listen(struct process *p, const char *path)
+{
+    char abs[W_PATH_MAX + 1];
+    int  r = socket_path(p, path, abs);
+    if (r < 0)
+        return r;
+
+    /* Answering to a name is a kind of writing there: a process that could
+     * not create a file in a directory has no business owning an address in
+     * it either. */
+    if (!may_write(p, abs))
+        return -W_EACCES;
+
+    int err = 0;
+    socket_t *s = socket_listen(abs, &err);
+    if (!s)
+        return err;
+
+    return socket_fd(p, s);
+}
+
+int vfs_connect(struct process *p, const char *path)
+{
+    char abs[W_PATH_MAX + 1];
+    int  r = socket_path(p, path, abs);
+    if (r < 0)
+        return r;
+
+    int err = 0;
+    socket_t *s = socket_connect(abs, &err);
+    if (!s)
+        return err;
+
+    return socket_fd(p, s);
+}
+
+int vfs_accept(struct process *p, int fd)
+{
+    file_t *f = fd_get(p, fd);
+    if (!f || f->type != FD_SOCKET)
+        return -W_EBADF;
+
+    int err = 0;
+    socket_t *s = socket_accept(f->sock, &err);
+    if (!s)
+        return err;
+
+    return socket_fd(p, s);
+}
+
+int vfs_send(struct process *p, int fd, const void *buf, uint32_t len,
+             const int *fds, int fd_count)
+{
+    file_t *f = fd_get(p, fd);
+    if (!f || f->type != FD_SOCKET)
+        return -W_EBADF;
+    if (fd_count < 0 || fd_count > W_SEND_MAX_FDS)
+        return -W_EINVAL;
+
+    /* Collect the descriptors being passed before anything is sent: one bad
+     * number should fail the whole call rather than half of it. */
+    file_t passing[W_SEND_MAX_FDS];
+
+    for (int i = 0; i < fd_count; i++) {
+        file_t *src = fd_get(p, fds[i]);
+        if (!src)
+            return -W_EBADF;
+        passing[i] = *src;
+    }
+
+    return socket_send(f->sock, buf, len, passing, fd_count);
+}
+
+int vfs_recv(struct process *p, int fd, void *buf, uint32_t len,
+             int *fds, int *fd_count)
+{
+    file_t *f = fd_get(p, fd);
+    if (!f || f->type != FD_SOCKET)
+        return -W_EBADF;
+
+    int want = fd_count ? *fd_count : 0;
+    if (want < 0 || want > W_SEND_MAX_FDS)
+        return -W_EINVAL;
+
+    file_t arrived[W_SEND_MAX_FDS];
+    int    n = want;
+
+    int r = socket_recv(f->sock, buf, len, arrived, &n);
+    if (r < 0) {
+        if (fd_count)
+            *fd_count = 0;
+        return r;
+    }
+
+    /* Each arriving descriptor already carries its reference; installing it
+     * transfers that reference into this process's table.  A table with no
+     * room left means the reference has nowhere to go, and dropping it is the
+     * only honest thing to do -- the alternative is leaking it forever. */
+    int installed = 0;
+    for (int i = 0; i < n; i++) {
+        int got = vfs_fd_install(p, &arrived[i]);
+        if (got < 0) {
+            vfs_fd_drop(&arrived[i]);
+            continue;
+        }
+        fds[installed++] = got;
+    }
+
+    if (fd_count)
+        *fd_count = installed;
+    return r;
+}
+
+/* What is true of one descriptor right now. */
+static int16_t poll_state(struct process *p, int fd, int16_t events)
+{
+    file_t *f = fd_get(p, fd);
+    int16_t r = 0;
+
+    if (!f)
+        return W_POLLERR;
+
+    switch (f->type) {
+    case FD_SOCKET:
+        if ((events & W_POLLIN) && socket_pollin(f->sock))   r |= W_POLLIN;
+        if ((events & W_POLLOUT) && socket_pollout(f->sock)) r |= W_POLLOUT;
+        if (socket_hungup(f->sock))                          r |= W_POLLHUP;
+        break;
+
+    case FD_PIPE:
+        if (f->write_end) {
+            if (events & W_POLLOUT) r |= W_POLLOUT;   /* a write may block */
+        } else if ((events & W_POLLIN) && pipe_pollin(f->pipe)) {
+            r |= W_POLLIN;
+        }
+        break;
+
+    case FD_CONSOLE:
+        if ((events & W_POLLIN) && keyboard_has_data()) r |= W_POLLIN;
+        if (events & W_POLLOUT)                         r |= W_POLLOUT;
+        break;
+
+    case FD_NONE:
+        r = W_POLLERR;
+        break;
+
+    default:
+        /* A file or a directory is always ready: a read returns something
+         * even if that something is the end of it. */
+        r = (int16_t)(events & (W_POLLIN | W_POLLOUT));
+        break;
+    }
+
+    return r;
+}
+
+/* Wait until one of `fds` is ready, or the timeout runs out.
+ *
+ * The sleep is bounded by a tick as well as by the caller's timeout, so a
+ * descriptor whose readiness nothing announces -- the console, whose keyboard
+ * interrupt wakes a different reason -- is still noticed promptly.  Sockets
+ * wake it immediately, which is what matters for a display protocol. */
+int vfs_poll(struct process *p, wpollfd_t *fds, int count, int timeout_ms)
+{
+    uint32_t deadline = pit_ticks() + (uint32_t)((timeout_ms > 0)
+                                                 ? (timeout_ms * PIT_HZ + 999) / 1000
+                                                 : 0);
+
+    for (;;) {
+        int ready = 0;
+
+        for (int i = 0; i < count; i++) {
+            fds[i].revents = poll_state(p, fds[i].fd, fds[i].events);
+            if (fds[i].revents)
+                ready++;
+        }
+
+        if (ready || timeout_ms == 0)
+            return ready;
+
+        if (timeout_ms > 0 && (int32_t)(pit_ticks() - deadline) >= 0)
+            return 0;
+
+        uint32_t next = pit_ticks() + 1;
+        if (timeout_ms > 0 && (int32_t)(next - deadline) > 0)
+            next = deadline;
+
+        sched_block_until(WAIT_SOCKET, next);
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -535,6 +793,8 @@ int vfs_read(struct process *p, int fd, void *buf, uint32_t len)
         return console_read(buf, len);
     if (f->type == FD_PIPE)
         return f->write_end ? -W_EBADF : pipe_read(f->pipe, buf, len);
+    if (f->type == FD_SOCKET)
+        return socket_recv(f->sock, buf, len, NULL, NULL);
     if (f->type == FD_DIR)
         return -W_EISDIR;
     if ((f->flags & W_O_ACCMODE) == W_O_WRONLY)
@@ -558,6 +818,8 @@ int vfs_write(struct process *p, int fd, const void *buf, uint32_t len)
         return console_write(buf, len);
     if (f->type == FD_PIPE)
         return f->write_end ? pipe_write(f->pipe, buf, len) : -W_EBADF;
+    if (f->type == FD_SOCKET)
+        return socket_send(f->sock, buf, len, NULL, 0);
     if (f->type == FD_DIR)
         return -W_EISDIR;
     if ((f->flags & W_O_ACCMODE) == W_O_RDONLY)

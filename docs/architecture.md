@@ -187,6 +187,35 @@ in a loop is still asking to run. `wsleep()` is the answer: the thread blocks
 on `WAIT_TIME` with a deadline, and the timer wakes it. Everything that waits —
 a frame interval, a poll for a keystroke, a gap between pings — waits that way.
 
+## Local sockets
+
+`kernel/fs/socket.c` adds a second kind of channel beside the pipe: named,
+bidirectional, and able to carry descriptors.
+
+A pipe is one direction, anonymous, and reaches another process only by being
+inherited across a spawn. That covers a shell wiring a child's output into a
+terminal emulator. It does not cover a display server, where a client has to
+find the compositor by name having never been its child, talk both ways, and
+hand over a descriptor for a buffer of pixels rather than a copy of them. So:
+Unix domain sockets, in the shape WOS needs them.
+
+The address is a path but not a file. Nothing is created on the disk; the path
+is the name a listener answers to and it disappears when the listener closes,
+which is also why it needs no permission model of its own — binding one
+requires write permission where it lives, and that rule already exists.
+
+**Descriptor passing** is the part worth being careful about. A `file_t` is a
+reference to something — a pipe end, an open file, a socket endpoint — so
+passing one is copying the struct and taking a reference, which is what
+`vfs_fd_retain()` and `vfs_fd_drop()` exist for. The copy that lands in the
+receiver is an ordinary descriptor: either process may close its own without
+disturbing the other.
+
+Each queued descriptor records the sender's byte position when it was queued,
+and is released to the receiver only once that byte has been read. That is what
+keeps a descriptor from arriving before the message that explains it, however
+small the pieces the receiver reads in.
+
 ## Syscalls
 
 `int 0x80`, with the call number in `rax` and arguments in the System V

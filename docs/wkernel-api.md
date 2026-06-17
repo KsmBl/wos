@@ -365,6 +365,113 @@ typedef struct {
 
 ---
 
+# Local sockets
+
+A connection-oriented byte stream between two processes, named by a path, able
+to carry file descriptors alongside the bytes — a Unix domain socket, in the
+shape WOS needs it.
+
+A pipe reaches another process only by being inherited across a spawn. That is
+enough for a shell and a terminal emulator, and not enough for a display
+server: a client has to find the compositor by name having never been its
+child, talk in both directions, and hand over a descriptor for a buffer rather
+than a copy of it.
+
+## `int wlisten(const char *path)`
+
+Answer to `path` from now on. Nothing is created on the disk — the path is an
+address, and it is gone when the returned descriptor closes. Answering to a
+name counts as writing where it lives, so this needs write permission on the
+directory, which for an ordinary user means somewhere under their own home.
+
+**Returns** a descriptor to accept connections on, `-W_EEXIST` if the name is
+taken, `-W_EACCES`, `-W_ENFILE` or `-W_EMFILE`.
+
+## `int wconnect(const char *path)`
+
+Connect to whoever is listening on `path`. Returns as soon as the connection is
+queued rather than waiting to be accepted, so a client may start sending
+immediately.
+
+**Returns** a connected descriptor, `-W_ENOENT` if nothing is listening,
+`-W_EBUSY` if the backlog is full, or `-W_EMFILE`.
+
+## `int waccept(int fd)`
+
+Take the next connection waiting on a listening descriptor, blocking until one
+arrives. Poll first to wait for one without blocking here.
+
+**Returns** a connected descriptor, or `-W_EBADF`.
+
+## `int wsend(int fd, wmsg_t *msg)` / `int wrecv(int fd, wmsg_t *msg)`
+
+```c
+typedef struct {
+    void    *buf;
+    uint32_t len;
+    int32_t  fd_count;   /* in: how many to pass; out: how many arrived */
+    int32_t *fds;
+} wmsg_t;
+```
+
+```c
+char     bytes[256];
+int      fds[4];
+wmsg_t   msg = { bytes, sizeof(bytes), 4, fds };
+
+int n = wrecv(fd, &msg);
+/* n bytes in `bytes`, msg.fd_count descriptors in `fds` */
+```
+
+A descriptor passed this way is copied into the receiver's table with a
+reference of its own: closing yours afterwards does not close its. At most
+`W_SEND_MAX_FDS` (28) travel with one message — the same limit libwayland
+uses, and for the same reason.
+
+**Delivery order matters and is guaranteed.** A descriptor is delivered no
+earlier than the byte it was sent with, so a receiver that has read the message
+describing a buffer is holding that buffer's descriptor by then, and never
+before. Reading in small pieces cannot make one arrive early.
+
+Both block the way a pipe does: a send waits for room, a receive waits for
+bytes. `wsend` returns `-W_EPIPE` once the far end has gone; `wrecv` returns 0.
+
+An ordinary `wread()`/`wwrite()` on a socket descriptor works too, and carries
+no descriptors.
+
+## `int wpoll(wpollfd_t *fds, int count, int timeout_ms)`
+
+Wait until one of several descriptors is ready. Sockets, pipes and the console
+can be waited on together, which is what a program serving several clients at
+once needs and what `wpollin()` — one descriptor, no waiting — cannot do.
+
+```c
+typedef struct {
+    int32_t fd;
+    int16_t events;    /* W_POLLIN | W_POLLOUT */
+    int16_t revents;   /* what is true now */
+} wpollfd_t;
+```
+
+| Flag | Meaning |
+|---|---|
+| `W_POLLIN` | reading would not block |
+| `W_POLLOUT` | writing would not block |
+| `W_POLLHUP` | the other end has gone (reported whether asked for or not) |
+| `W_POLLERR` | not a descriptor that can be waited on (likewise) |
+
+`timeout_ms` of 0 returns at once; negative waits forever. At most `W_POLL_MAX`
+(32) descriptors.
+
+**Returns** how many entries came back with a non-zero `revents`, 0 on timeout,
+or `-W_EINVAL` / `-W_EFAULT`.
+
+A socket becoming ready wakes the poller immediately. Other descriptors are
+noticed within one timer tick, because nothing announces their readiness to the
+scheduler.
+
+---
+
 # Processors
 
 ## `int wcpuinfo(wcpuinfo_t *out)`

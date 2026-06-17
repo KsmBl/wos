@@ -244,6 +244,120 @@ static int64_t sys_diskinfo(uint64_t out)
     return 0;
 }
 
+/* ------------------------------------------------------------------ *
+ *  Local sockets
+ * ------------------------------------------------------------------ */
+
+static int64_t sys_listen(uint64_t path)
+{
+    char buf[W_PATH_MAX + 1];
+    int  r = copy_string_from_user((const char *)path, buf, sizeof(buf));
+    if (r < 0)
+        return r;
+
+    return vfs_listen(proc_current(), buf);
+}
+
+static int64_t sys_connect(uint64_t path)
+{
+    char buf[W_PATH_MAX + 1];
+    int  r = copy_string_from_user((const char *)path, buf, sizeof(buf));
+    if (r < 0)
+        return r;
+
+    return vfs_connect(proc_current(), buf);
+}
+
+static int64_t sys_accept(uint64_t fd)
+{
+    return vfs_accept(proc_current(), (int)fd);
+}
+
+/* Check a caller's message description and copy it in.  The descriptor array
+ * is copied to the kernel either way: on the way out so a second thread cannot
+ * change it after it was validated, and on the way back so a short table does
+ * not leave the caller's array half written. */
+static int copy_msg_from_user(uint64_t msg_ptr, wmsg_t *out, bool for_send)
+{
+    if (!user_range_ok((void *)msg_ptr, sizeof(wmsg_t), !for_send))
+        return -W_EFAULT;
+
+    *out = *(const wmsg_t *)msg_ptr;
+
+    if (out->len > MAX_IO_SIZE)
+        out->len = MAX_IO_SIZE;
+    if (out->fd_count < 0 || out->fd_count > W_SEND_MAX_FDS)
+        return -W_EINVAL;
+
+    if (!user_range_ok(out->buf, out->len, !for_send))
+        return -W_EFAULT;
+    if (out->fd_count > 0 &&
+        !user_range_ok(out->fds, (uint64_t)out->fd_count * sizeof(int32_t),
+                       !for_send))
+        return -W_EFAULT;
+
+    return 0;
+}
+
+static int64_t sys_send(uint64_t fd, uint64_t msg_ptr)
+{
+    wmsg_t msg;
+    int    r = copy_msg_from_user(msg_ptr, &msg, true);
+    if (r < 0)
+        return r;
+
+    int fds[W_SEND_MAX_FDS];
+    for (int i = 0; i < msg.fd_count; i++)
+        fds[i] = msg.fds[i];
+
+    return vfs_send(proc_current(), (int)fd, msg.buf, msg.len, fds,
+                    msg.fd_count);
+}
+
+static int64_t sys_recv(uint64_t fd, uint64_t msg_ptr)
+{
+    wmsg_t msg;
+    int    r = copy_msg_from_user(msg_ptr, &msg, false);
+    if (r < 0)
+        return r;
+
+    int fds[W_SEND_MAX_FDS];
+    int count = msg.fd_count;
+
+    r = vfs_recv(proc_current(), (int)fd, msg.buf, msg.len, fds, &count);
+    if (r < 0)
+        return r;
+
+    for (int i = 0; i < count; i++)
+        msg.fds[i] = fds[i];
+
+    ((wmsg_t *)msg_ptr)->fd_count = count;
+    return r;
+}
+
+static int64_t sys_poll(uint64_t fds_ptr, uint64_t count, uint64_t timeout_ms)
+{
+    if ((int64_t)count < 0 || count > W_POLL_MAX)
+        return -W_EINVAL;
+    if (!user_range_ok((void *)fds_ptr, count * sizeof(wpollfd_t), true))
+        return -W_EFAULT;
+
+    /* Copied in and back out rather than written in place: the wait can be
+     * long, and the caller's memory must not be a place the kernel keeps a
+     * pointer into across it. */
+    wpollfd_t watch[W_POLL_MAX];
+
+    for (uint64_t i = 0; i < count; i++)
+        watch[i] = ((const wpollfd_t *)fds_ptr)[i];
+
+    int r = vfs_poll(proc_current(), watch, (int)count, (int)timeout_ms);
+
+    for (uint64_t i = 0; i < count; i++)
+        ((wpollfd_t *)fds_ptr)[i].revents = watch[i].revents;
+
+    return r;
+}
+
 static int64_t sys_disklist(uint64_t out, uint64_t max)
 {
     if (max > W_DISK_MAX)
@@ -877,6 +991,12 @@ static void syscall_handler(regs_t *regs)
     case WSYS_CPULIST:   r = sys_cpulist(regs->rdi, regs->rsi); break;
     case WSYS_CPUFREQ:   r = sys_cpufreq(regs->rdi); break;
     case WSYS_BATTERY:   r = sys_battery(regs->rdi); break;
+    case WSYS_LISTEN:    r = sys_listen(regs->rdi); break;
+    case WSYS_CONNECT:   r = sys_connect(regs->rdi); break;
+    case WSYS_ACCEPT:    r = sys_accept(regs->rdi); break;
+    case WSYS_SEND:      r = sys_send(regs->rdi, regs->rsi); break;
+    case WSYS_RECV:      r = sys_recv(regs->rdi, regs->rsi); break;
+    case WSYS_POLL:      r = sys_poll(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }
