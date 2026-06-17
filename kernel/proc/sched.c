@@ -153,6 +153,12 @@ void sched_block(wait_reason_t reason)
     current->wait_reason = reason;
     current->wake_at     = 0;          /* nothing but a wake will do */
     schedule();
+
+    /* Woken -- but perhaps only to be told to go.  A thread coming out of a
+     * wait holds nothing, which is what makes this the right place to leave
+     * from. */
+    if (proc_should_exit())
+        proc_exit(-1);
 }
 
 /* Block on `reason`, but no longer than `until_tick`.
@@ -173,6 +179,9 @@ void sched_block_until(wait_reason_t reason, uint32_t until_tick)
     current->wait_reason = reason;
     current->wake_at     = until_tick ? until_tick : 1;
     schedule();
+
+    if (proc_should_exit())
+        proc_exit(-1);
 }
 
 void sched_wake(wait_reason_t reason)
@@ -229,8 +238,6 @@ static void wake_expired(uint32_t now)
 /* Called from the timer IRQ. Overrides the weak stub in pit.c. */
 void sched_tick(regs_t *regs)
 {
-    (void)regs;
-
     if (!active)
         return;
 
@@ -238,6 +245,12 @@ void sched_tick(regs_t *regs)
         current->cpu_ticks++;
 
     wake_expired(pit_ticks());
+
+    /* A process that was asked to stop and is busy computing rather than
+     * waiting leaves here.  Only from ring 3: interrupted in the kernel it
+     * could be holding anything, and there is nothing to unwind it with. */
+    if ((regs->cs & 3) && proc_should_exit())
+        proc_exit(-1);
 
     /* One timeslice is one tick (10 ms). Short, but this system spends most
      * of its time waiting for a key anyway. */

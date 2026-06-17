@@ -99,6 +99,8 @@ typedef struct process {
 
     struct process *parent;
     bool         exited;
+    bool         killed;       /* asked to stop; unwinds at the next
+                               * safe moment -- see proc_kill()      */
     int32_t      exit_status;
 
     thread_t    *thread;               /* the one thread, for now */
@@ -143,6 +145,23 @@ void proc_exit(int32_t status) __attribute__((noreturn));
  * exit status in `status` if it is non-NULL.  Returns the reaped pid, or a
  * negative W_E* code. */
 int32_t proc_wait(int32_t pid, int32_t *status);
+
+/* Ask a process to stop, from outside it.
+ *
+ * There is no signal mechanism here and no way to unwind another thread's
+ * kernel stack from a distance, so this does not kill anything directly: it
+ * marks the process and wakes it, and the process leaves through proc_exit()
+ * at the next point where it holds nothing -- returning from a blocking wait,
+ * entering a syscall, or being interrupted while in ring 3.
+ *
+ * The effect is prompt for anything that waits, which is every service, and
+ * for anything that computes, which is caught by the timer.  Returns 0, or
+ * -W_ESRCH. */
+int32_t proc_kill(int32_t pid);
+
+/* True when the current process has been asked to stop.  The blocking paths
+ * check this after every wake. */
+bool proc_should_exit(void);
 
 /* Grow or shrink the calling process's heap by `increment` bytes.
  * Returns the previous break, or (uint32_t)-1 on failure. */
