@@ -339,6 +339,48 @@ int wdiskinfo(wdiskinfo_t *out);
 int wdisklist(wdisk_t *out, int max);
 
 /* ==================================================================== *
+ *  Services
+ * ==================================================================== */
+
+/**
+ * List the system's services: what they are, whether each starts at boot, and
+ * whether it is running now.
+ *
+ * Reading needs no permission. The list comes from the unit files in
+ * `/services`, read at boot; the running state comes from the process table,
+ * so a service whose process has died is reported stopped rather than
+ * running.
+ *
+ * @param out Array of at least @p max entries.
+ * @param max Most to write; `W_SERVICE_MAX` is always enough.
+ * @return How many were written, or `-W_EFAULT`.
+ */
+int wservicelist(wservice_t *out, int max);
+
+/**
+ * Start, stop, restart, enable or disable a service.
+ *
+ * Enabling does not start and starting does not enable: the two answer
+ * different questions -- "should this run at the next boot" and "is it running
+ * now".
+ *
+ * Every action needs root or the `systemctleditor` role, because each changes
+ * what the machine is running for everybody on it.
+ *
+ * A stop asks the process to leave rather than tearing it down where it
+ * stands, so the service may still be reported running for a moment
+ * afterwards. That is the truth about the machine, not a delay in reporting.
+ *
+ * @param action One of `W_SVC_START`, `W_SVC_STOP`, `W_SVC_RESTART`,
+ *               `W_SVC_ENABLE`, `W_SVC_DISABLE`.
+ * @param name   The service's name, as in `/services/<name>`.
+ * @return 0 on success, `-W_EPERM` without the role, `-W_ENOENT` if there is
+ *         no such service, `-W_EBUSY` when starting one already running or
+ *         stopping one that is not, or an error from spawning it.
+ */
+int wservicectl(int action, const char *name);
+
+/* ==================================================================== *
  *  Local sockets
  *
  *  A connection-oriented byte stream between two processes, named by a path,
@@ -1100,6 +1142,21 @@ int wfprintf(int fd, const char *fmt, ...) __attribute__((format(printf, 2, 3)))
  */
 int wsnprintf(char *buf, wsize_t size, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
+
+/**
+ * Format text into a buffer from an already-collected argument list, so that a
+ * program can build a printf of its own on top -- a logger, say.
+ *
+ * Include `<stdarg.h>` for `va_list`.
+ *
+ * @param buf  Destination, always NUL-terminated.
+ * @param size Size of @p buf.
+ * @param fmt  Format string, as for wprintf().
+ * @param ap   The arguments, from va_start().
+ * @return The number of characters written, not counting the NUL.
+ */
+int wvsnprintf(char *buf, wsize_t size, const char *fmt, __builtin_va_list ap)
+    __attribute__((format(printf, 3, 0)));
 
 /**
  * Write a string to stdout, with no newline added.

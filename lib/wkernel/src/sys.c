@@ -43,6 +43,16 @@ int wcpulist(wcpu_t *out, int max)
     return wsyscall2(WSYS_CPULIST, (long)out, max);
 }
 
+int wservicelist(wservice_t *out, int max)
+{
+    return (int)wsyscall2(WSYS_SVCLIST, (long)out, max);
+}
+
+int wservicectl(int action, const char *name)
+{
+    return (int)wsyscall2(WSYS_SVCCTL, action, (long)name);
+}
+
 int wlisten(const char *path)
 {
     return (int)wsyscall1(WSYS_LISTEN, (long)path);
