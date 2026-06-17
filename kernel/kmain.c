@@ -32,6 +32,7 @@
 #include "user.h"
 #include "proc.h"
 #include "sched.h"
+#include "service.h"
 #include "selftest.h"
 #include "string.h"
 #include "io.h"
@@ -308,6 +309,11 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     proc_init();
     syscall_init();
     kputs("proc   : scheduler running, syscall gate open\n");
+
+    /* Anything the machine is meant to be running, before anyone logs in:
+     * that is what makes it a service rather than something you start. */
+    service_init();
+    service_print_report();
 
     /* Last, so it is still on screen when the shell starts: a machine that
      * found no disk is running from a copy of the filesystem in memory and

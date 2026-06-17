@@ -1,0 +1,3 @@
+description=the Wayland display server
+exec=/app/waylandd/launch
+enabled=1

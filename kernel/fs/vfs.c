@@ -673,6 +673,11 @@ static bool may_write(struct process *p, const char *abs)
     if (path_within(abs, "/app"))
         return user_has_role(p->uid, W_ROLE_APPEDITOR);
 
+    /* A unit file decides what the machine runs at boot, so editing one is
+     * the same permission as starting and stopping services by hand. */
+    if (path_within(abs, "/services"))
+        return user_has_role(p->uid, W_ROLE_SYSCTLEDIT);
+
     char home[W_PATH_MAX + 1];
     if (!home_of(p, home, sizeof(home)))
         return false;
