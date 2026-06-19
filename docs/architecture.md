@@ -187,6 +187,26 @@ in a loop is still asking to run. `wsleep()` is the answer: the thread blocks
 on `WAIT_TIME` with a deadline, and the timer wakes it. Everything that waits —
 a frame interval, a poll for a keystroke, a gap between pings — waits that way.
 
+## Services
+
+`kernel/proc/service.c` reads `/services` at boot and starts what is enabled,
+before anything logs in. A unit file is `key=value` lines; unknown keys are
+skipped rather than refused, so one written for a later version still starts
+its service.
+
+The description lives on the disk and the running state lives in the kernel,
+which is the only place that knows whether a process is still there. A service
+is spawned with no parent, so it outlives whoever asked for it.
+
+Stopping is the interesting half. There are no signals here and no way to
+unwind another thread's kernel stack from a distance, so `proc_kill()` does not
+kill anything: it marks the process and wakes it, and the process leaves
+through `proc_exit()` at the next moment it holds nothing — returning from a
+blocking wait, entering a syscall, or being interrupted while in ring 3. The
+first covers every service, since a service waits; the last covers a runaway
+loop. A process interrupted *in the kernel* is left alone, because it could be
+holding anything and there is nothing to unwind it with.
+
 ## Local sockets
 
 `kernel/fs/socket.c` adds a second kind of channel beside the pipe: named,

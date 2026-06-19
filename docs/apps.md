@@ -33,6 +33,7 @@ which is the price of having no shared libraries.
 | [`shutdown`](#shutdown) | power the machine off |
 | [`uptime`](#uptime) | how long the machine has been running |
 | [`cpufreq`](#cpufreq) | show the processor's clock, and change it |
+| [`systemctl`](#systemctl) | list, start, stop, enable and disable services |
 | [`battery`](#battery) | say whether the machine has a battery, and what it is |
 | [`whoami`](#whoami) | print the current user and what it may do |
 | [`passwd`](#passwd) | change a password |
@@ -1036,6 +1037,135 @@ transactions, and enough of the language to run a method that was written
 assuming a complete implementation.
 
 **Exit status:** 0.
+
+---
+
+# systemctl
+
+```
+systemctl [list | status [name] | start <name> | stop <name> |
+           restart <name> | enable <name> | disable <name>]
+```
+
+See what the system is running, and change it.
+
+```
+root@wos:/home/root# systemctl
+SERVICE      STATE     AT BOOT     PID  DESCRIPTION
+wayland      running   enabled       1  the Wayland display server
+
+root@wos:/home/root# systemctl status wayland
+wayland -- the Wayland display server
+   state: running as pid 1
+ at boot: enabled
+    runs: /app/waylandd/launch
+
+root@wos:/home/root# systemctl stop wayland
+stopping wayland
+root@wos:/home/root# systemctl disable wayland
+disabled at boot: wayland
+```
+
+**Enabling is not starting.** "Should this run at the next boot" and "is it
+running now" are different questions, and a manager that answered one with the
+other would be deciding things nobody asked it to. `enable` edits the unit
+file; `start` runs the program.
+
+**Changing anything needs root or the
+[`systemctleditor`](users.md#roles) role.** Looking needs nothing.
+
+## Services
+
+A service is described by a file in `/services`, named after the service:
+
+```
+root@wos:/home/root# cat /services/wayland
+description=the Wayland display server
+exec=/app/waylandd/launch
+enabled=1
+```
+
+Unknown keys and blank lines are skipped rather than refused, so a unit file
+written for a later version still starts its service.
+
+The kernel reads `/services` at boot and starts everything enabled, before
+anything logs in — which is what makes a service belong to the machine rather
+than to whoever started it. A service is spawned with no parent, so closing the
+shell you started it from does not take it down.
+
+`stop` asks the process to leave rather than tearing it down where it stands:
+there is no signal mechanism here, and no way to unwind another thread's kernel
+stack from a distance. The process is marked and woken, and it exits at the
+next moment it is holding nothing — returning from a wait, entering a syscall,
+or being interrupted in ring 3. For anything that waits, which is every
+service, that is immediate. Until it has actually gone, `systemctl` keeps
+reporting it as running, because it is.
+
+**Exit status:** 0, or 1 if the action was refused or impossible.
+
+---
+
+# waylandd
+
+```
+waylandd [socket-path]
+```
+
+The Wayland display server. Normally started as a service rather than by hand:
+
+```
+root@wos:/home/root# systemctl start wayland
+started wayland
+root@wos:/home/root# cat /ramdisk/wayland.log
+waylandd listening on /ramdisk/wayland-0
+```
+
+It owns the socket clients connect to, speaks the **real Wayland wire format**,
+and implements `wl_display` — the one object that exists before a client has
+asked for anything. A client can connect, call `wl_display.get_registry`, call
+`wl_display.sync`, and be answered correctly, which is the opening of every
+Wayland session.
+
+```
+uint32  object id
+uint32  (size << 16) | opcode      size counts this header too
+...     arguments, each padded to four bytes
+```
+
+**What it has not got is anything to advertise.** A compositor's registry lists
+`wl_compositor`, `wl_shm`, `wl_seat`, `xdg_wm_base` and the rest, and every one
+of those needs a piece WOS has not built: shared memory for buffers, a surface
+composited into the framebuffer, a keymap. So the registry is created and comes
+back empty — a true statement about this machine rather than a promise it
+cannot keep — and a client that tries to bind anything is told so through
+`wl_display.error`, which is what the protocol says to do.
+
+It logs to `/ramdisk/wayland.log`, because a service has no terminal to be rude
+to.
+
+**Exit status:** 1 if it cannot take the socket; otherwise it runs until it is
+stopped.
+
+## wlprobe
+
+```
+wlprobe [socket-path]
+```
+
+A client, for checking that the server is up and speaking the protocol. It
+sends the bytes libwayland would send:
+
+```
+root@wos:/home/root# wlprobe
+connected to /ramdisk/wayland-0
+sent wl_display.get_registry, asking for object 2
+sent wl_display.sync, asking for callback 3
+24 bytes back:
+  object 3  wl_callback.done  (0)
+  object 1  wl_display.delete_id  (3)
+```
+
+That exchange is a completed `wl_display_roundtrip`.
 
 ---
 
