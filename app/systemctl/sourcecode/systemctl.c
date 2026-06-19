@@ -140,13 +140,30 @@ static int status(const char *name)
     return 0;
 }
 
-/* One of the actions, and what to say about how it went. */
-static int act(int action, const char *name, const char *done)
+/* One of the actions.  What it reports afterwards is read back from the
+ * kernel rather than assumed from the action succeeding: a service asked to
+ * stop leaves at its own pace, and the useful answer is the state the machine
+ * is actually in. */
+static int act(int action, const char *name)
 {
     int r = wservicectl(action, name);
 
     if (r == 0) {
-        wprintf("%s %s\n", done, name);
+        if (load() == 0) {
+            const wservice_t *s = find(name);
+
+            if (s) {
+                wprintf("%s: ", s->name);
+                print_state(s);
+                if (s->running)
+                    wprintf(" as pid %d", s->pid);
+                wprintf(", %s at boot\n",
+                        s->enabled ? "enabled" : "disabled");
+                return 0;
+            }
+        }
+
+        wprintf("%s: done\n", name);
         return 0;
     }
 
@@ -187,15 +204,15 @@ int main(int argc, char **argv)
     }
 
     if (strcmp(argv[1], "start") == 0)
-        return act(W_SVC_START, argv[2], "started");
+        return act(W_SVC_START, argv[2]);
     if (strcmp(argv[1], "stop") == 0)
-        return act(W_SVC_STOP, argv[2], "stopping");
+        return act(W_SVC_STOP, argv[2]);
     if (strcmp(argv[1], "restart") == 0)
-        return act(W_SVC_RESTART, argv[2], "restarted");
+        return act(W_SVC_RESTART, argv[2]);
     if (strcmp(argv[1], "enable") == 0)
-        return act(W_SVC_ENABLE, argv[2], "enabled at boot:");
+        return act(W_SVC_ENABLE, argv[2]);
     if (strcmp(argv[1], "disable") == 0)
-        return act(W_SVC_DISABLE, argv[2], "disabled at boot:");
+        return act(W_SVC_DISABLE, argv[2]);
 
     usage();
     return 1;

@@ -403,8 +403,9 @@ questions. Every action needs root or the `systemctleditor` role, because each
 changes what the machine is running for everybody on it.
 
 A stop asks the process to leave rather than tearing it down where it stands,
-so the service may still be reported running for a moment afterwards. That is
-the truth about the machine, not a delay in reporting.
+and waits up to two seconds for it to go — long enough that a restart does not
+race the thing it just stopped. A process that never reaches a safe moment is
+still reported running afterwards, because it is.
 
 **Returns** 0, `-W_EPERM` without the role, `-W_ENOENT` if there is no such
 service or its program is missing, `-W_EBUSY` when starting one already running

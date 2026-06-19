@@ -2,6 +2,8 @@
 
 #include "service.h"
 #include "proc.h"
+#include "sched.h"
+#include "pit.h"
 #include "wfs_kernel.h"
 #include "kprintf.h"
 #include "string.h"
@@ -193,6 +195,24 @@ static int start(struct service *s)
     return 0;
 }
 
+/* Wait for a process that has been asked to stop to actually go.
+ *
+ * proc_kill() only marks it; it leaves at its next safe moment, which for
+ * anything that waits is the next time it is scheduled.  Something has to wait
+ * for that, or a restart would start the replacement while the original is
+ * still holding the socket -- and the answer to "is it running" immediately
+ * after a stop would be yes.
+ *
+ * Bounded, because a process that never reaches a safe moment must not take
+ * the caller down with it.  It stays marked either way and goes when it can. */
+static void wait_for_exit(struct service *s)
+{
+    for (int i = 0; i < 200 && s->pid; i++) {      /* up to two seconds */
+        sched_sleep_until(pit_ticks() + 1);
+        refresh(s);
+    }
+}
+
 static int stop(struct service *s)
 {
     refresh(s);
@@ -203,9 +223,7 @@ static int stop(struct service *s)
     if (r < 0)
         return r;
 
-    /* The process leaves at its next safe moment rather than this instant, so
-     * `running` stays true until it actually goes.  Reporting it stopped
-     * before it has stopped would be the manager lying about the machine. */
+    wait_for_exit(s);
     return 0;
 }
 

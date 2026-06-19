@@ -1061,9 +1061,11 @@ wayland -- the Wayland display server
     runs: /app/waylandd/launch
 
 root@wos:/home/root# systemctl stop wayland
-stopping wayland
+wayland: stopped, enabled at boot
+root@wos:/home/root# systemctl restart wayland
+wayland: running as pid 4, enabled at boot
 root@wos:/home/root# systemctl disable wayland
-disabled at boot: wayland
+wayland: running as pid 4, disabled at boot
 ```
 
 **Enabling is not starting.** "Should this run at the next boot" and "is it
@@ -1098,8 +1100,13 @@ there is no signal mechanism here, and no way to unwind another thread's kernel
 stack from a distance. The process is marked and woken, and it exits at the
 next moment it is holding nothing — returning from a wait, entering a syscall,
 or being interrupted in ring 3. For anything that waits, which is every
-service, that is immediate. Until it has actually gone, `systemctl` keeps
-reporting it as running, because it is.
+service, that is the next time it is scheduled.
+
+The kernel waits for it to actually go, up to two seconds, so that `restart`
+does not start the replacement while the original still holds the socket. What
+`systemctl` prints afterwards is read back from the kernel rather than assumed
+from the command succeeding — if a process somehow never reaches a safe moment,
+it is still reported running, because it is.
 
 **Exit status:** 0, or 1 if the action was refused or impossible.
 

@@ -207,6 +207,11 @@ first covers every service, since a service waits; the last covers a runaway
 loop. A process interrupted *in the kernel* is left alone, because it could be
 holding anything and there is nothing to unwind it with.
 
+The service manager then waits, bounded, for the process to actually go.
+Without that, `restart` would start the replacement while the original still
+held the socket — the first bug this arrangement produced, and the reason the
+wait is there.
+
 ## Local sockets
 
 `kernel/fs/socket.c` adds a second kind of channel beside the pipe: named,
