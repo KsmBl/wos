@@ -88,10 +88,17 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   it at a speed; `battery` says what the firmware knows about the pack. Both
   report what the machine will not tell them as unknown, rather than as a
   number nobody measured.
+- **Services**: programs the machine runs rather than a person does, described
+  by unit files in `/services` and managed with `systemctl` — list, start,
+  stop, enable, disable. The first one is `wayland`.
+- **The beginning of Wayland**: local sockets that carry file descriptors, and
+  `waylandd`, a display server speaking the real wire format. A client can
+  complete a `wl_display` roundtrip today; the registry is empty until there is
+  something to put in it.
 - **Users and roles**: every process runs as a user, `root` may do anything,
   and everyone else writes only in their own `/home` directory unless a role
   says otherwise — `appeditor` for `/app`, `usereditor` for `/userconfig`,
-  `editfreq` for the processor's clock.
+  `editfreq` for the processor's clock, `systemctleditor` for the services.
   `/kernel` is root-only. Passwords live in `/userconfig/<name>/password`,
   readable and writable by root and the kernel alone, so `passwd` and `su`
   need no setuid.
