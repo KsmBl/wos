@@ -53,6 +53,27 @@ int wservicectl(int action, const char *name)
     return (int)wsyscall2(WSYS_SVCCTL, action, (long)name);
 }
 
+int wshmopen(unsigned int bytes)
+{
+    return (int)wsyscall1(WSYS_SHM_OPEN, (long)bytes);
+}
+
+void *wshmmap(int fd)
+{
+    long r = wsyscall1(WSYS_SHM_MAP, fd);
+    return r < 0 ? (void *)0 : (void *)r;
+}
+
+int wshmunmap(void *addr)
+{
+    return (int)wsyscall1(WSYS_SHM_UNMAP, (long)addr);
+}
+
+int wshmsize(int fd)
+{
+    return (int)wsyscall1(WSYS_SHM_SIZE, fd);
+}
+
 int wlisten(const char *path)
 {
     return (int)wsyscall1(WSYS_LISTEN, (long)path);

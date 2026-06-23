@@ -300,6 +300,23 @@ typedef struct {
 #define W_POLL_MAX 32       /* most descriptors one wpoll() can watch */
 
 /* ------------------------------------------------------------------ *
+ *  Shared memory
+ *
+ *  Pages two processes can both see.  One asks for an object and gets a
+ *  descriptor; either side maps it and gets a pointer; the descriptor travels
+ *  over a socket like any other.  That is how a window's pixels reach the
+ *  compositor without being copied -- the client draws into the mapping and
+ *  sends the descriptor, not the megabyte.
+ *
+ *  The object is a fixed size, fixed when it is created.  It exists as long as
+ *  any descriptor names it or any process has it mapped, so a client may
+ *  create a buffer, hand it over and exit without the pixels going away.
+ * ------------------------------------------------------------------ */
+
+/* Largest object wshmopen() will create: two screens' worth at 1920x1200. */
+#define W_SHM_MAX_BYTES (32u * 1024u * 1024u)
+
+/* ------------------------------------------------------------------ *
  *  The battery
  * ------------------------------------------------------------------ */
 
@@ -470,7 +487,11 @@ typedef struct {
 #define WSYS_POLL       61
 #define WSYS_SVCLIST    62
 #define WSYS_SVCCTL     63
-#define WSYS_MAX        64
+#define WSYS_SHM_OPEN   64
+#define WSYS_SHM_MAP    65
+#define WSYS_SHM_UNMAP  66
+#define WSYS_SHM_SIZE   67
+#define WSYS_MAX        68
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

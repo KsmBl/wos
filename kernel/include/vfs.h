@@ -18,11 +18,13 @@ typedef enum {
     FD_DIR,
     FD_CONSOLE,
     FD_PIPE,
-    FD_SOCKET
+    FD_SOCKET,
+    FD_SHM         /* a shared memory object: mapped, never read or written */
 } fd_type_t;
 
 struct pipe;
 struct socket;
+struct shm;
 
 typedef struct {
     fd_type_t type;
@@ -33,6 +35,7 @@ typedef struct {
     struct pipe *pipe;     /* the pipe object, when type == FD_PIPE       */
     bool      write_end;   /* which end of that pipe this descriptor is   */
     struct socket *sock;   /* the endpoint, when type == FD_SOCKET        */
+    struct shm *shm;       /* the object, when type == FD_SHM             */
 } file_t;
 
 struct process;

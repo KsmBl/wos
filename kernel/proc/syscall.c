@@ -14,6 +14,7 @@
 #include "sched.h"
 #include "vfs.h"
 #include "pipe.h"
+#include "shm.h"
 #include "wfs_kernel.h"
 #include "paging.h"
 #include "pmm.h"
@@ -950,6 +951,62 @@ static int64_t sys_setshell(uint64_t name, uint64_t shell)
     return user_set_shell(proc_current()->uid, namebuf, shellbuf);
 }
 
+/* ------------------------------------------------------------------ *
+ *  Shared memory
+ * ------------------------------------------------------------------ */
+
+static int64_t sys_shm_open(uint64_t bytes)
+{
+    if (bytes == 0 || bytes > SHM_MAX_BYTES)
+        return -W_EINVAL;
+
+    shm_t *s = shm_create((uint32_t)bytes);
+    if (!s)
+        return -W_ENOMEM;
+
+    file_t f = { 0 };
+    f.type = FD_SHM;
+    f.shm  = s;
+
+    int fd = vfs_fd_install(proc_current(), &f);
+    if (fd < 0)
+        shm_unref(s);        /* the reference shm_create gave us */
+    return fd;
+}
+
+/* Map the whole object and return its address.  The window it lands in is well
+ * below the top of user space, so the address is always a positive int64 and
+ * cannot be mistaken for an error. */
+static int64_t sys_shm_map(uint64_t fd)
+{
+    process_t *p = proc_current();
+
+    if (fd >= MAX_OPEN_FILES || p->fds[fd].type != FD_SHM)
+        return -W_EBADF;
+
+    uint64_t addr = 0;
+    int      r    = shm_map(p, p->fds[fd].shm, &addr);
+    if (r < 0)
+        return r;
+
+    return (int64_t)addr;
+}
+
+static int64_t sys_shm_unmap(uint64_t addr)
+{
+    return shm_unmap(proc_current(), addr);
+}
+
+static int64_t sys_shm_size(uint64_t fd)
+{
+    process_t *p = proc_current();
+
+    if (fd >= MAX_OPEN_FILES || p->fds[fd].type != FD_SHM)
+        return -W_EBADF;
+
+    return (int64_t)shm_bytes(p->fds[fd].shm);
+}
+
 static int64_t sys_shutdown(void)
 {
     /* There is no user or permission model in WOS, so any process may do
@@ -1031,6 +1088,10 @@ static void syscall_handler(regs_t *regs)
     case WSYS_POLL:      r = sys_poll(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_SVCLIST:   r = sys_svclist(regs->rdi, regs->rsi); break;
     case WSYS_SVCCTL:    r = sys_svcctl(regs->rdi, regs->rsi); break;
+    case WSYS_SHM_OPEN:  r = sys_shm_open(regs->rdi); break;
+    case WSYS_SHM_MAP:   r = sys_shm_map(regs->rdi); break;
+    case WSYS_SHM_UNMAP: r = sys_shm_unmap(regs->rdi); break;
+    case WSYS_SHM_SIZE:  r = sys_shm_size(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

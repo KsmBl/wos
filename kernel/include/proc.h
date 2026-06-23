@@ -15,6 +15,7 @@
 #include "types.h"
 #include "paging.h"
 #include "vfs.h"
+#include "shm.h"
 #include "wabi.h"
 
 #define MAX_PROCESSES     32
@@ -96,6 +97,11 @@ typedef struct process {
     uint64_t     stack_bytes;
     uint64_t     heap_start;           /* page-aligned, just past the image */
     uint64_t     heap_break;           /* current top of the heap           */
+
+    /* Shared memory this process has mapped.  Held here rather than with the
+     * objects because a mapping is a property of an address space, and because
+     * these have to come out before the address space is torn down. */
+    shm_mapping_t maps[SHM_MAX_MAPPINGS];
 
     struct process *parent;
     bool         exited;

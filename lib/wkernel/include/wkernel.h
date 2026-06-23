@@ -381,6 +381,70 @@ int wservicelist(wservice_t *out, int max);
 int wservicectl(int action, const char *name);
 
 /* ==================================================================== *
+ *  Shared memory
+ *
+ *  Pages two processes can both see.  A socket copies what it carries, which
+ *  is right for messages and wrong for a screenful of pixels; this is how the
+ *  pixels stay where they are and only the descriptor travels.
+ * ==================================================================== */
+
+/**
+ * Create a shared memory object of @p bytes and return a descriptor for it.
+ *
+ * The size is fixed at creation and rounded up to a whole page. The pages are
+ * zeroed, so nothing the previous owner of that memory left behind is visible.
+ *
+ * The descriptor is an ordinary one: it can be sent over a socket with
+ * wsend(), and the receiver ends up naming the same pages. It cannot be read
+ * or written -- shared memory is reached by mapping it, and wread() on one
+ * fails with `-W_EINVAL` rather than pretending to be a file.
+ *
+ * The object lives until every descriptor naming it is closed *and* every
+ * process that mapped it has unmapped or exited. A client may therefore create
+ * a buffer, hand it to a compositor and exit, leaving the compositor holding
+ * pixels that are still perfectly good.
+ *
+ * @param bytes How much to allocate; at most `W_SHM_MAX_BYTES`.
+ * @return A descriptor, `-W_EINVAL` for a size of zero or one too large,
+ *         `-W_ENOMEM` if the machine has not got the memory, or `-W_EMFILE`.
+ */
+int wshmopen(unsigned int bytes);
+
+/**
+ * Map a shared memory object into this process and return a pointer to it.
+ *
+ * The whole object is mapped, readable and writable. Mapping the same
+ * descriptor twice gives two addresses for the same pages, which is harmless.
+ *
+ * @param fd A descriptor from wshmopen(), or one that arrived over a socket.
+ * @return A pointer to the pages, or NULL if @p fd is not a shared memory
+ *         object or there is no room to map it.
+ */
+void *wshmmap(int fd);
+
+/**
+ * Release a mapping made by wshmmap(). The pages survive if anything else
+ * still names the object.
+ * @param addr Exactly what wshmmap() returned.
+ * @return 0, or `-W_EINVAL` if there is no mapping there.
+ */
+int wshmunmap(void *addr);
+
+/**
+ * How large a shared memory object is, in bytes -- what was asked for, rounded
+ * up to a whole page.
+ *
+ * The receiver of a descriptor needs this: it was told a width and a height by
+ * the protocol, and this is how it checks that the memory it was handed is
+ * actually big enough to hold them, rather than trusting the sender's
+ * arithmetic.
+ *
+ * @param fd A shared memory descriptor.
+ * @return The size in bytes, or `-W_EBADF`.
+ */
+int wshmsize(int fd);
+
+/* ==================================================================== *
  *  Local sockets
  *
  *  A connection-oriented byte stream between two processes, named by a path,

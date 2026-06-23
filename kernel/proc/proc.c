@@ -347,6 +347,11 @@ void proc_exit(int32_t status)
 
     vfs_close_all(p);
 
+    /* Before the address space goes.  Whoever reaps this process frees every
+     * frame it finds mapped, and a shared one is not this process's to give
+     * back -- the compositor may still be drawing from it. */
+    shm_unmap_all(p);
+
     p->exited      = true;
     p->exit_status = status;
 
@@ -458,8 +463,9 @@ uint64_t proc_sbrk(int64_t increment)
     if (increment > 0) {
         uint64_t new_break = old + (uint64_t)increment;
 
-        /* Do not let the heap grow into the stack. */
-        if (new_break > USER_STACK_TOP - USER_STACK_SIZE)
+        /* Do not let the heap grow into the shared memory window, which is
+         * what stands between it and the stack. */
+        if (new_break > USER_MMAP_BASE)
             return (uint64_t)-1;
 
         for (uint64_t page = ALIGN_UP(old, PAGE_SIZE);

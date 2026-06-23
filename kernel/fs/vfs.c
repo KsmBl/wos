@@ -4,6 +4,7 @@
 #include "proc.h"
 #include "pipe.h"
 #include "socket.h"
+#include "shm.h"
 #include "sched.h"
 #include "pit.h"
 #include "wfs_kernel.h"
@@ -31,6 +32,8 @@ void vfs_fd_retain(file_t *f)
         pipe_ref(f->pipe, f->write_end);
     else if (f->type == FD_SOCKET)
         socket_ref(f->sock);
+    else if (f->type == FD_SHM)
+        shm_ref(f->shm);
 }
 
 void vfs_fd_drop(file_t *f)
@@ -41,6 +44,8 @@ void vfs_fd_drop(file_t *f)
         pipe_unref(f->pipe, f->write_end);
     else if (f->type == FD_SOCKET)
         socket_unref(f->sock);
+    else if (f->type == FD_SHM)
+        shm_unref(f->shm);
 }
 
 /* Release one descriptor, dropping whatever reference it holds. */
@@ -51,6 +56,7 @@ static void fd_release(file_t *f)
     f->type      = FD_NONE;
     f->pipe      = NULL;
     f->sock      = NULL;
+    f->shm       = NULL;
     f->write_end = false;
 }
 
@@ -800,6 +806,8 @@ int vfs_read(struct process *p, int fd, void *buf, uint32_t len)
         return f->write_end ? -W_EBADF : pipe_read(f->pipe, buf, len);
     if (f->type == FD_SOCKET)
         return socket_recv(f->sock, buf, len, NULL, NULL);
+    if (f->type == FD_SHM)
+        return -W_EINVAL;        /* shared memory is mapped, not read */
     if (f->type == FD_DIR)
         return -W_EISDIR;
     if ((f->flags & W_O_ACCMODE) == W_O_WRONLY)
@@ -825,6 +833,8 @@ int vfs_write(struct process *p, int fd, const void *buf, uint32_t len)
         return f->write_end ? pipe_write(f->pipe, buf, len) : -W_EBADF;
     if (f->type == FD_SOCKET)
         return socket_send(f->sock, buf, len, NULL, 0);
+    if (f->type == FD_SHM)
+        return -W_EINVAL;        /* shared memory is mapped, not written */
     if (f->type == FD_DIR)
         return -W_EISDIR;
     if ((f->flags & W_O_ACCMODE) == W_O_RDONLY)
