@@ -31,6 +31,7 @@ exactly the rules this system has:
 | `/kernel` | root only — no role grants this |
 | `/app` | root, or a user with the `appeditor` role |
 | `/userconfig` | root, or a user with the `usereditor` role |
+| `/services` | root, or a user with the `systemctleditor` role |
 | `/userconfig/<name>/password` | **root only** — overrides the line above |
 | `/home/<user>` | that user, and everything beneath it |
 | anywhere else | root only |
@@ -86,14 +87,22 @@ Roles are a bitmask, so a user can hold several.
 | `appeditor` | write access under `/app` — installing and editing programs |
 | `usereditor` | write access to `/userconfig` — creating users, setting anyone's password, changing roles |
 | `editfreq` | changing the processor's clock, with [`cpufreq`](apps.md#cpufreq) |
+| `systemctleditor` | starting, stopping, enabling and disabling services, with [`systemctl`](apps.md#systemctl) — and writing the unit files in `/services` |
 
 Root holds no roles and needs none: every check short-circuits on uid 0.
 
-The first two are write access to a place in the filesystem. `editfreq` is not:
+The first two are write access to a place in the filesystem. `editfreq` and
+`systemctleditor` are not:
 there is one processor clock and every process on the machine runs on it, so a
-slow machine is slow for everybody and a fast one is hot for everybody. It is a
-role for the same reason the other two are — something a user should be able to
-be trusted with individually, without being made root.
+slow machine is slow for everybody and a fast one is hot for everybody, and
+what the machine is running is likewise everybody's. They are roles for the
+same reason the other two are — something a user should be able to be trusted
+with individually, without being made root.
+
+`systemctleditor` is also what `/services` checks for writing, so the two ways
+to change what runs at boot — `systemctl enable`, and editing the unit file —
+need the same permission. A role that guarded only one of them would not be
+guarding anything.
 
 ## Passwords
 
@@ -194,7 +203,7 @@ that password to anything first, so asking would be theatre.
 | `passwd [user]` | change your own password, or another's if permitted |
 | `su [user]` | start a shell as another user (default `root`) |
 | `chsh [shell]`, `chsh -u <user> <shell>` | change a login shell; your own, or anyone's with `-u` if permitted |
-| `adduser [-a] [-u] [-f] <name>` | create a user, asking for a password; `-a` grants appeditor, `-u` usereditor, `-f` editfreq |
+| `adduser [-a] [-u] [-f] [-s] <name>` | create a user, asking for a password; `-a` grants appeditor, `-u` usereditor, `-f` editfreq, `-s` systemctleditor |
 | `edituser <name> [+role] [-role]` | add or remove roles; with no change, prints what they hold |
 
 Each user has a **login shell** — the program started for them at boot (root)

@@ -2,6 +2,7 @@
 
 #include "proc.h"
 #include "sched.h"
+#include "service.h"
 #include "elf.h"
 #include "vfs.h"
 #include "pipe.h"
@@ -349,6 +350,10 @@ void proc_exit(int32_t status)
     p->exited      = true;
     p->exit_status = status;
 
+    /* If this was a service, the manager has to stop claiming it is running.
+     * A pid that is not one is ignored. */
+    service_reap(p->pid, status);
+
     /* The address space is freed by whoever reaps this process: we are still
      * running on this thread's kernel stack, and although that lives in the
      * identity-mapped heap, the page directory we are using is the one we
@@ -359,6 +364,39 @@ void proc_exit(int32_t status)
     schedule();
 
     panic("a zombie thread was scheduled again");
+}
+
+int32_t proc_kill(int32_t pid)
+{
+    process_t *p = proc_by_pid(pid);
+
+    if (!p || p->exited)
+        return -W_ESRCH;
+    if (p == &kernel_proc)
+        return -W_EPERM;
+
+    p->killed = true;
+
+    /* Whatever it is waiting for, it is not waiting for it any more.  Every
+     * blocking path rechecks after being woken, finds the flag, and leaves. */
+    for (int i = 0; i < MAX_THREADS; i++) {
+        thread_t *t = &threads[i];
+
+        if (t->proc == p && t->state == THREAD_BLOCKED) {
+            t->state       = THREAD_READY;
+            t->wait_reason = WAIT_NONE;
+            t->wake_at     = 0;
+        }
+    }
+
+    return 0;
+}
+
+bool proc_should_exit(void)
+{
+    process_t *p = proc_current();
+
+    return p && p->killed && !p->exited;
 }
 
 int32_t proc_wait(int32_t pid, int32_t *status)

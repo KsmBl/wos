@@ -216,6 +216,40 @@ typedef struct {
 } wcpuinfo_t;
 
 /* ------------------------------------------------------------------ *
+ *  Services
+ *
+ *  A service is a program the system runs rather than a person does: it is
+ *  described by a file in /services, may be enabled so that it starts at
+ *  boot, and may be started and stopped while the machine is up.
+ *
+ *  The description lives on the disk and the running state lives in the
+ *  kernel, which is the only place that knows whether a process is still
+ *  there.  Enabling a service does not start it and starting one does not
+ *  enable it -- the two questions are "should this run at the next boot" and
+ *  "is it running now", and answering one with the other is how a machine
+ *  ends up in a state nobody asked for.
+ * ------------------------------------------------------------------ */
+
+#define W_SERVICE_MAX 16          /* services the kernel will track */
+
+/* What to do to one.  Every action needs root or W_ROLE_SYSCTLEDIT. */
+#define W_SVC_START   0
+#define W_SVC_STOP    1
+#define W_SVC_RESTART 2
+#define W_SVC_ENABLE  3           /* start at boot from now on */
+#define W_SVC_DISABLE 4           /* do not                    */
+
+typedef struct {
+    char     name[28];            /* what it is called, and its file name  */
+    char     exec[96];            /* the program that is run               */
+    char     description[64];
+    uint32_t enabled;             /* 1 if it starts at boot                */
+    uint32_t running;             /* 1 if it is running now                */
+    int32_t  pid;                 /* which process, or 0                   */
+    int32_t  exit_status;         /* how it last finished, if it has       */
+} wservice_t;
+
+/* ------------------------------------------------------------------ *
  *  Local sockets
  *
  *  A connection-oriented byte stream between two processes, named by a path
@@ -331,6 +365,11 @@ typedef struct {
                                       * NOT the password files themselves --
                                       * those stay root-only, for reading as
                                       * well as writing.                      */
+#define W_ROLE_SYSCTLEDIT (1u << 3)  /* may start, stop, enable and disable the
+                                      * system's services.  Like editfreq and
+                                      * unlike the first two, this is not write
+                                      * access to a place but permission to
+                                      * change what the machine is running.   */
 #define W_ROLE_EDITFREQ   (1u << 2)  /* may change the processor's clock.  Not
                                       * a file permission like the two above:
                                       * the clock is one setting the whole
@@ -429,7 +468,9 @@ typedef struct {
 #define WSYS_SEND       59
 #define WSYS_RECV       60
 #define WSYS_POLL       61
-#define WSYS_MAX        62
+#define WSYS_SVCLIST    62
+#define WSYS_SVCCTL     63
+#define WSYS_MAX        64
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

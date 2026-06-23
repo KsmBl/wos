@@ -32,6 +32,8 @@ int main(int argc, char **argv)
             wprintf(" usereditor");
         if (me.roles & W_ROLE_EDITFREQ)
             wprintf(" editfreq");
+        if (me.roles & W_ROLE_SYSCTLEDIT)
+            wprintf(" systemctleditor");
         wprintf("\n");
 
         wprintf("write : /home/%s\n", me.name);

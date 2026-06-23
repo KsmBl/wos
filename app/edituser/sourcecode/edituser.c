@@ -24,6 +24,9 @@ static const struct {
     { "usereditor", W_ROLE_USEREDITOR, "may write /userconfig: add users, "
                                        "set passwords, change roles" },
     { "editfreq",   W_ROLE_EDITFREQ,   "may change the processor's clock" },
+    { "systemctleditor", W_ROLE_SYSCTLEDIT,
+                                       "may start, stop, enable and disable "
+                                       "services" },
 };
 
 #define ROLE_COUNT ((int)(sizeof(role_table) / sizeof(role_table[0])))
@@ -33,7 +36,7 @@ static void usage(void)
     wfprintf(W_STDERR, "usage: edituser <name> [+role] [-role] ...\n\n");
     wfprintf(W_STDERR, "Roles:\n");
     for (int i = 0; i < ROLE_COUNT; i++)
-        wfprintf(W_STDERR, "  %-11s %s\n", role_table[i].name,
+        wfprintf(W_STDERR, "  %-17s %s\n", role_table[i].name,
                  role_table[i].what);
     wfprintf(W_STDERR, "\nWith no change given, prints what the user holds.\n");
 }

@@ -21,6 +21,7 @@
 #include "isr.h"
 #include "cpu.h"
 #include "battery.h"
+#include "service.h"
 #include "pit.h"
 #include "power.h"
 #include "keyboard.h"
@@ -242,6 +243,37 @@ static int64_t sys_diskinfo(uint64_t out)
 
     wfs_statfs((wdiskinfo_t *)out);
     return 0;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Services
+ * ------------------------------------------------------------------ */
+
+static int64_t sys_svclist(uint64_t out, uint64_t max)
+{
+    if (max > W_SERVICE_MAX)
+        max = W_SERVICE_MAX;
+    if (!user_range_ok((void *)out, max * sizeof(wservice_t), true))
+        return -W_EFAULT;
+
+    return service_list((wservice_t *)out, (int)max);
+}
+
+/* Starting, stopping and enabling are all the same permission: each one
+ * changes what the machine is running for everybody on it, which is not
+ * something a user can be left to decide for themselves.  Reading the list
+ * needs nothing. */
+static int64_t sys_svcctl(uint64_t action, uint64_t name)
+{
+    char buf[W_NAME_MAX + 1];
+    int  r = copy_string_from_user((const char *)name, buf, sizeof(buf));
+    if (r < 0)
+        return r;
+
+    if (!user_has_role(proc_current()->uid, W_ROLE_SYSCTLEDIT))
+        return -W_EPERM;
+
+    return service_control((uint32_t)action, buf);
 }
 
 /* ------------------------------------------------------------------ *
@@ -997,6 +1029,8 @@ static void syscall_handler(regs_t *regs)
     case WSYS_SEND:      r = sys_send(regs->rdi, regs->rsi); break;
     case WSYS_RECV:      r = sys_recv(regs->rdi, regs->rsi); break;
     case WSYS_POLL:      r = sys_poll(regs->rdi, regs->rsi, regs->rdx); break;
+    case WSYS_SVCLIST:   r = sys_svclist(regs->rdi, regs->rsi); break;
+    case WSYS_SVCCTL:    r = sys_svcctl(regs->rdi, regs->rsi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

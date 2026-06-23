@@ -264,6 +264,19 @@ int wsnprintf(char *buf, wsize_t size, const char *fmt, ...)
     return (int)s.written;
 }
 
+int wvsnprintf(char *buf, wsize_t size, const char *fmt, va_list ap)
+{
+    struct sink s = { -1, buf, size, 0 };
+
+    format(&s, fmt, ap);
+
+    if (size) {
+        wsize_t at = (s.written < size - 1) ? s.written : size - 1;
+        buf[at] = '\0';
+    }
+    return (int)s.written;
+}
+
 int wputs(const char *s)
 {
     return wwrite(W_STDOUT, s, strlen(s));

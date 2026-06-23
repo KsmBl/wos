@@ -365,6 +365,54 @@ typedef struct {
 
 ---
 
+# Services
+
+A service is a program the system runs rather than a person: described by a
+file in `/services`, started by the kernel at boot if it is enabled, and
+running with no parent so that closing a shell does not take it down. See
+[`systemctl`](apps.md#systemctl).
+
+## `int wservicelist(wservice_t *out, int max)`
+
+```c
+typedef struct {
+    char     name[28];         /* what it is called, and its file name */
+    char     exec[96];         /* the program that is run              */
+    char     description[64];
+    uint32_t enabled;          /* 1 if it starts at boot               */
+    uint32_t running;          /* 1 if it is running now               */
+    int32_t  pid;              /* which process, or 0                  */
+    int32_t  exit_status;      /* how it last finished, if it has      */
+} wservice_t;
+```
+
+The list comes from the unit files, read at boot; `running` and `pid` come from
+the process table, so a service whose process has died is reported stopped
+rather than running. Reading needs no permission. `max` is the size of the
+array; `W_SERVICE_MAX` is always enough.
+
+**Returns** how many were written, or `-W_EFAULT`.
+
+## `int wservicectl(int action, const char *name)`
+
+`action` is one of `W_SVC_START`, `W_SVC_STOP`, `W_SVC_RESTART`,
+`W_SVC_ENABLE` or `W_SVC_DISABLE`.
+
+Enabling does not start and starting does not enable: the two answer different
+questions. Every action needs root or the `systemctleditor` role, because each
+changes what the machine is running for everybody on it.
+
+A stop asks the process to leave rather than tearing it down where it stands,
+and waits up to two seconds for it to go — long enough that a restart does not
+race the thing it just stopped. A process that never reaches a safe moment is
+still reported running afterwards, because it is.
+
+**Returns** 0, `-W_EPERM` without the role, `-W_ENOENT` if there is no such
+service or its program is missing, `-W_EBUSY` when starting one already running
+or stopping one that is not, or an error from spawning it.
+
+---
+
 # Local sockets
 
 A connection-oriented byte stream between two processes, named by a path, able
