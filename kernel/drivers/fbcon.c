@@ -90,6 +90,13 @@ static int     drawn_row = -1, drawn_col = -1;
  * interface behind it, only the mode the firmware left the card in. */
 static bool    fixed_mode;
 
+/* True while a process has taken the screen (see display.c).  The console
+ * keeps running -- it still tracks the cursor, still scrolls, still records
+ * every character in the backing store -- it just stops putting any of it on
+ * the glass, because the glass belongs to somebody else.  When the screen comes
+ * back, everything written meanwhile is already there to be repainted. */
+static bool    suspended;
+
 /* The 16 VGA colours as 0x00RRGGBB. */
 static const uint32_t palette[16] = {
     0x000000, 0x0000AA, 0x00AA00, 0x00AAAA,
@@ -138,6 +145,9 @@ static inline void flush_writes(void)
 
 static void fill_rect(int x, int y, int w, int h, uint32_t rgb)
 {
+    if (suspended)
+        return;
+
     for (int yy = y; yy < y + h && yy < px_h; yy++) {
         volatile uint32_t *line = fb + (uint32_t)yy * fb_stride + x;
         for (int xx = 0; xx < w && x + xx < px_w; xx++)
@@ -147,6 +157,12 @@ static void fill_rect(int x, int y, int w, int h, uint32_t rgb)
 
 static void draw_cell(int row, int col)
 {
+    /* Deliberately without updating shown_ch/shown_at: the glass no longer
+     * agrees with the backing store, and saying so is what makes the repaint
+     * on resume cover everything that happened in between. */
+    if (suspended)
+        return;
+
     char c = cell_ch[row][col];
     uint8_t a = cell_at[row][col];
     uint32_t fg = palette[a & 0x0F];
@@ -493,6 +509,85 @@ static void map_aperture(uint64_t phys, uint64_t bytes)
  * covers, so those frames must never also be handed out as ordinary RAM.  The
  * allocator does not exist when the mapping is made on the UEFI path, so this
  * is a separate step the caller makes once it does. */
+/* ------------------------------------------------------------------ *
+ *  Lending the screen out
+ *
+ *  A compositor draws windows; the console draws characters.  They cannot both
+ *  have the framebuffer, so the console steps aside -- it keeps working into
+ *  its backing store and stops touching the glass, and when it gets the screen
+ *  back it repaints everything that happened while it was away.
+ * ------------------------------------------------------------------ */
+
+bool fbcon_geometry(int *w, int *h, uint32_t *stride_px)
+{
+    if (!active)
+        return false;
+
+    *w         = px_w;
+    *h         = px_h;
+    *stride_px = fb_stride;
+    return true;
+}
+
+void fbcon_suspend(void)
+{
+    suspended = true;
+}
+
+void fbcon_resume(void)
+{
+    if (!suspended)
+        return;
+
+    suspended = false;
+    if (!active)
+        return;
+
+    /* Nothing on the glass is ours any more, so no cell can be assumed to
+     * already be right.  A character that cannot occur makes every comparison
+     * in redraw_changed() disagree, which repaints the lot. */
+    for (int r = 0; r < MAX_ROWS; r++)
+        for (int c = 0; c < MAX_COLS; c++)
+            shown_ch[r][c] = (char)0xFF;
+
+    drawn_row = drawn_col = -1;
+    redraw_changed();
+    draw_cursor();
+    flush_writes();
+}
+
+bool fbcon_suspended(void)
+{
+    return suspended;
+}
+
+void fbcon_blit(const uint32_t *src, uint32_t src_stride_px,
+                int x, int y, int w, int h)
+{
+    if (!active)
+        return;
+
+    /* Clipped here rather than trusted from the caller.  The rectangle comes
+     * from a process, and a compositor with an off-by-one would otherwise be
+     * writing past the aperture into whatever the identity map has next. */
+    if (x < 0) { w += x; src -= x; x = 0; }
+    if (y < 0) { h += y; src -= (int64_t)y * src_stride_px; y = 0; }
+    if (x + w > px_w) w = px_w - x;
+    if (y + h > px_h) h = px_h - y;
+    if (w <= 0 || h <= 0)
+        return;
+
+    for (int row = 0; row < h; row++) {
+        volatile uint32_t *dst = fb + (uint32_t)(y + row) * fb_stride + x;
+        const uint32_t    *s   = src + (uint64_t)row * src_stride_px;
+
+        for (int col = 0; col < w; col++)
+            dst[col] = s[col];
+    }
+
+    flush_writes();
+}
+
 void fbcon_reserve_aperture(void)
 {
     if (active)

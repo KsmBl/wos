@@ -15,6 +15,7 @@
 #define WOS_KEYBOARD_H
 
 #include "types.h"
+#include "wabi.h"
 
 void keyboard_init(void);
 
@@ -33,5 +34,34 @@ bool keyboard_has_data(void);
  * included, exactly like a canonical-mode read on Linux.
  * Returns the number of bytes copied. */
 size_t keyboard_read(char *buf, size_t max);
+
+/* ------------------------------------------------------------------ *
+ *  Event mode: the keyboard as a stream of key transitions
+ *
+ *  A third discipline, above the other two.  A compositor cannot use either of
+ *  them: canonical mode gives it lines, raw mode gives it characters, and both
+ *  throw away the two things it needs -- that a key was released, and which
+ *  physical key it was regardless of what it prints.
+ *
+ *  While event mode is on the other two are bypassed completely.  Nothing is
+ *  echoed and the console reads nothing, because there is one keyboard and the
+ *  compositor has it.
+ * ------------------------------------------------------------------ */
+
+/* Turn event mode on or off.  Reference counted: the last close puts the
+ * keyboard back to the discipline it had.  Anything half-typed is dropped at
+ * each transition, the same way a raw/canonical switch drops it. */
+void keyboard_events_ref(void);
+void keyboard_events_unref(void);
+
+/* True when some process has the keyboard in event mode. */
+bool keyboard_events_active(void);
+
+/* True if at least one whole event is waiting. */
+bool keyboard_events_pending(void);
+
+/* Copy up to `max` events out, blocking until at least one arrives.  Returns
+ * how many were written. */
+int keyboard_read_events(winput_t *out, int max);
 
 #endif /* WOS_KEYBOARD_H */

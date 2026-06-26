@@ -5,6 +5,7 @@
 #include "service.h"
 #include "elf.h"
 #include "vfs.h"
+#include "display.h"
 #include "pipe.h"
 #include "kheap.h"
 #include "pmm.h"
@@ -351,6 +352,10 @@ void proc_exit(int32_t status)
      * frame it finds mapped, and a shared one is not this process's to give
      * back -- the compositor may still be drawing from it. */
     shm_unmap_all(p);
+
+    /* If this process had the screen, the console gets it back.  A compositor
+     * that faults must not take the machine's only output with it. */
+    display_release(p->pid);
 
     p->exited      = true;
     p->exit_status = status;

@@ -15,6 +15,7 @@
 #include "vfs.h"
 #include "pipe.h"
 #include "shm.h"
+#include "display.h"
 #include "wfs_kernel.h"
 #include "paging.h"
 #include "pmm.h"
@@ -1007,6 +1008,81 @@ static int64_t sys_shm_size(uint64_t fd)
     return (int64_t)shm_bytes(p->fds[fd].shm);
 }
 
+/* ------------------------------------------------------------------ *
+ *  The screen
+ * ------------------------------------------------------------------ */
+
+static int64_t sys_dispinfo(uint64_t out)
+{
+    if (!user_range_ok((void *)out, sizeof(wdisplay_t), true))
+        return -W_EFAULT;
+
+    display_info((wdisplay_t *)out);
+    return 0;
+}
+
+/* Taking the screen takes it from everybody: whatever the console was showing
+ * stops being visible, on the one display the machine has.  That is a
+ * system-wide effect in the same way setting the clock is, so it is root's to
+ * do -- and a compositor is a service, which runs as root. */
+static int64_t sys_dispgrab(void)
+{
+    process_t *p = proc_current();
+
+    if (p->uid != W_ROOT_UID)
+        return -W_EPERM;
+
+    return display_acquire(p->pid);
+}
+
+static int64_t sys_dispdrop(void)
+{
+    display_release(proc_current()->pid);
+    return 0;
+}
+
+static int64_t sys_dispblit(uint64_t arg)
+{
+    if (!user_range_ok((void *)arg, sizeof(wblit_t), false))
+        return -W_EFAULT;
+
+    wblit_t b = *(const wblit_t *)arg;
+
+    if (b.width <= 0 || b.height <= 0)
+        return 0;
+    if (b.width > 8192 || b.height > 8192 || b.stride > 8192)
+        return -W_EINVAL;
+    if ((uint32_t)b.width > b.stride)
+        return -W_EINVAL;
+
+    /* Checked a row at a time rather than as one block.  The stride may be
+     * wider than the rectangle, so the source is not necessarily contiguous,
+     * and the last row ends before stride * height bytes have gone by --
+     * demanding that whole span would reject a legitimate blit off the bottom
+     * of a buffer. */
+    const uint8_t *src = (const uint8_t *)b.pixels;
+    for (int row = 0; row < b.height; row++) {
+        const uint8_t *line = src + (uint64_t)row * b.stride * 4;
+        if (!user_range_ok(line, (uint64_t)b.width * 4, false))
+            return -W_EFAULT;
+    }
+
+    return display_blit(proc_current()->pid, (const uint32_t *)b.pixels,
+                        b.stride, b.x, b.y, b.width, b.height);
+}
+
+/* Taking the keyboard takes it from the console, on the one keyboard the
+ * machine has.  Root's to do, for the same reason taking the screen is. */
+static int64_t sys_input_open(void)
+{
+    process_t *p = proc_current();
+
+    if (p->uid != W_ROOT_UID)
+        return -W_EPERM;
+
+    return vfs_input_open(p);
+}
+
 static int64_t sys_shutdown(void)
 {
     /* There is no user or permission model in WOS, so any process may do
@@ -1092,6 +1168,11 @@ static void syscall_handler(regs_t *regs)
     case WSYS_SHM_MAP:   r = sys_shm_map(regs->rdi); break;
     case WSYS_SHM_UNMAP: r = sys_shm_unmap(regs->rdi); break;
     case WSYS_SHM_SIZE:  r = sys_shm_size(regs->rdi); break;
+    case WSYS_DISPINFO:  r = sys_dispinfo(regs->rdi); break;
+    case WSYS_DISPGRAB:  r = sys_dispgrab(); break;
+    case WSYS_DISPDROP:  r = sys_dispdrop(); break;
+    case WSYS_DISPBLIT:  r = sys_dispblit(regs->rdi); break;
+    case WSYS_INPUTOPEN: r = sys_input_open(); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

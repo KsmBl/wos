@@ -317,6 +317,91 @@ typedef struct {
 #define W_SHM_MAX_BYTES (32u * 1024u * 1024u)
 
 /* ------------------------------------------------------------------ *
+ *  The screen
+ *
+ *  The framebuffer console owns the display until something asks for it.  A
+ *  compositor asks: it draws windows, and windows and a text console cannot
+ *  share a screen.
+ *
+ *  While it is lent out the console keeps running and stops drawing, so
+ *  everything printed behind the compositor is still there when the screen
+ *  comes back.  It comes back when the holder gives it up or exits -- the
+ *  second being the one that matters, because a compositor that crashes must
+ *  not take the machine's only output with it.
+ * ------------------------------------------------------------------ */
+
+typedef struct {
+    uint32_t present;   /* 0 when there is no framebuffer: VGA text mode */
+    uint32_t width;     /* pixels                                        */
+    uint32_t height;
+    uint32_t stride;    /* bytes per row, which is not always width * 4  */
+    uint32_t bpp;       /* always 32: 0x00RRGGBB, one pixel per uint32_t */
+    uint32_t owner;     /* pid holding the screen, 0 for the console     */
+} wdisplay_t;
+
+/* One rectangle to put on the screen.  `pixels` is 0x00RRGGBB, `stride` is the
+ * source's row length in *pixels*, so a compositor can send part of a larger
+ * image without copying it out first. */
+typedef struct {
+    const void *pixels;
+    uint32_t    stride;
+    int32_t     x, y;
+    int32_t     width, height;
+} wblit_t;
+
+/* ------------------------------------------------------------------ *
+ *  Raw input
+ *
+ *  The console turns keystrokes into lines of text, which is what a shell
+ *  wants and the opposite of what a compositor wants.  A compositor needs to
+ *  know that a key went down and later came up, which key it was regardless of
+ *  what character it would produce, and what modifiers were held -- because it
+ *  has to decide whether the keystroke is a binding of its own or something to
+ *  forward to whichever window has the focus.
+ *
+ *  So there is a second way to read the keyboard.  While it is open the line
+ *  discipline is bypassed entirely: nothing is echoed, nothing is buffered
+ *  into lines, and the console gets no input at all.  That is not a
+ *  shortcoming -- the keyboard, like the screen, is one device, and the
+ *  compositor has it.
+ *
+ *  Key codes are the Linux evdev codes, which for the main block of a PS/2
+ *  keyboard are the AT set 1 scancodes they were originally defined from.
+ *  They are what wl_keyboard.key carries and what an XKB keymap is written
+ *  against, so a client that knows Wayland already knows these numbers.
+ * ------------------------------------------------------------------ */
+
+#define W_INPUT_KEY 1        /* a key went down or came up */
+
+/* Modifiers, in the bit positions XKB gives them -- so this value is the one
+ * wl_keyboard.modifiers carries, without translation. */
+#define W_MOD_SHIFT (1u << 0)
+#define W_MOD_CAPS  (1u << 1)
+#define W_MOD_CTRL  (1u << 2)
+#define W_MOD_ALT   (1u << 3)   /* Mod1 */
+#define W_MOD_LOGO  (1u << 6)   /* Mod4: the Super key, sway's default $mod */
+
+typedef struct {
+    uint32_t type;       /* W_INPUT_KEY                                   */
+    uint32_t code;       /* evdev key code                                */
+    uint32_t state;      /* 1 pressed, 0 released                         */
+    uint32_t mods;       /* W_MOD_* held, as of after this event          */
+    uint32_t unicode;    /* the character it would produce, or 0 for none
+                          * -- a convenience, so a program that only wants
+                          * text need not carry a keymap of its own       */
+    uint32_t time_ms;    /* milliseconds since boot, for wl_keyboard.key  */
+} winput_t;
+
+/* A few evdev codes worth naming, because a compositor's default bindings are
+ * written in terms of them. */
+#define W_KEYCODE_ESC       1
+#define W_KEYCODE_ENTER    28
+#define W_KEYCODE_LEFTCTRL 29
+#define W_KEYCODE_LEFTSHIFT 42
+#define W_KEYCODE_LEFTALT  56
+#define W_KEYCODE_LEFTMETA 125
+
+/* ------------------------------------------------------------------ *
  *  The battery
  * ------------------------------------------------------------------ */
 
@@ -491,7 +576,12 @@ typedef struct {
 #define WSYS_SHM_MAP    65
 #define WSYS_SHM_UNMAP  66
 #define WSYS_SHM_SIZE   67
-#define WSYS_MAX        68
+#define WSYS_DISPINFO   68
+#define WSYS_DISPGRAB   69
+#define WSYS_DISPDROP   70
+#define WSYS_DISPBLIT   71
+#define WSYS_INPUTOPEN  72
+#define WSYS_MAX        73
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

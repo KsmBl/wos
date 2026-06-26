@@ -445,6 +445,89 @@ int wshmunmap(void *addr);
 int wshmsize(int fd);
 
 /* ==================================================================== *
+ *  The screen
+ *
+ *  For a program that draws pixels rather than characters.  The text console
+ *  has the framebuffer until something takes it; taking it is what a
+ *  compositor does, and giving it back is what leaves the machine usable
+ *  afterwards.
+ * ==================================================================== */
+
+/**
+ * Describe the screen: its size, its stride, and who has it.
+ *
+ * `present` is 0 on a machine whose console is still VGA text mode, where
+ * there is no framebuffer to draw on at all. A program that draws should check
+ * this and say so rather than blitting into nothing.
+ *
+ * @param out Filled in; zeroed first, so every field is defined.
+ * @return 0, or `-W_EFAULT`.
+ */
+int wdisplayinfo(wdisplay_t *out);
+
+/**
+ * Take the screen from the text console.
+ *
+ * The console does not stop -- it keeps tracking the cursor and recording
+ * everything printed -- it just stops drawing. When the screen is released
+ * everything written meanwhile is repainted, so a program that printed behind
+ * a compositor has not lost its output.
+ *
+ * There is one screen, so taking it affects every process on the machine. That
+ * makes it root's to do, like setting the clock.
+ *
+ * @return 0, `-W_EPERM` without root, `-W_ENODEV` on a machine with no
+ *         framebuffer, or `-W_EBUSY` if another process already has it.
+ *
+ * @note The screen is released automatically when the holder exits, however it
+ *       exits. A compositor that faults does not take the display with it.
+ */
+int wdisplaygrab(void);
+
+/** Give the screen back to the console, which repaints it. @return 0. */
+int wdisplaydrop(void);
+
+/**
+ * Put a rectangle of pixels on the screen.
+ *
+ * Pixels are `0x00RRGGBB`, one per 32-bit word. `stride` is the source's row
+ * length in pixels, so a rectangle can be blitted straight out of a larger
+ * back buffer without being copied out of it first.
+ *
+ * The rectangle is clipped to the screen rather than trusted, so a coordinate
+ * off the edge draws less rather than writing somewhere it should not.
+ *
+ * @param b Where the pixels are and where they go.
+ * @return 0, `-W_EPERM` if this process does not hold the screen, `-W_EINVAL`
+ *         for a rectangle wider than its own stride, or `-W_EFAULT`.
+ */
+int wdisplayblit(const wblit_t *b);
+
+/**
+ * Open the keyboard as a stream of key transitions.
+ *
+ * The console turns keystrokes into lines of text, which is what a shell wants
+ * and the opposite of what a compositor wants: a compositor has to know that a
+ * key was *released*, and which physical key it was regardless of the
+ * character it would print, so that it can tell one of its own bindings from
+ * something to forward to a window.
+ *
+ * Read the descriptor for whole `winput_t` records -- a short read is never
+ * half an event -- and wait on it with wpoll() alongside everything else.
+ *
+ * While it is open the console reads nothing at all. That is not a limitation
+ * being worked around: there is one keyboard, and the holder has it. Closing
+ * the descriptor, or exiting, gives it straight back.
+ *
+ * Key codes are the Linux evdev codes that `wl_keyboard.key` carries, so a
+ * program that knows Wayland already knows these numbers.
+ *
+ * @return A descriptor, `-W_EPERM` without root, or `-W_EBUSY` if another
+ *         process already holds the keyboard.
+ */
+int winputopen(void);
+
+/* ==================================================================== *
  *  Local sockets
  *
  *  A connection-oriented byte stream between two processes, named by a path,

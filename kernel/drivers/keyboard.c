@@ -6,6 +6,8 @@
 #include "io.h"
 #include "kprintf.h"
 #include "sched.h"
+#include "pit.h"
+#include "proc.h"
 
 #define KBD_DATA   0x60
 #define KBD_STATUS 0x64
@@ -49,8 +51,22 @@ static const char keymap_shift[128] = {
 
 static bool shift_down;
 static bool ctrl_down;
+static bool alt_down;
+static bool logo_down;
 static bool caps_lock;
 static bool raw_mode;
+
+/* Event mode: how many descriptors have the keyboard as a stream of key
+ * transitions, and the transitions themselves.
+ *
+ * The ring is short on purpose.  It holds a fraction of a second of typing,
+ * and a compositor that has fallen far enough behind to fill it has a worse
+ * problem than the keystrokes it is about to lose. */
+#define EVENT_RING 128
+
+static int  event_refs;
+static volatile winput_t event_ring[EVENT_RING];
+static volatile size_t   event_head, event_tail;
 
 /* The line currently being typed; not visible to readers until Enter. */
 static char   line[LINE_MAX];
@@ -123,6 +139,136 @@ static void handle_char(char c)
     }
 }
 
+/* ------------------------------------------------------------------ *
+ *  Event mode
+ * ------------------------------------------------------------------ */
+
+/* What the second byte of a two-byte scancode means, as an evdev key code.
+ *
+ * The single-byte codes need no table at all: the evdev numbers for the main
+ * block of the keyboard were defined from these very scancodes, so the code
+ * and the scancode are the same number.  Only the keys that arrive behind an
+ * 0xE0 were given numbers somewhere else, and this is that list -- including
+ * the Super key, which the console has never had a use for and which is the
+ * modifier a tiling compositor is mostly driven by. */
+static uint32_t extended_keycode(uint8_t sc)
+{
+    switch (sc) {
+    case 0x1C: return 96;    /* KEY_KPENTER    */
+    case 0x1D: return 97;    /* KEY_RIGHTCTRL  */
+    case 0x35: return 98;    /* KEY_KPSLASH    */
+    case 0x38: return 100;   /* KEY_RIGHTALT   */
+    case 0x47: return 102;   /* KEY_HOME       */
+    case 0x48: return 103;   /* KEY_UP         */
+    case 0x49: return 104;   /* KEY_PAGEUP     */
+    case 0x4B: return 105;   /* KEY_LEFT       */
+    case 0x4D: return 106;   /* KEY_RIGHT      */
+    case 0x4F: return 107;   /* KEY_END        */
+    case 0x50: return 108;   /* KEY_DOWN       */
+    case 0x51: return 109;   /* KEY_PAGEDOWN   */
+    case 0x52: return 110;   /* KEY_INSERT     */
+    case 0x53: return 111;   /* KEY_DELETE     */
+    case 0x5B: return 125;   /* KEY_LEFTMETA   */
+    case 0x5C: return 126;   /* KEY_RIGHTMETA  */
+    case 0x5D: return 127;   /* KEY_COMPOSE    */
+    default:   return 0;     /* nothing this keyboard layer knows */
+    }
+}
+
+static uint32_t modifier_mask(void)
+{
+    uint32_t m = 0;
+
+    if (shift_down) m |= W_MOD_SHIFT;
+    if (caps_lock)  m |= W_MOD_CAPS;
+    if (ctrl_down)  m |= W_MOD_CTRL;
+    if (alt_down)   m |= W_MOD_ALT;
+    if (logo_down)  m |= W_MOD_LOGO;
+    return m;
+}
+
+/* The character a key would produce, or 0.  Sent alongside the key code so a
+ * program that only wants text does not have to carry a keymap; a compositor
+ * that does carry one ignores it and uses the code. */
+static uint32_t key_unicode(uint8_t sc)
+{
+    if (sc >= 128)
+        return 0;
+
+    char c = shift_down ? keymap_shift[sc] : keymap[sc];
+    if (c == 0)
+        return 0;
+
+    if (caps_lock) {
+        if (c >= 'a' && c <= 'z')
+            c = (char)(c - 'a' + 'A');
+        else if (c >= 'A' && c <= 'Z')
+            c = (char)(c - 'A' + 'a');
+    }
+
+    /* Ctrl turns a letter into its control code, the way a terminal does, so
+     * Ctrl+C reaches a program inside a window as 0x03. */
+    if (ctrl_down) {
+        if (c >= 'a' && c <= 'z')
+            c = (char)(c - 'a' + 1);
+        else if (c >= 'A' && c <= 'Z')
+            c = (char)(c - 'A' + 1);
+        else
+            return 0;
+    }
+
+    return (uint32_t)(unsigned char)c;
+}
+
+static void event_push(uint32_t code, bool pressed, uint32_t unicode)
+{
+    size_t next = (event_head + 1) % EVENT_RING;
+    if (next == event_tail)
+        return;                     /* full: drop the oldest end of the type */
+
+    event_ring[event_head].type    = W_INPUT_KEY;
+    event_ring[event_head].code    = code;
+    event_ring[event_head].state   = pressed ? 1 : 0;
+    event_ring[event_head].mods    = modifier_mask();
+    event_ring[event_head].unicode = unicode;
+    event_ring[event_head].time_ms = pit_uptime_ms();
+
+    event_head = next;
+    sched_wake(WAIT_INPUT);
+}
+
+/* One scancode, in event mode.  Every key produces an event, modifiers
+ * included and releases included -- that is the whole reason for this mode. */
+static void handle_event(uint8_t sc, bool extended)
+{
+    bool    pressed = !(sc & SC_RELEASE);
+    uint8_t made    = (uint8_t)(sc & ~SC_RELEASE);
+
+    uint32_t code = extended ? extended_keycode(made) : made;
+    if (code == 0)
+        return;
+
+    /* The modifier state has to be up to date before the event is queued, so
+     * that a press of `c` while Ctrl is held reports Ctrl as held. */
+    if (extended) {
+        if (code == 97)  ctrl_down = pressed;    /* right control */
+        if (code == 100) alt_down  = pressed;    /* right alt     */
+        if (code == 125 || code == 126)
+            logo_down = pressed;
+    } else {
+        switch (made) {
+        case SC_LSHIFT:
+        case SC_RSHIFT:   shift_down = pressed; break;
+        case SC_CTRL:     ctrl_down  = pressed; break;
+        case SC_ALT:      alt_down   = pressed; break;
+        case SC_CAPSLOCK: if (pressed) caps_lock = !caps_lock; break;
+        default: break;
+        }
+    }
+
+    event_push(code, pressed, extended ? 0 : (pressed ? key_unicode(made) : 0));
+}
+
 static void keyboard_irq(regs_t *regs)
 {
     (void)regs;
@@ -136,6 +282,17 @@ static void keyboard_irq(regs_t *regs)
         extended = true;
         return;
     }
+
+    /* Event mode comes first, and takes everything.  The disciplines below are
+     * about turning keys into text, which is exactly what a compositor is not
+     * asking for. */
+    if (event_refs > 0) {
+        bool was_extended = extended;
+        extended = false;
+        handle_event(sc, was_extended);
+        return;
+    }
+
     if (extended) {
         extended = false;
 
@@ -216,6 +373,64 @@ static void keyboard_irq(regs_t *regs)
     }
 
     handle_char(c);
+}
+
+void keyboard_events_ref(void)
+{
+    if (event_refs++ == 0) {
+        /* Everything half-typed under the old discipline goes, exactly as a
+         * raw/canonical switch drops it: a line assembled for the console is
+         * not something to hand to a compositor. */
+        line_len   = 0;
+        ring_head  = ring_tail;
+        event_head = event_tail;
+
+        /* No key can be known to be held: they were pressed while nobody was
+         * watching for releases. */
+        shift_down = ctrl_down = alt_down = logo_down = false;
+    }
+}
+
+void keyboard_events_unref(void)
+{
+    if (event_refs > 0 && --event_refs == 0) {
+        event_head = event_tail;
+        line_len   = 0;
+        ring_head  = ring_tail;
+        shift_down = ctrl_down = alt_down = logo_down = false;
+    }
+}
+
+bool keyboard_events_active(void)
+{
+    return event_refs > 0;
+}
+
+bool keyboard_events_pending(void)
+{
+    return event_head != event_tail;
+}
+
+int keyboard_read_events(winput_t *out, int max)
+{
+    if (max <= 0)
+        return 0;
+
+    while (!keyboard_events_pending()) {
+        sched_block(WAIT_INPUT);
+
+        /* A process asked to stop while waiting for a key would otherwise wait
+         * for one that is never going to come. */
+        if (proc_should_exit())
+            return 0;
+    }
+
+    int n = 0;
+    while (n < max && keyboard_events_pending()) {
+        out[n++]   = *(const winput_t *)&event_ring[event_tail];
+        event_tail = (event_tail + 1) % EVENT_RING;
+    }
+    return n;
 }
 
 void keyboard_set_raw(bool raw)
