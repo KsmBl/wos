@@ -1,73 +1,35 @@
-/* waylandd -- the Wayland display server, as far as it goes.
+/* waylandd -- a Wayland display server with nothing on the screen.
  *
- * It owns the socket clients connect to, speaks the Wayland wire format, and
- * implements wl_display: the one object that exists before a client has asked
- * for anything.  A client can connect, ask for the registry, ask for a
- * roundtrip, and be answered correctly.
+ * This is not the compositor.  `sway` is the compositor: it owns the display,
+ * tiles windows and runs programs.  This is the smallest server that is still
+ * a real one -- it answers on a socket, speaks the protocol through the same
+ * library sway does, and advertises a wl_compositor that hands out surfaces
+ * which are never drawn.
  *
- * What it does not have yet is anything to advertise.  A compositor's registry
- * lists wl_compositor, wl_shm, wl_seat, xdg_wm_base and the rest, and every one
- * of those needs a piece that WOS has not got: shared memory for buffers, a
- * surface to composite into the framebuffer, a keymap.  So the registry is
- * announced and comes back empty, which is a true statement about this machine
- * rather than a promise it cannot keep.  A client that binds anything is told
- * so through wl_display.error, which is what the protocol says to do.
+ * It is worth having for two reasons.  It is what a client is tested against
+ * when the question is whether the *client* is right, with no screen and no
+ * window management in the way.  And it is the reference for what the protocol
+ * library alone gives you: everything below is wl_display, wl_registry and
+ * wl_compositor, and none of it is written here -- the library implements the
+ * first two, and the third is thirty lines.
  *
- * The wire format is the real one, so what is here is compatible rather than
- * merely similar:
+ * Run it on an address of its own, so it does not fight the compositor for the
+ * default one:
  *
- *     uint32  object id
- *     uint32  (size << 16) | opcode        size counts this header too
- *     ...     arguments, each padded to four bytes
- *
- * Run through the service manager: `systemctl start wayland`.  It logs to a
- * file rather than to the console, because a service has no terminal to be
- * rude to.
+ *     waylandd /ramdisk/wayland-test
+ *     wlprobe  /ramdisk/wayland-test
  */
 
 #include <wkernel.h>
+#include <wayland-server.h>
 #include <stdarg.h>
 
-#define SOCKET_PATH "/ramdisk/wayland-0"
-#define LOG_PATH    "/ramdisk/wayland.log"
+#define DEFAULT_DISPLAY "wayland-0"
+#define LOG_PATH        "/ramdisk/waylandd.log"
 
-#define MAX_CLIENTS 8
-#define BUF_SIZE    4096
+static int log_fd = -1;
 
-/* The one object every connection starts with. */
-#define WL_DISPLAY_ID 1
-
-/* wl_display requests, and its events. */
-#define WL_DISPLAY_SYNC         0
-#define WL_DISPLAY_GET_REGISTRY 1
-#define WL_DISPLAY_ERROR_EVENT  0
-#define WL_DISPLAY_DELETE_ID    1
-
-/* wl_display error codes, from the protocol. */
-#define WL_DISPLAY_ERROR_INVALID_OBJECT 0
-#define WL_DISPLAY_ERROR_INVALID_METHOD 1
-
-/* wl_registry's one request, and wl_callback's one event. */
-#define WL_REGISTRY_BIND   0
-#define WL_CALLBACK_DONE   0
-
-struct client {
-    int      fd;
-    int      in_use;
-    uint32_t registry;               /* the id it asked for, or 0 */
-    uint8_t  buf[BUF_SIZE];
-    uint32_t have;                   /* bytes buffered            */
-};
-
-static struct client clients[MAX_CLIENTS];
-static int           log_fd = -1;
-
-/* ------------------------------------------------------------------ *
- *  Logging
- * ------------------------------------------------------------------ */
-
-static void logf(const char *fmt, ...)
-    __attribute__((format(printf, 1, 2)));
+static void logf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 static void logf(const char *fmt, ...)
 {
@@ -91,277 +53,176 @@ static void logf(const char *fmt, ...)
 }
 
 /* ------------------------------------------------------------------ *
- *  The wire format
+ *  wl_surface -- accepted, remembered, never drawn
  * ------------------------------------------------------------------ */
 
-static uint32_t get32(const uint8_t *p)
+static void surface_destroy(struct wl_client *c, struct wl_resource *r)
 {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    wl_resource_destroy(r);
 }
 
-static void put32(uint8_t *p, uint32_t v)
+static void surface_attach(struct wl_client *c, struct wl_resource *r,
+                           struct wl_resource *buffer, int32_t x, int32_t y)
 {
-    p[0] = (uint8_t)(v);
-    p[1] = (uint8_t)(v >> 8);
-    p[2] = (uint8_t)(v >> 16);
-    p[3] = (uint8_t)(v >> 24);
+    logf("  surface %u attached buffer %u at %d,%d", wl_resource_get_id(r),
+         buffer ? wl_resource_get_id(buffer) : 0, x, y);
 }
 
-/* Build a message header and send it with `len` bytes of arguments already in
- * `args`.  Every message is a whole number of 32-bit words. */
-static void send_message(struct client *c, uint32_t object, uint32_t opcode,
-                         const uint8_t *args, uint32_t len)
+static void surface_nothing(struct wl_client *c, struct wl_resource *r)
 {
-    uint8_t  out[256];
-    uint32_t size = 8 + len;
+}
 
-    if (size > sizeof(out))
+static void surface_rect(struct wl_client *c, struct wl_resource *r,
+                         int32_t x, int32_t y, int32_t w, int32_t h)
+{
+}
+
+static void surface_frame(struct wl_client *c, struct wl_resource *r,
+                          uint32_t id)
+{
+    /* A frame callback asks to be told when to draw the next one.  With no
+     * screen there is no next frame to wait for, so it fires at once -- which
+     * is a truthful answer, and keeps a client that draws in a frame callback
+     * from stopping after the first one. */
+    struct wl_resource *cb = wl_resource_create(c, &wl_callback_interface, 1, id);
+    if (!cb)
         return;
 
-    put32(out, object);
-    put32(out + 4, (size << 16) | (opcode & 0xFFFF));
-    if (len)
-        memcpy(out + 8, args, len);
-
-    wmsg_t msg = { out, size, 0, 0 };
-    wsend(c->fd, &msg);
+    wl_resource_post_event(cb, WL_CALLBACK_DONE, wticks());
+    wl_resource_destroy(cb);
 }
 
-/* wl_display.error: the object it was about, a code, and a message.  A string
- * on the wire is its length including the terminator, then the bytes, padded
- * out to a multiple of four. */
-static void send_error(struct client *c, uint32_t object, uint32_t code,
-                       const char *text)
+static void surface_region(struct wl_client *c, struct wl_resource *r,
+                           struct wl_resource *region)
 {
-    uint8_t  args[128];
-    uint32_t at  = 0;
-    uint32_t len = (uint32_t)strlen(text) + 1;
-
-    if (8 + 4 + ((len + 3) & ~3u) > sizeof(args))
-        return;
-
-    put32(args + at, object); at += 4;
-    put32(args + at, code);   at += 4;
-    put32(args + at, len);    at += 4;
-
-    memcpy(args + at, text, len);
-    at += len;
-    while (at & 3)
-        args[at++] = 0;
-
-    send_message(c, WL_DISPLAY_ID, WL_DISPLAY_ERROR_EVENT, args, at);
 }
+
+static void surface_int(struct wl_client *c, struct wl_resource *r, int32_t v)
+{
+}
+
+/* In request order: that is how the dispatcher finds them. */
+static const struct {
+    void (*destroy)(struct wl_client *, struct wl_resource *);
+    void (*attach)(struct wl_client *, struct wl_resource *,
+                   struct wl_resource *, int32_t, int32_t);
+    void (*damage)(struct wl_client *, struct wl_resource *, int32_t, int32_t,
+                   int32_t, int32_t);
+    void (*frame)(struct wl_client *, struct wl_resource *, uint32_t);
+    void (*set_opaque_region)(struct wl_client *, struct wl_resource *,
+                              struct wl_resource *);
+    void (*set_input_region)(struct wl_client *, struct wl_resource *,
+                             struct wl_resource *);
+    void (*commit)(struct wl_client *, struct wl_resource *);
+    void (*set_buffer_transform)(struct wl_client *, struct wl_resource *,
+                                 int32_t);
+    void (*set_buffer_scale)(struct wl_client *, struct wl_resource *, int32_t);
+    void (*damage_buffer)(struct wl_client *, struct wl_resource *, int32_t,
+                          int32_t, int32_t, int32_t);
+} surface_implementation = {
+    surface_destroy, surface_attach, surface_rect, surface_frame,
+    surface_region, surface_region, surface_nothing, surface_int,
+    surface_int, surface_rect,
+};
 
 /* ------------------------------------------------------------------ *
- *  wl_display
+ *  wl_compositor
  * ------------------------------------------------------------------ */
 
-static void handle_sync(struct client *c, const uint8_t *args, uint32_t len)
+static void compositor_create_surface(struct wl_client *c,
+                                      struct wl_resource *r, uint32_t id)
 {
-    if (len < 4)
-        return;
-
-    uint32_t callback = get32(args);
-    uint8_t  done[4];
-
-    /* wl_callback.done carries the event serial; nothing here counts events
-     * yet, so it is zero -- which clients treat as an opaque value. */
-    put32(done, 0);
-    send_message(c, callback, WL_CALLBACK_DONE, done, 4);
-
-    /* The callback is used up.  Telling the client the id is free again is
-     * what lets it reuse the number, and libwayland asserts if we do not. */
-    uint8_t deleted[4];
-    put32(deleted, callback);
-    send_message(c, WL_DISPLAY_ID, WL_DISPLAY_DELETE_ID, deleted, 4);
-
-    logf("  sync -> callback %u done", callback);
-}
-
-static void handle_get_registry(struct client *c, const uint8_t *args,
-                                uint32_t len)
-{
-    if (len < 4)
-        return;
-
-    c->registry = get32(args);
-
-    /* Nothing to announce.  A compositor lists wl_compositor, wl_shm, wl_seat
-     * and the rest here; each one needs a piece this system has not built yet,
-     * and announcing an interface that cannot be bound would be worse than
-     * announcing none. */
-    logf("  get_registry -> %u (no globals to announce yet)", c->registry);
-}
-
-/* One complete message from a client. */
-static void dispatch(struct client *c, uint32_t object, uint32_t opcode,
-                     const uint8_t *args, uint32_t len)
-{
-    if (object == WL_DISPLAY_ID) {
-        switch (opcode) {
-        case WL_DISPLAY_SYNC:
-            handle_sync(c, args, len);
-            return;
-        case WL_DISPLAY_GET_REGISTRY:
-            handle_get_registry(c, args, len);
-            return;
-        default:
-            logf("  wl_display has no request %u", opcode);
-            send_error(c, object, WL_DISPLAY_ERROR_INVALID_METHOD,
-                       "wl_display has no such request");
-            return;
-        }
-    }
-
-    if (object == c->registry && opcode == WL_REGISTRY_BIND) {
-        logf("  bind refused: this display server advertises nothing yet");
-        send_error(c, object, WL_DISPLAY_ERROR_INVALID_OBJECT,
-                   "this display server advertises no globals yet");
+    struct wl_resource *s = wl_resource_create(c, &wl_surface_interface,
+                                               wl_resource_get_version(r), id);
+    if (!s) {
+        wl_resource_post_error(r, WL_DISPLAY_ERROR_INVALID_OBJECT,
+                               "id %u is already in use", id);
         return;
     }
 
-    logf("  request %u on unknown object %u", opcode, object);
-    send_error(c, object, WL_DISPLAY_ERROR_INVALID_OBJECT,
-               "no such object");
+    wl_resource_set_implementation(s, &surface_implementation, NULL, NULL);
+    logf("  created surface %u", id);
 }
 
-/* Take whole messages out of a client's buffer, leaving any partial one for
- * the next time round. */
-static void consume(struct client *c)
+static void compositor_create_region(struct wl_client *c,
+                                     struct wl_resource *r, uint32_t id)
 {
-    uint32_t at = 0;
+    struct wl_resource *reg = wl_resource_create(c, &wl_region_interface,
+                                                 wl_resource_get_version(r), id);
+    if (reg)
+        wl_resource_set_implementation(reg, NULL, NULL, NULL);
+}
 
-    while (c->have - at >= 8) {
-        const uint8_t *m = c->buf + at;
+static const struct {
+    void (*create_surface)(struct wl_client *, struct wl_resource *, uint32_t);
+    void (*create_region)(struct wl_client *, struct wl_resource *, uint32_t);
+} compositor_implementation = {
+    compositor_create_surface, compositor_create_region,
+};
 
-        uint32_t object = get32(m);
-        uint32_t word   = get32(m + 4);
-        uint32_t opcode = word & 0xFFFF;
-        uint32_t size   = word >> 16;
+static void compositor_bind(struct wl_client *client, void *data,
+                            uint32_t version, uint32_t id)
+{
+    struct wl_resource *r = wl_resource_create(client, &wl_compositor_interface,
+                                               (int)version, id);
+    if (!r)
+        return;
 
-        if (size < 8 || size > BUF_SIZE) {
-            logf("  malformed message (size %u); dropping the client", size);
-            wclose(c->fd);
-            c->in_use = 0;
-            return;
-        }
-        if (c->have - at < size)
-            break;                       /* the rest has not arrived */
-
-        dispatch(c, object, opcode, m + 8, size - 8);
-        at += size;
-    }
-
-    if (at && at < c->have)
-        memmove(c->buf, c->buf + at, c->have - at);
-    c->have -= at;
+    wl_resource_set_implementation(r, &compositor_implementation, NULL, NULL);
+    logf("  bound wl_compositor version %u as %u", version, id);
 }
 
 /* ------------------------------------------------------------------ *
  *  The server
  * ------------------------------------------------------------------ */
 
-static struct client *free_slot(void)
+static void client_arrived(struct wl_client *c, void *data)
 {
-    for (int i = 0; i < MAX_CLIENTS; i++)
-        if (!clients[i].in_use)
-            return &clients[i];
-    return NULL;
+    logf("client connected on descriptor %d", wl_client_get_fd(c));
 }
 
-static void accept_client(int listener)
+static void client_left(struct wl_client *c, void *data)
 {
-    int fd = waccept(listener);
-    if (fd < 0) {
-        logf("accept failed: %s", wstrerror(-fd));
-        return;
-    }
-
-    struct client *c = free_slot();
-    if (!c) {
-        logf("refusing a client: all %d slots are in use", MAX_CLIENTS);
-        wclose(fd);
-        return;
-    }
-
-    memset(c, 0, sizeof(*c));
-    c->fd     = fd;
-    c->in_use = 1;
-    logf("client connected on descriptor %d", fd);
-}
-
-static void read_client(struct client *c)
-{
-    if (c->have >= BUF_SIZE) {
-        logf("client %d sent more than a buffer without a message in it", c->fd);
-        wclose(c->fd);
-        c->in_use = 0;
-        return;
-    }
-
-    wmsg_t msg = { c->buf + c->have, BUF_SIZE - c->have, 0, 0 };
-    int    n   = wrecv(c->fd, &msg);
-
-    if (n <= 0) {
-        logf("client %d disconnected", c->fd);
-        wclose(c->fd);
-        c->in_use = 0;
-        return;
-    }
-
-    c->have += (uint32_t)n;
-    consume(c);
+    logf("client on descriptor %d disconnected", wl_client_get_fd(c));
 }
 
 int main(int argc, char **argv)
 {
-    const char *path = (argc > 1 && argv[1][0] == '/') ? argv[1] : SOCKET_PATH;
+    const char *name = (argc > 1) ? argv[1] : DEFAULT_DISPLAY;
 
     log_fd = wopen(LOG_PATH, W_O_WRONLY | W_O_CREAT | W_O_TRUNC);
 
-    int listener = wlisten(path);
-    if (listener < 0) {
-        logf("cannot listen on %s: %s", path, wstrerror(-listener));
-        wfprintf(W_STDERR, "waylandd: cannot listen on %s: %s\n", path,
-                 wstrerror(-listener));
+    struct wl_display *display = wl_display_create();
+    if (!display) {
+        wfprintf(W_STDERR, "waylandd: out of memory\n");
         return 1;
     }
 
-    logf("waylandd listening on %s", path);
+    int r = wl_display_add_socket(display, name);
+    if (r < 0) {
+        wfprintf(W_STDERR, "waylandd: cannot listen on %s: %s\n", name,
+                 wstrerror(-r));
+        if (-r == W_EEXIST)
+            wfprintf(W_STDERR, "waylandd: something is already the display "
+                               "server there -- `systemctl status sway`\n");
+        logf("cannot listen on %s: %s", name, wstrerror(-r));
+        return 1;
+    }
+
+    wl_display_set_client_callbacks(display, client_arrived, client_left, NULL);
+    wl_global_create(display, &wl_compositor_interface, 6, NULL, compositor_bind);
+
+    logf("waylandd listening on %s, advertising wl_compositor", name);
 
     for (;;) {
-        wpollfd_t watch[MAX_CLIENTS + 1];
-        int       n = 0;
+        wpollfd_t watch[W_POLL_MAX];
+        int       n = wl_display_poll_fds(display, watch, W_POLL_MAX);
 
-        watch[n].fd     = listener;
-        watch[n].events = W_POLLIN;
-        n++;
-
-        for (int i = 0; i < MAX_CLIENTS; i++)
-            if (clients[i].in_use) {
-                watch[n].fd     = clients[i].fd;
-                watch[n].events = W_POLLIN;
-                n++;
-            }
-
-        /* A timeout rather than an indefinite wait, so that a service asked to
-         * stop leaves within a second even with nothing connected. */
-        if (wpoll(watch, n, 1000) <= 0)
-            continue;
-
-        if (watch[0].revents & W_POLLIN)
-            accept_client(listener);
-
-        for (int i = 1; i < n; i++) {
-            if (!(watch[i].revents & (W_POLLIN | W_POLLHUP)))
-                continue;
-
-            for (int j = 0; j < MAX_CLIENTS; j++)
-                if (clients[j].in_use && clients[j].fd == watch[i].fd) {
-                    read_client(&clients[j]);
-                    break;
-                }
-        }
+        /* A timeout rather than an indefinite wait, so a service asked to stop
+         * leaves within a second even with nothing connected. */
+        if (wpoll(watch, n, 1000) > 0)
+            wl_display_handle(display, watch, n);
+        else
+            wl_display_flush_clients(display);
     }
 }

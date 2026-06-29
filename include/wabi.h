@@ -267,6 +267,17 @@ typedef struct {
  * for the same reason: it bounds the queue a peer can make you hold. */
 #define W_SEND_MAX_FDS 28
 
+/* How much a positive W_POLLOUT promises room for.
+ *
+ * "Writing would not block" is only true of a write small enough to fit in
+ * what is free, so the promise has to name a size.  A protocol writes whole
+ * messages: without a figure here, two programs that each poll before writing
+ * could still both block on each other, each having been told to go ahead.
+ *
+ * A writer that flushes no more than this after a positive poll cannot
+ * block. */
+#define W_SEND_CHUNK 1024
+
 /* One message: bytes, and the descriptors travelling with them.
  *
  * On wsend(), `fds` names `fd_count` open descriptors to pass; the receiver
@@ -286,7 +297,7 @@ typedef struct {
 
 /* What a descriptor is waited on for, and what happened. */
 #define W_POLLIN   0x0001   /* reading would not block                     */
-#define W_POLLOUT  0x0002   /* writing would not block                     */
+#define W_POLLOUT  0x0002   /* a write of up to W_SEND_CHUNK would not block */
 #define W_POLLHUP  0x0004   /* the other end has gone (always reported)    */
 #define W_POLLERR  0x0008   /* the descriptor is not one that can be waited
                              * on (always reported)                        */
