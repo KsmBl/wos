@@ -592,7 +592,8 @@ typedef struct {
 #define WSYS_DISPDROP   70
 #define WSYS_DISPBLIT   71
 #define WSYS_INPUTOPEN  72
-#define WSYS_MAX        73
+#define WSYS_REAP       73
+#define WSYS_MAX        74
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

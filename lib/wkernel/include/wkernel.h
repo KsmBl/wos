@@ -880,6 +880,24 @@ void wexit(int status) __attribute__((noreturn));
 int wgetpid(void);
 
 /**
+ * Reap a child that has already exited, without waiting for one that has not.
+ *
+ * wwait() blocks, which is right for a shell running a command and wrong for
+ * anything that has other work: a compositor that started a program on a
+ * keybinding cannot stop serving its clients until that program happens to
+ * finish. Without a call like this, every program it ever started would stay
+ * in the process table as a zombie.
+ *
+ * Call it whenever it is convenient -- there is no cost to calling it when
+ * nothing has exited.
+ *
+ * @param status Where to put the exit status, or NULL.
+ * @return The pid reaped, or `-W_ECHILD` when nothing has exited (which
+ *         includes having no children at all).
+ */
+int wreap(int *status);
+
+/**
  * Grow or shrink the process heap.
  *
  * This is the primitive malloc() is built on; most programs should use
@@ -1445,6 +1463,54 @@ void *realloc(void *ptr, wsize_t size);
 
 /** Release a block. Passing NULL does nothing. @param ptr Block to free. */
 void free(void *ptr);
+
+/* ==================================================================== *
+ *  Drawing text
+ *
+ *  A program that owns the framebuffer draws its own characters, and there is
+ *  no font on the screen to borrow -- the console's glyphs live in the kernel.
+ *  So the same font is here: the standard IBM VGA 8x16 set, which is what the
+ *  console draws, so a window and the console beneath it are set in one type.
+ * ==================================================================== */
+
+/** The whole font: 256 glyphs of 16 rows, one byte per row, high bit leftmost. */
+const unsigned char *wfont8x16(void);
+
+/** One glyph: 16 bytes, one per row. @param c The character. */
+const unsigned char *wglyph8x16(unsigned int c);
+
+/* ==================================================================== *
+ *  Keys
+ *
+ *  What xkbcommon answers on Linux, for a system that has not got it. The
+ *  codes are the evdev codes `wl_keyboard.key` carries and the names are the
+ *  X11 keysym names a sway configuration file is written in, so a binding
+ *  means here what it means there.
+ * ==================================================================== */
+
+/**
+ * The key code a name refers to, e.g. "Return" -> 28, "q" -> 16, "Left" -> 105.
+ * Case-insensitive. A single shifted character names the key that prints it,
+ * which is how `bindsym $mod+Shift+Q` finds the q key.
+ * @return The evdev code, or 0 if the name is not a key.
+ */
+uint32_t wkeycode_from_name(const char *name);
+
+/** What a key is called, or NULL if nothing here knows it. */
+const char *wkeyname(uint32_t keycode);
+
+/**
+ * The character a key produces with those modifiers held, or 0 for a key that
+ * prints nothing. Shift and Caps Lock behave as a keyboard does, and Ctrl
+ * turns a letter into its control code, so Ctrl+C arrives as 0x03.
+ * @param keycode An evdev key code.
+ * @param mods    `W_MOD_*` flags in force.
+ */
+uint32_t wkeychar(uint32_t keycode, uint32_t mods);
+
+/** The `W_MOD_*` bit a name refers to: "Shift", "Ctrl", "Alt", "Mod1",
+ *  "Mod4", "Super". @return The bit, or 0. */
+uint32_t wmodifier_from_name(const char *name);
 
 /* --- strings ------------------------------------------------------ */
 

@@ -409,47 +409,66 @@ bool proc_should_exit(void)
     return p && p->killed && !p->exited;
 }
 
+/* The body both waits share.  Reaping is the same work either way; the only
+ * difference is what happens when there is nothing to reap yet. */
+static int32_t reap_one(process_t *parent, int32_t pid, int32_t *status,
+                        bool *any_children)
+{
+    *any_children = false;
+
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        process_t *c = &processes[i];
+
+        if (!c->used || c->parent != parent)
+            continue;
+        if (pid > 0 && c->pid != pid)
+            continue;
+
+        *any_children = true;
+
+        if (!c->exited)
+            continue;
+
+        int32_t reaped = c->pid;
+        if (status)
+            *status = c->exit_status;
+
+        /* Now it is safe to tear down: the child is not running. */
+        if (c->thread) {
+            sched_remove(c->thread);
+            if (c->thread->kernel_stack)
+                kfree((void *)c->thread->kernel_stack);
+            c->thread->state = THREAD_UNUSED;
+            c->thread = NULL;
+        }
+        if (c->space) {
+            paging_free_addrspace(c->space);
+            c->space = NULL;
+        }
+        c->used = false;
+
+        return reaped;
+    }
+
+    return -W_ECHILD;
+}
+
+int32_t proc_reap(int32_t *status)
+{
+    bool any;
+    return reap_one(proc_current(), -1, status, &any);
+}
+
 int32_t proc_wait(int32_t pid, int32_t *status)
 {
     process_t *parent = proc_current();
 
     for (;;) {
-        bool any_children = false;
+        bool    any_children;
+        int32_t reaped = reap_one(parent, pid, status, &any_children);
 
-        for (int i = 0; i < MAX_PROCESSES; i++) {
-            process_t *c = &processes[i];
-
-            if (!c->used || c->parent != parent)
-                continue;
-            if (pid > 0 && c->pid != pid)
-                continue;
-
-            any_children = true;
-
-            if (!c->exited)
-                continue;
-
-            int32_t reaped = c->pid;
-            if (status)
-                *status = c->exit_status;
-
-            /* Now it is safe to tear down: the child is not running. */
-            if (c->thread) {
-                sched_remove(c->thread);
-                if (c->thread->kernel_stack)
-                    kfree((void *)c->thread->kernel_stack);
-                c->thread->state = THREAD_UNUSED;
-                c->thread = NULL;
-            }
-            if (c->space) {
-                paging_free_addrspace(c->space);
-                c->space = NULL;
-            }
-            c->used = false;
-
+        if (reaped >= 0)
             return reaped;
-        }
-
         if (!any_children)
             return -W_ECHILD;
 

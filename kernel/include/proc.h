@@ -152,6 +152,18 @@ void proc_exit(int32_t status) __attribute__((noreturn));
  * negative W_E* code. */
 int32_t proc_wait(int32_t pid, int32_t *status);
 
+/* Reap a child that has already exited, without waiting for one that has not.
+ *
+ * A program that spawns and then goes back to waiting on something else -- a
+ * compositor, which starts what a keybinding asks for and then returns to its
+ * event loop -- cannot call proc_wait(): it would stop serving everything else
+ * until that child happened to finish.  Without this, every program it started
+ * would stay in the process table as a zombie.
+ *
+ * Returns the pid reaped, or -W_ECHILD when no child has exited (which
+ * includes having no children at all). */
+int32_t proc_reap(int32_t *status);
+
 /* Ask a process to stop, from outside it.
  *
  * There is no signal mechanism here and no way to unwind another thread's

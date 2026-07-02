@@ -13,18 +13,19 @@
  * wl_compositor, and none of it is written here -- the library implements the
  * first two, and the third is thirty lines.
  *
- * Run it on an address of its own, so it does not fight the compositor for the
- * default one:
+ * It answers on wayland-1, not wayland-0.  The default display belongs to the
+ * compositor, and two servers cannot both have a name; a second display server
+ * being wayland-1 is the convention everywhere else and works here:
  *
- *     waylandd /ramdisk/wayland-test
- *     wlprobe  /ramdisk/wayland-test
+ *     wlprobe wayland-1        this one
+ *     wlprobe                  whatever is the actual display server
  */
 
 #include <wkernel.h>
 #include <wayland-server.h>
 #include <stdarg.h>
 
-#define DEFAULT_DISPLAY "wayland-0"
+#define DEFAULT_DISPLAY "wayland-1"
 #define LOG_PATH        "/ramdisk/waylandd.log"
 
 static int log_fd = -1;

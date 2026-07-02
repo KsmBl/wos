@@ -1,0 +1,121 @@
+# Default configuration for sway on WOS.
+#
+# This is read when a user has no ~/.config/sway/config of their own.  Copy it
+# there and edit it -- `swaymsg reload` rereads it without restarting anything:
+#
+#     mkdir -p ~/.config/sway
+#     cp /etc/sway/config ~/.config/sway/config
+#
+# The language is sway's, so the sway documentation applies.  Every line is a
+# command, and the same commands work at runtime through swaymsg -- `bindsym
+# $mod+Return exec wlterm` binds a key to exactly what `swaymsg exec wlterm`
+# would do.
+
+### Variables
+
+# Your modifier key.  Mod1 is Alt and Mod4 is the Super key, which is what sway
+# uses by default and what this does: it leaves Alt to the programs.
+set $mod Mod4
+
+# The directions, so the movement bindings read like the keyboard looks.
+set $left  h
+set $down  j
+set $up    k
+set $right l
+
+# The terminal emulator this opens.
+set $term wlterm
+
+### Output
+
+# One screen, at whatever size the console was using.  Its resolution cannot be
+# changed from here -- the framebuffer is the one the kernel brought up -- so
+# the background is the only output setting that does anything.
+output * bg #101820 solid_color
+
+### Key bindings
+
+# Programs
+bindsym $mod+Return exec $term
+bindsym $mod+Shift+q kill
+bindsym $mod+Shift+c reload
+bindsym $mod+Shift+e exit
+
+# Moving the focus, in the vi directions and with the arrow keys
+bindsym $mod+$left  focus left
+bindsym $mod+$down  focus down
+bindsym $mod+$up    focus up
+bindsym $mod+$right focus right
+
+bindsym $mod+Left  focus left
+bindsym $mod+Down  focus down
+bindsym $mod+Up    focus up
+bindsym $mod+Right focus right
+
+# Moving the window itself
+bindsym $mod+Shift+$left  move left
+bindsym $mod+Shift+$down  move down
+bindsym $mod+Shift+$up    move up
+bindsym $mod+Shift+$right move right
+
+bindsym $mod+Shift+Left  move left
+bindsym $mod+Shift+Down  move down
+bindsym $mod+Shift+Up    move up
+bindsym $mod+Shift+Right move right
+
+# Where the next window goes: beside this one, or below it
+bindsym $mod+b splith
+bindsym $mod+v splitv
+
+# Rearrange the windows already here
+bindsym $mod+e layout toggle
+bindsym $mod+f fullscreen
+
+# Workspaces
+bindsym $mod+1 workspace 1
+bindsym $mod+2 workspace 2
+bindsym $mod+3 workspace 3
+bindsym $mod+4 workspace 4
+bindsym $mod+5 workspace 5
+bindsym $mod+6 workspace 6
+bindsym $mod+7 workspace 7
+bindsym $mod+8 workspace 8
+bindsym $mod+9 workspace 9
+bindsym $mod+0 workspace 10
+
+bindsym $mod+Shift+1 move container to workspace 1
+bindsym $mod+Shift+2 move container to workspace 2
+bindsym $mod+Shift+3 move container to workspace 3
+bindsym $mod+Shift+4 move container to workspace 4
+bindsym $mod+Shift+5 move container to workspace 5
+bindsym $mod+Shift+6 move container to workspace 6
+bindsym $mod+Shift+7 move container to workspace 7
+bindsym $mod+Shift+8 move container to workspace 8
+bindsym $mod+Shift+9 move container to workspace 9
+bindsym $mod+Shift+0 move container to workspace 10
+
+### Appearance
+
+# A title bar and a one pixel border.  `default_border pixel 1` drops the title
+# bar; `default_border none` drops both, which on a 640x400 screen is worth
+# considering.
+default_border normal
+
+# border  background  text     indicator  child_border
+client.focused   #4c7899 #285577 #ffffff #2e9ef4 #285577
+client.unfocused #333333 #222222 #888888 #292d2e #222222
+
+# Gaps between the windows, and around the edge of the screen.
+gaps inner 0
+gaps outer 0
+
+### Things this compositor has not got
+#
+# Each of these is read and ignored, and says so in /ramdisk/sway.log:
+#
+#   font              one 8x16 font is built in and cannot be changed
+#   floating_modifier nothing floats -- there is no pointer to drag it with
+#   input / seat      the keyboard is whatever the kernel found
+#   bar { ... }       the bar is drawn by the compositor, not by swaybar:
+#                     a bar as a client would need layer-shell, and a window
+#                     that tiles is not a bar

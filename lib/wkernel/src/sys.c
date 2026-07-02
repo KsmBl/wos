@@ -94,6 +94,11 @@ int wdisplayblit(const wblit_t *b)
     return (int)wsyscall1(WSYS_DISPBLIT, (long)b);
 }
 
+int wreap(int *status)
+{
+    return (int)wsyscall1(WSYS_REAP, (long)status);
+}
+
 int winputopen(void)
 {
     return (int)wsyscall0(WSYS_INPUTOPEN);

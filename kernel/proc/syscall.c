@@ -1083,6 +1083,17 @@ static int64_t sys_input_open(void)
     return vfs_input_open(p);
 }
 
+/* Reap a child that has already exited, without waiting for one that has not.
+ * A program that spawns and goes back to serving other things needs this: a
+ * blocking wait would stop it until that child happened to finish. */
+static int64_t sys_reap(uint64_t status)
+{
+    if (status && !user_range_ok((void *)status, sizeof(int32_t), true))
+        return -W_EFAULT;
+
+    return proc_reap((int32_t *)status);
+}
+
 static int64_t sys_shutdown(void)
 {
     /* There is no user or permission model in WOS, so any process may do
@@ -1173,6 +1184,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_DISPDROP:  r = sys_dispdrop(); break;
     case WSYS_DISPBLIT:  r = sys_dispblit(regs->rdi); break;
     case WSYS_INPUTOPEN: r = sys_input_open(); break;
+    case WSYS_REAP:      r = sys_reap(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }
