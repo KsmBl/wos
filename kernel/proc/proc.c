@@ -176,6 +176,24 @@ static uint64_t setup_user_stack(char *const argv[], uint64_t stack_top)
     return (uint64_t)stack;
 }
 
+/* Interrupts off, and a note of whether they were on, so a critical section
+ * can put things back the way it found them rather than assuming. */
+static bool interrupts_off(void)
+{
+    uint64_t flags;
+
+    __asm__ volatile("pushfq; popq %0" : "=r"(flags));
+    __asm__ volatile("cli");
+
+    return (flags & 0x200) != 0;
+}
+
+static void interrupts_restore(bool were_on)
+{
+    if (were_on)
+        __asm__ volatile("sti");
+}
+
 int32_t proc_spawn(const char *path, char *const argv[], process_t *parent)
 {
     return proc_spawn_io(path, argv, parent, NULL);
@@ -281,8 +299,18 @@ int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
     p->thread_count = 1;
 
     /* Switch into the new address space so the loader can write through
-     * ordinary user addresses; the kernel stays mapped throughout. */
-    addrspace_t *previous = paging_current();
+     * ordinary user addresses; the kernel stays mapped throughout.
+     *
+     * Interrupts off for the whole of the borrowing, and not as a nicety.  The
+     * scheduler restores the address space belonging to the thread it is
+     * switching to, and this thread's process is the *parent* -- so being
+     * preempted here comes back with the parent's tables installed, and the
+     * rest of the program is loaded into the parent's memory.  It is bounded
+     * work with nothing in it that blocks: a copy of an image already in
+     * memory, and a stack. */
+    bool         interrupts_were_on = interrupts_off();
+    addrspace_t *previous           = paging_current();
+
     paging_switch(p->space);
 
     uint64_t entry = 0;
@@ -305,6 +333,7 @@ int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
         user_rsp = setup_user_stack(argv, USER_STACK_TOP);
 
     paging_switch(previous);
+    interrupts_restore(interrupts_were_on);
     kfree(image);
 
     if (r < 0) {
@@ -320,20 +349,13 @@ int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
 
     /* Queueing the thread has to be atomic against the timer IRQ, which walks
      * the same run queue from schedule(). */
-    bool interrupts_were_on;
-    {
-        uint64_t flags;
-        __asm__ volatile("pushfq; popq %0" : "=r"(flags));
-        interrupts_were_on = (flags & 0x200) != 0;
-    }
-    __asm__ volatile("cli");
+    bool queued_with_interrupts_on = interrupts_off();
 
     thread_prime_stack(t, user_thread_start);
     t->state = THREAD_READY;
     sched_add(t);
 
-    if (interrupts_were_on)
-        __asm__ volatile("sti");
+    interrupts_restore(queued_with_interrupts_on);
 
     return p->pid;
 }
