@@ -90,11 +90,20 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   number nobody measured.
 - **Services**: programs the machine runs rather than a person does, described
   by unit files in `/services` and managed with `systemctl` — list, start,
-  stop, enable, disable. The first one is `wayland`.
-- **The beginning of Wayland**: local sockets that carry file descriptors, and
-  `waylandd`, a display server speaking the real wire format. A client can
-  complete a `wl_display` roundtrip today; the registry is empty until there is
-  something to put in it.
+  stop, enable, disable.
+- **A graphical session**: `sway`, a tiling Wayland compositor, with `wlterm`
+  as a terminal emulator in it and `swaymsg` to drive it. Type `sway` and
+  Super+Return opens a window; Super+Shift+E gives the console back with
+  everything printed behind it still there. Windows tile in i3's tree,
+  configuration is read from `~/.config/sway/config` in sway's own language,
+  and the IPC socket is i3's, so anything that speaks it speaks to this.
+- **Wayland, for real**: a libwayland-shaped protocol library in both halves,
+  with the interfaces transcribed from `wayland.xml` and `xdg-shell.xml`.
+  Clients are written the way Wayland clients are written —
+  `wl_display_connect()`, `wl_registry_add_listener()`,
+  `wl_display_roundtrip()` — over local sockets that carry file descriptors and
+  shared memory that lets a window's pixels reach the compositor without being
+  copied.
 - **Users and roles**: every process runs as a user, `root` may do anything,
   and everyone else writes only in their own `/home` directory unless a role
   says otherwise — `appeditor` for `/app`, `usereditor` for `/userconfig`,
@@ -115,8 +124,8 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   with parameters, return values, errors and examples
 - [`docs/whell.md`](docs/whell.md) — the shell and its builtins
 - [`docs/users.md`](docs/users.md) — users, roles, passwords and who may write where
-- [`docs/apps.md`](docs/apps.md) — the commands (`ls`, `free`, `rm`, ...) and
-  fish, vim, htop, fastfetch
+- [`docs/apps.md`](docs/apps.md) — the commands (`ls`, `free`, `rm`, ...),
+  fish, vim, htop, fastfetch, and the desktop: sway, wlterm, swaymsg
 - [`docs/console.md`](docs/console.md) — raw input mode and the ANSI escape
   sequences full-screen programs use
 - [`docs/architecture.md`](docs/architecture.md) — how the kernel fits together

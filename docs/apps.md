@@ -42,6 +42,16 @@ which is the price of having no shared libraries.
 | [`adduser`](#adduser) | create a user, asking for a password |
 | [`edituser`](#edituser) | add or remove roles |
 
+The graphical session has its own set:
+
+| Command | What it does |
+|---|---|
+| [`sway`](#sway) | the tiling Wayland compositor |
+| [`wlterm`](#wlterm) | a terminal emulator, as a Wayland client |
+| [`swaymsg`](#swaymsg) | ask sway something, or tell it to do something |
+| [`waylandd`](#waylandd) | a bare display server, for testing clients against |
+| [`wlprobe`](#wlprobe) | list what a display server advertises |
+
 Users, roles and what each may write are covered in
 [`docs/users.md`](users.md).
 
@@ -1082,7 +1092,7 @@ A service is described by a file in `/services`, named after the service:
 
 ```
 root@wos:/home/root# cat /services/wayland
-description=the Wayland display server
+description=the bare Wayland display server, on wayland-1
 exec=/app/waylandd/launch
 enabled=1
 ```
@@ -1112,67 +1122,284 @@ it is still reported running, because it is.
 
 ---
 
-# waylandd
+# The desktop
+
+WOS has a graphical session: a tiling Wayland compositor, a terminal emulator
+that runs in it, and the tools to look at both. Nothing here is a mock-up of
+the protocol — the bytes on the socket are the bytes libwayland sends, and the
+compositor and the client agree on them because neither of them knows the other
+is not the usual one.
+
+| Command | What it does |
+|---|---|
+| [`sway`](#sway) | the tiling Wayland compositor |
+| [`wlterm`](#wlterm) | a terminal emulator, as a Wayland client |
+| [`swaymsg`](#swaymsg) | ask sway something, or tell it to do something |
+| [`waylandd`](#waylandd) | a bare display server, for testing clients against |
+| [`wlprobe`](#wlprobe) | list what a display server advertises |
+
+## sway
 
 ```
-waylandd [socket-path]
+sway
 ```
 
-The Wayland display server. Normally started as a service rather than by hand:
+A tiling Wayland compositor. It takes the screen and the keyboard, draws
+windows on the framebuffer the text console was using, and gives both back when
+it exits.
 
 ```
-root@wos:/home/root# systemctl start wayland
-started wayland
-root@wos:/home/root# cat /ramdisk/wayland.log
-waylandd listening on /ramdisk/wayland-0
+root@wos:/home/root# sway
 ```
 
-It owns the socket clients connect to, speaks the **real Wayland wire format**,
-and implements `wl_display` — the one object that exists before a client has
-asked for anything. A client can connect, call `wl_display.get_registry`, call
-`wl_display.sync`, and be answered correctly, which is the opening of every
-Wayland session.
+The screen goes dark, a bar appears at the bottom, and the middle of the screen
+says which keys open a window. **Super+Return** opens a terminal.
+
+Or start it as a service, which is the same thing without a shell holding on to
+it:
 
 ```
-uint32  object id
-uint32  (size << 16) | opcode      size counts this header too
-...     arguments, each padded to four bytes
+root@wos:/home/root# systemctl start sway
+sway: running as pid 7, disabled at boot
 ```
 
-**What it has not got is anything to advertise.** A compositor's registry lists
-`wl_compositor`, `wl_shm`, `wl_seat`, `xdg_wm_base` and the rest, and every one
-of those needs a piece WOS has not built: shared memory for buffers, a surface
-composited into the framebuffer, a keymap. So the registry is created and comes
-back empty — a true statement about this machine rather than a promise it
-cannot keep — and a client that tries to bind anything is told so through
-`wl_display.error`, which is what the protocol says to do.
+It is disabled at boot on purpose. A compositor that starts before you log in
+takes the console away from you before you have used it, and on a machine where
+the console is also how you fix things that is the wrong default. `systemctl
+enable sway` changes it if you disagree.
 
-It logs to `/ramdisk/wayland.log`, because a service has no terminal to be rude
-to.
+### The keys
 
-**Exit status:** 1 if it cannot take the socket; otherwise it runs until it is
-stopped.
+These come from `/etc/sway/config` and can all be changed. `$mod` is Super.
+
+| Keys | What happens |
+|---|---|
+| `$mod+Return` | open a terminal |
+| `$mod+Shift+Q` | close the focused window |
+| `$mod+Shift+C` | reread the configuration file |
+| `$mod+Shift+E` | leave sway |
+| `$mod+H` `J` `K` `L` | move the focus left, down, up, right |
+| `$mod+Left` `Down` `Up` `Right` | the same, with the arrow keys |
+| `$mod+Shift+`*direction* | move the window itself |
+| `$mod+B` | the next window opens beside this one |
+| `$mod+V` | the next window opens below this one |
+| `$mod+E` | turn the current container the other way |
+| `$mod+F` | fullscreen the focused window |
+| `$mod+1` … `$mod+0` | go to a workspace |
+| `$mod+Shift+1` … | move the window to a workspace |
+
+Anything not bound goes to the focused window untouched, which is what `$mod`
+is for: it marks a keystroke as being for the compositor, so every other key
+belongs to the program.
+
+### The layout
+
+Windows never overlap. A workspace holds a tree of containers, each dividing
+its rectangle between its children, and every window's position falls out of
+one walk from the root — the same model i3 and sway use.
+
+A new window opens **beside the focused one, inside the focused one's
+container**. An empty workspace splits along its longest side, so on a screen
+wider than it is tall the second window appears to the right without anybody
+having asked for it.
+
+### The configuration file
+
+Read from `~/.config/sway/config`, and failing that `/etc/sway/config` — the
+same places, in the same order, as the real sway. It is written in sway's
+language, which is not a list of settings but a list of commands:
+
+```
+set $mod Mod4
+set $term wlterm
+
+output * bg #101820 solid_color
+
+bindsym $mod+Return exec $term
+bindsym $mod+Shift+q kill
+bindsym $mod+1 workspace 1
+
+default_border normal
+client.focused #4c7899 #285577 #ffffff #2e9ef4 #285577
+gaps inner 0
+```
+
+Those are the same commands `swaymsg` sends at runtime, which is why one parser
+reads both and why `reload` works at all: rereading the file is running it
+again.
+
+**A directive this compositor cannot honour is accepted and ignored, not
+refused** — a configuration written for the real sway should start this one.
+Each one that is ignored says so in `/ramdisk/sway.log`:
+
+```
+root@wos:/home/root# cat /ramdisk/sway.log
+sway on a 640x400 screen
+ipc: listening on /ramdisk/sway-ipc.sock
+font: this compositor draws one 8x16 font and cannot change it
+bar { ... }: read but not acted on
+read /home/root/.config/sway/config
+```
+
+### What it has not got
+
+Each of these is missing because something underneath it is, rather than
+because it was not got to:
+
+- **Floating windows.** There is no mouse driver, so there is no pointer to
+  drag a window with. `floating_modifier` is accepted and does nothing.
+- **swaybar as a separate process.** The bar is drawn by the compositor. A bar
+  as a client would need the layer-shell protocol — a surface that is not a
+  window and does not tile — and without it a bar would be a window taking up a
+  tile, which is not a bar.
+- **XWayland.** There is no X server to run.
+- **An XKB keymap.** `wl_keyboard.keymap` is sent with format `no_keymap`,
+  honestly, and clients read the evdev key codes directly. `wkeychar()` in
+  wkernel is what a client uses instead; see
+  [`docs/wkernel-api.md`](wkernel-api.md).
+- **Several outputs.** There is one framebuffer, at whatever size the console
+  left it. `output * bg` works; nothing else about an output does.
+
+**Exit status:** 1 if it cannot take the screen, the keyboard or the socket;
+otherwise it runs until told to exit.
+
+## wlterm
+
+```
+wlterm [-e <program> [args...]]
+```
+
+A terminal emulator that is an ordinary Wayland client — it has no privileges
+and no special arrangement with the compositor. It asks for a surface, is told
+how big it is, draws into shared memory and hands over the descriptor.
+
+With no arguments it runs your login shell, so a window opens the same thing a
+console login would. `-e` runs something else:
+
+```
+$mod+Return                      a shell
+wlterm -e vim                    an editor, in its own window
+```
+
+The terminal inside it is the same emulator `vim`'s `:term` and `split` use, so
+the ANSI sequences, the colours and the key encodings behave identically —
+what changed is only that the grid is drawn with pixels instead of being handed
+to the console.
+
+The window is redrawn from the grid every time the child prints. It uses two
+buffers and alternates between them, so the compositor is never reading a
+buffer the terminal is drawing into.
+
+**Exit status:** 0 when the shell exits or the window is closed.
+
+## swaymsg
+
+```
+swaymsg [-t <type>] [-r] [message]
+```
+
+Talk to the compositor over its IPC socket. With no `-t`, the message is a sway
+command:
+
+```
+root@wos:/home/root# swaymsg splitv
+root@wos:/home/root# swaymsg 'workspace 2'
+root@wos:/home/root# swaymsg exit
+```
+
+With `-t`, it asks a question:
+
+```
+root@wos:/home/root# swaymsg -t get_workspaces
+NUM  NAME     WINDOWS
+1    1        2        (focused)
+2    2        1
+
+root@wos:/home/root# swaymsg -t get_tree
+root root
+  output WOS-1
+    workspace 1 [splith]
+      whell
+      whell  *
+
+root@wos:/home/root# swaymsg -t get_version
+sway version 1.0 (sway for WOS)
+configuration: /home/root/.config/sway/config
+```
+
+Types: `run_command`, `get_workspaces`, `get_outputs`, `get_tree`, `get_marks`,
+`get_version`, `get_binding_modes`, `get_config`, `send_tick`, `subscribe`.
+`-r` prints the raw JSON instead of a summary.
+
+The protocol is i3's, unchanged — a magic string, a length, a type and a JSON
+payload — so the interesting property is not that this program works but that
+it is not the only thing that can. Anything that speaks i3's IPC speaks to this
+compositor.
+
+`subscribe` is accepted and no events are ever sent, because this compositor
+raises none.
+
+**Exit status:** 0, or 1 if sway is not running or the command failed.
+
+## waylandd
+
+```
+waylandd [display-name]
+```
+
+A display server with nothing on the screen. It is not the compositor — `sway`
+is — and it exists for two reasons: it is what you test a *client* against when
+you want to know whether the client is right, with no screen and no window
+management in the way; and it is the reference for what the protocol library
+alone gives you, since `wl_display` and `wl_registry` are implemented by the
+library and the `wl_compositor` it advertises is thirty lines.
+
+It answers on **wayland-1**, not wayland-0. The default display belongs to the
+compositor and two servers cannot share a name.
+
+```
+root@wos:/home/root# systemctl status wayland
+wayland -- the bare Wayland display server, on wayland-1
+   state: running as pid 4
+ at boot: enabled
+    runs: /app/waylandd/launch
+```
+
+It logs to `/ramdisk/waylandd.log`, because a service has no terminal to be
+rude to.
 
 ## wlprobe
 
 ```
-wlprobe [socket-path]
+wlprobe [display-name]
 ```
 
-A client, for checking that the server is up and speaking the protocol. It
-sends the bytes libwayland would send:
+An ordinary Wayland client that asks a display server what it can do. Connect,
+get the registry, add a listener, roundtrip — the opening of every Wayland
+client there has ever been — and then print what came back.
 
 ```
 root@wos:/home/root# wlprobe
-connected to /ramdisk/wayland-0
-sent wl_display.get_registry, asking for object 2
-sent wl_display.sync, asking for callback 3
-24 bytes back:
-  object 3  wl_callback.done  (0)
-  object 1  wl_display.delete_id  (3)
+connected to wayland-0
+6 globals:
+   1  wl_compositor    version 6   makes surfaces
+   2  wl_shm           version 1   shared memory buffers
+   3  xdg_wm_base      version 6   windows
+   4  wl_seat          version 9   keyboard and pointer
+   5  wl_output        version 4   a screen
+the server is answering
+
+root@wos:/home/root# wlprobe wayland-1
+connected to wayland-1
+1 global:
+   1  wl_compositor    version 6   makes surfaces
+the server is answering
 ```
 
-That exchange is a completed `wl_display_roundtrip`.
+It is the first thing to run when a client will not start: it says whether the
+display server is up and whether it advertises the thing the client needs.
+
+**Exit status:** 0, or 1 if it cannot connect or the connection breaks.
 
 ---
 

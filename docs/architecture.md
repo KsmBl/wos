@@ -72,6 +72,9 @@ kernel's own address space.
  0x40000000  ┬ user program                  ─ frames from anywhere
              │   .text, .rodata, .data, .bss
              │   heap, grown by wsbrk
+ 0x80000000  ┼ shared memory window          ─ frames shared with another
+             │   mapped by wshmmap             process
+ 0xB0000000  ┤
       ...    │
  0xBFFF0000  ┴ user stack (64 KiB), grows down
 ```
@@ -240,6 +243,98 @@ Each queued descriptor records the sender's byte position when it was queued,
 and is released to the receiver only once that byte has been read. That is what
 keeps a descriptor from arriving before the message that explains it, however
 small the pieces the receiver reads in.
+
+`W_POLLOUT` promises room for `W_SEND_CHUNK` bytes rather than for one. "A
+write would not block" is only true of a write that fits, and without a size in
+the promise two programs that each poll before writing can still deadlock on
+each other, both having been told to go ahead.
+
+## Shared memory
+
+A socket copies what it carries. That is right for messages and wrong for a
+window: 640x400 is a megabyte, and a client redrawing it sixty times a second
+would push sixty megabytes a second through a 4 KiB buffer for the compositor
+to copy a second time.
+
+`kernel/mm/shm.c` is the answer, and it is the reason descriptor passing was
+built first. An object is a fixed set of frames with a descriptor naming it;
+either side maps it, and the descriptor travels over the socket while the pages
+stay where they are. That is `wl_shm` exactly.
+
+Two things it has to be careful about:
+
+- **The frames are not the address space's to free.** `paging_unmap_keep()`
+  takes a page out without giving the frame back, and a process drops its
+  mappings in `proc_exit()` before its space is torn down — the teardown frees
+  every frame it finds mapped, and half of these belong to somebody else.
+- **The window is its own range.** A pool is mapped and unmapped in the middle
+  of a program's life while the heap only grows from one end, so they cannot
+  share a range; `wsbrk()` refuses to grow past `USER_MMAP_BASE`.
+
+An object outlives its makers: it goes when the last descriptor closes *and*
+the last mapping is dropped. A client may draw a buffer, hand it over and exit,
+leaving the compositor holding pixels that are still good.
+
+## The screen and the keyboard
+
+Both are single devices that the console has until something takes them, and
+both are lent to one process at a time — which is what a compositor needs and
+the reason either mechanism exists.
+
+`kernel/drivers/display.c` holds the whole of the screen's ownership model in
+one pid. While the screen is lent the console keeps running and stops drawing:
+it still tracks the cursor, still scrolls, still records every character, so
+when it takes the screen back it repaints and nothing printed behind the
+compositor was lost. Pixels go out through `wdisplayblit()` rather than by
+mapping the framebuffer into the process — the copy is the one that was going
+to happen anyway, and the rectangle gets clipped by somebody who knows where
+the aperture ends.
+
+The keyboard grows a third discipline above canonical and raw. Both of those
+turn keys into text, which throws away the two things a compositor needs: that
+a key was *released*, and which physical key it was regardless of what it
+prints. Event mode reports every transition with the Linux evdev code — which
+for the main block of a PS/2 keyboard is the AT set 1 scancode it was defined
+from, so no translation table is needed — and the modifier mask in XKB's bit
+positions. Those are the numbers `wl_keyboard.key` and `wl_keyboard.modifiers`
+carry, unchanged.
+
+Taking either affects every process on the machine, so both need root. Both
+come back when the holder exits, however it exits: a compositor that faults
+must not take the machine's only screen with it.
+
+## The display server
+
+Everything above the kernel is in user space, and none of it is privileged
+beyond taking the two devices.
+
+```
+   sway                       wlterm
+   ├─ the screen (root)       ├─ a wl_surface with an xdg_toplevel
+   ├─ the keyboard (root)     ├─ pixels in shared memory
+   ├─ wl_compositor, wl_shm,  └─ struct wterm: a shell on two pipes
+   │  xdg_wm_base, wl_seat,          │
+   │  wl_output                      │
+   └─ i3 IPC on a socket             ▼
+              ▲                   whell
+              │
+           swaymsg
+```
+
+`lib/wkernel` carries a libwayland-shaped protocol library — proxies and
+listeners on the client side, globals and resources on the server side, with
+one signature-driven marshaller underneath both. The interface tables are
+transcribed from `wayland.xml` and `xdg-shell.xml`, because an opcode is a
+position in a list and a signature is a message's wire format: a list in the
+wrong order produces a client that asks for a region when it meant a surface.
+
+The one thing upstream needs that is not available here is libffi, which
+libwayland uses to call a listener whose shape is known only to the client. It
+turns out not to be needed: every Wayland argument is a 32-bit integer or a
+pointer, x86-64 passes both identically, so a handler can be called through one
+function type wide enough for the longest event with the callee ignoring the
+slots it did not declare. A floating-point argument would break it, and the
+protocol has none — which is exactly why `wl_fixed_t` is an integer.
 
 ## Syscalls
 

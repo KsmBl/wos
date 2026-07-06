@@ -678,6 +678,27 @@ status of `-1`.
 Until a child is waited for it keeps its slot in the process table, so a
 long-running parent should reap the children it spawns.
 
+## `int wreap(int *status)`
+
+Reap a child that has *already* exited, without waiting for one that has not.
+
+`wwait()` blocks, which is right for a shell running a command and wrong for
+anything that has other work to do. A compositor that started a program on a
+keybinding cannot stop serving its clients until that program happens to
+finish — and without a call like this, every program it ever started would stay
+in the process table as a zombie.
+
+There is no cost to calling it when nothing has exited, so the usual shape is
+to call it once each time round an event loop.
+
+**Returns** the pid reaped, or `-W_ECHILD` when nothing has exited — which
+includes having no children at all.
+
+```c
+while (wreap(NULL) >= 0)
+    ;                       /* collect whatever finished */
+```
+
 ## `void wexit(int status)`
 
 End the calling process. Does not return. Descriptors are closed and all
@@ -1085,3 +1106,267 @@ works; Ctrl+C abandons the entry.
 Note that switching console modes discards anything typed but not yet
 submitted, so text typed ahead of the prompt is dropped rather than being
 captured into the password.
+
+
+---
+
+# Shared memory
+
+Pages two processes can both see. A socket copies what it carries, which is
+right for messages and wrong for a screenful of pixels: a 640x400 window is a
+megabyte, and a client redrawing it sixty times a second would push sixty
+megabytes a second through a 4 KiB buffer for the compositor to copy a second
+time.
+
+So the pixels do not move. One process asks for an object and gets a
+descriptor; either side maps it and gets a pointer; the descriptor travels over
+a socket like any other. That is exactly what `wl_shm` is, and it is why the
+socket had to be able to carry descriptors before any of this could work.
+
+The object lives until every descriptor naming it is closed **and** every
+process that mapped it has unmapped or exited — so a client may draw a buffer,
+hand it over and exit, leaving the compositor holding pixels that are still
+perfectly good.
+
+## `int wshmopen(unsigned int bytes)`
+
+Create an object of `bytes`, rounded up to a whole page and zeroed. The size is
+fixed at creation: there is no growing one, and a program that needs more room
+makes another.
+
+It cannot be read or written. `wread()` on one fails with `-W_EINVAL` rather
+than pretending to be a file — shared memory is reached by mapping it.
+
+**Returns** a descriptor, `-W_EINVAL` for zero or more than `W_SHM_MAX_BYTES`,
+`-W_ENOMEM`, or `-W_EMFILE`.
+
+## `void *wshmmap(int fd)`
+
+Map the whole object and return a pointer to it, readable and writable. Mapping
+the same descriptor twice gives two addresses for the same pages, which is
+harmless.
+
+**Returns** the pointer, or NULL if `fd` is not shared memory or there is no
+room to map it.
+
+## `int wshmunmap(void *addr)`
+
+Release a mapping. `addr` must be exactly what `wshmmap()` returned. The pages
+survive if anything else still names the object.
+
+**Returns** 0, or `-W_EINVAL`.
+
+## `int wshmsize(int fd)`
+
+**Returns** the size in bytes, or `-W_EBADF`.
+
+The receiver of a descriptor needs this. It was told a width and a height by
+whatever protocol handed the buffer over; this is how it checks that the memory
+it was actually given is big enough to hold them, rather than trusting the
+sender's arithmetic. The size is the one fact about a buffer a sender cannot
+misreport.
+
+```c
+int   fd   = wshmopen(640 * 400 * 4);
+void *pool = wshmmap(fd);
+
+draw_into(pool);
+
+int    fds[1] = { fd };
+wmsg_t msg    = { "here", 4, 1, fds };
+wsend(socket, &msg);        /* the descriptor travels; the pixels do not */
+```
+
+---
+
+# The screen
+
+For a program that draws pixels rather than characters. The text console has
+the framebuffer until something takes it.
+
+While it is lent out the console does not stop — it keeps tracking the cursor,
+keeps scrolling, keeps recording everything printed — it only stops drawing.
+When the screen comes back everything written meanwhile is repainted, so a
+program that printed from behind a compositor has not lost a line of it.
+
+## `int wdisplayinfo(wdisplay_t *out)`
+
+Describe the screen: `width`, `height`, `stride` in bytes, `bpp` (always 32),
+and `owner`, the pid holding it or 0 for the console.
+
+`present` is 0 on a machine whose console is still VGA text mode, where there
+is no framebuffer at all. A program that draws should check it and say so
+rather than blitting into nothing.
+
+**Returns** 0, or `-W_EFAULT`. Every field is zeroed first.
+
+## `int wdisplaygrab(void)`
+
+Take the screen from the console.
+
+There is one screen, so taking it affects every process on the machine. That
+makes it root's to do, in the same way setting the clock is.
+
+**Returns** 0, `-W_EPERM` without root, `-W_ENODEV` on a machine with no
+framebuffer, or `-W_EBUSY` if another process already has it.
+
+**The screen is released automatically when the holder exits, however it
+exits.** A compositor that faults does not take the machine's only output with
+it and leave it running with no way to say so.
+
+## `int wdisplaydrop(void)`
+
+Give it back. The console repaints. **Returns** 0.
+
+## `int wdisplayblit(const wblit_t *b)`
+
+Put a rectangle of pixels on the screen. Pixels are `0x00RRGGBB`, one per
+32-bit word, and `stride` is the source's row length **in pixels** — so a
+rectangle can be blitted straight out of a larger back buffer without being
+copied out of it first.
+
+The rectangle is clipped to the screen rather than trusted, so a coordinate off
+the edge draws less rather than writing somewhere it should not.
+
+**Returns** 0, `-W_EPERM` if this process does not hold the screen, `-W_EINVAL`
+for a rectangle wider than its own stride, or `-W_EFAULT`.
+
+```c
+wdisplay_t screen;
+wdisplayinfo(&screen);
+if (!screen.present || wdisplaygrab() < 0)
+    return 1;
+
+uint32_t *back = malloc(screen.width * screen.height * 4);
+/* ... compose the whole frame into `back` ... */
+
+wblit_t b = { back, screen.width, 0, 0,
+              (int)screen.width, (int)screen.height };
+wdisplayblit(&b);
+
+wdisplaydrop();
+```
+
+---
+
+# Raw input
+
+## `int winputopen(void)`
+
+Open the keyboard as a stream of key transitions.
+
+The console turns keystrokes into lines of text, which is what a shell wants
+and the opposite of what a compositor wants. A compositor has to know that a
+key was *released*, and which physical key it was regardless of the character
+it would print, so that it can tell one of its own bindings from something to
+forward to a window.
+
+Read the descriptor for whole `winput_t` records — a short read is never half
+an event — and wait on it with `wpoll()` alongside everything else.
+
+**While it is open the console reads nothing at all.** That is not a limitation
+being worked around: there is one keyboard, and the holder has it. Closing the
+descriptor, or exiting, gives it straight back.
+
+**Returns** a descriptor, `-W_EPERM` without root, or `-W_EBUSY` if another
+process already holds the keyboard.
+
+```c
+typedef struct {
+    uint32_t type;       /* W_INPUT_KEY                             */
+    uint32_t code;       /* evdev key code                          */
+    uint32_t state;      /* 1 pressed, 0 released                   */
+    uint32_t mods;       /* W_MOD_* held, as of after this event    */
+    uint32_t unicode;    /* the character it would make, or 0       */
+    uint32_t time_ms;    /* milliseconds since boot                 */
+} winput_t;
+```
+
+Key codes are the Linux **evdev** codes, which for the main block of a PS/2
+keyboard are the AT set 1 scancodes they were originally defined from. They are
+what `wl_keyboard.key` carries and what an XKB keymap is written against, so a
+client that knows Wayland already knows these numbers. The modifier mask is in
+XKB's own bit positions, so it is what `wl_keyboard.modifiers` carries without
+translation.
+
+`unicode` is a convenience, so a program that only wants text need not carry a
+keymap; a compositor that does carry one ignores it and uses `code`.
+
+---
+
+# Keys, and drawing text
+
+What xkbcommon and a font server answer on Linux, for a system that has
+neither.
+
+## `const unsigned char *wfont8x16(void)`
+## `const unsigned char *wglyph8x16(unsigned int c)`
+
+The console's font: 256 glyphs of 16 rows, one byte per row, most significant
+bit leftmost. `wglyph8x16(c)` is the 16 bytes for one character.
+
+A program that owns the framebuffer draws its own characters, and there is no
+font on the screen to borrow — the console's glyphs live in the kernel. Having
+the same font in both places is what makes a window and the console beneath it
+look like one machine.
+
+```c
+const unsigned char *glyph = wglyph8x16('A');
+for (int row = 0; row < 16; row++)
+    for (int col = 0; col < 8; col++)
+        if (glyph[row] & (0x80 >> col))
+            put_pixel(x + col, y + row, colour);
+```
+
+## `uint32_t wkeycode_from_name(const char *name)`
+
+The evdev code a name refers to: `"Return"` → 28, `"q"` → 16, `"Left"` → 105.
+Case-insensitive. The names are the X11 keysym names a sway configuration file
+is written in, so `bindsym $mod+Shift+Q` means here what it means there — a
+single shifted character names the key that prints it.
+
+**Returns** the code, or 0 if the name is not a key.
+
+## `const char *wkeyname(uint32_t keycode)`
+
+What a key is called, or NULL.
+
+## `uint32_t wkeychar(uint32_t keycode, uint32_t mods)`
+
+The character a key produces with those modifiers held, or 0 for a key that
+prints nothing. Shift and Caps Lock behave as a keyboard does, and Ctrl turns a
+letter into its control code, so Ctrl+C arrives as `0x03`.
+
+This is what a Wayland client on WOS uses in place of xkbcommon: the compositor
+sends `wl_keyboard.keymap` with format `no_keymap` and the evdev codes
+directly, and this turns one into a character.
+
+## `uint32_t wmodifier_from_name(const char *name)`
+
+The `W_MOD_*` bit a name refers to: `"Shift"`, `"Ctrl"`, `"Alt"`, `"Mod1"`,
+`"Mod4"`, `"Super"`. **Returns** the bit, or 0.
+
+---
+
+# Wayland
+
+WOS carries a libwayland-shaped protocol library, in both halves. It is not
+described here — it is large, and it is documented where it is declared:
+
+- `<wayland-client.h>` — `wl_display_connect()`, `wl_display_roundtrip()`,
+  `wl_registry_add_listener()`, `wl_proxy_marshal()` and the typed calls
+  generated from the protocol.
+- `<wayland-server.h>` — `wl_display_create()`, `wl_global_create()`,
+  `wl_resource_create()`, `wl_resource_post_event()`.
+- `<wayland-protocol.h>` — the interfaces, their opcodes and their enumerations,
+  transcribed from `wayland.xml` and `xdg-shell.xml`.
+
+The names, shapes and argument orders are libwayland's, so a client written for
+a Linux desktop is written against these. Two things upstream has that this has
+not: there is no `wl_event_queue`, because that exists to let several threads
+dispatch one connection and a WOS process has one thread; and `wl_fixed_t` has
+no floating-point conversions, because the kernel never turns the FPU on.
+Neither changes a byte on the wire.
+
+[`app/wlprobe`](../app/wlprobe/sourcecode/wlprobe.c) is the smallest complete
+client to read; [`app/wlterm`](../app/wlterm/sourcecode/wlterm.c) is a real one.

@@ -104,6 +104,19 @@ to change what runs at boot — `systemctl enable`, and editing the unit file �
 need the same permission. A role that guarded only one of them would not be
 guarding anything.
 
+### The screen and the keyboard have no role
+
+Taking the framebuffer or the keyboard — which is what a compositor like
+[`sway`](apps.md#sway) does — needs **root**, and there is no role that grants
+it.
+
+That is deliberate rather than an omission. A role is for something one user
+can be trusted with without being made root, and this is not that: there is one
+screen and one keyboard, and a program holding either has taken it from
+everybody at once. It can put anything it likes on the display, including a
+convincing login prompt, and it sees every key anybody types. Handing that out
+short of root would be handing out the machine.
+
 ## Passwords
 
 The user database lives under `/userconfig`:
