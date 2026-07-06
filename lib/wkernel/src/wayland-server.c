@@ -676,6 +676,18 @@ int wl_display_handle(struct wl_display *d, const wpollfd_t *fds, int count)
                 readable = 1;
             if (fds[j].revents & W_POLLHUP)
                 gone = 1;
+
+            /* Not a descriptor that can be waited on at all.  This should not
+             * happen, and it is checked because of what it costs when it does:
+             * a descriptor that is always ready and never consumed is a poll
+             * that returns immediately forever, which is a compositor at a
+             * hundred per cent of the processor doing nothing.  Dropping the
+             * client turns a hang into one lost window. */
+            if (fds[j].revents & W_POLLERR) {
+                gone     = 1;
+                readable = 0;
+                wl_connection_break(c->conn);
+            }
         }
 
         if (readable) {
