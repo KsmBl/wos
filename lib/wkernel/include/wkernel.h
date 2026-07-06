@@ -381,6 +381,153 @@ int wservicelist(wservice_t *out, int max);
 int wservicectl(int action, const char *name);
 
 /* ==================================================================== *
+ *  Shared memory
+ *
+ *  Pages two processes can both see.  A socket copies what it carries, which
+ *  is right for messages and wrong for a screenful of pixels; this is how the
+ *  pixels stay where they are and only the descriptor travels.
+ * ==================================================================== */
+
+/**
+ * Create a shared memory object of @p bytes and return a descriptor for it.
+ *
+ * The size is fixed at creation and rounded up to a whole page. The pages are
+ * zeroed, so nothing the previous owner of that memory left behind is visible.
+ *
+ * The descriptor is an ordinary one: it can be sent over a socket with
+ * wsend(), and the receiver ends up naming the same pages. It cannot be read
+ * or written -- shared memory is reached by mapping it, and wread() on one
+ * fails with `-W_EINVAL` rather than pretending to be a file.
+ *
+ * The object lives until every descriptor naming it is closed *and* every
+ * process that mapped it has unmapped or exited. A client may therefore create
+ * a buffer, hand it to a compositor and exit, leaving the compositor holding
+ * pixels that are still perfectly good.
+ *
+ * @param bytes How much to allocate; at most `W_SHM_MAX_BYTES`.
+ * @return A descriptor, `-W_EINVAL` for a size of zero or one too large,
+ *         `-W_ENOMEM` if the machine has not got the memory, or `-W_EMFILE`.
+ */
+int wshmopen(unsigned int bytes);
+
+/**
+ * Map a shared memory object into this process and return a pointer to it.
+ *
+ * The whole object is mapped, readable and writable. Mapping the same
+ * descriptor twice gives two addresses for the same pages, which is harmless.
+ *
+ * @param fd A descriptor from wshmopen(), or one that arrived over a socket.
+ * @return A pointer to the pages, or NULL if @p fd is not a shared memory
+ *         object or there is no room to map it.
+ */
+void *wshmmap(int fd);
+
+/**
+ * Release a mapping made by wshmmap(). The pages survive if anything else
+ * still names the object.
+ * @param addr Exactly what wshmmap() returned.
+ * @return 0, or `-W_EINVAL` if there is no mapping there.
+ */
+int wshmunmap(void *addr);
+
+/**
+ * How large a shared memory object is, in bytes -- what was asked for, rounded
+ * up to a whole page.
+ *
+ * The receiver of a descriptor needs this: it was told a width and a height by
+ * the protocol, and this is how it checks that the memory it was handed is
+ * actually big enough to hold them, rather than trusting the sender's
+ * arithmetic.
+ *
+ * @param fd A shared memory descriptor.
+ * @return The size in bytes, or `-W_EBADF`.
+ */
+int wshmsize(int fd);
+
+/* ==================================================================== *
+ *  The screen
+ *
+ *  For a program that draws pixels rather than characters.  The text console
+ *  has the framebuffer until something takes it; taking it is what a
+ *  compositor does, and giving it back is what leaves the machine usable
+ *  afterwards.
+ * ==================================================================== */
+
+/**
+ * Describe the screen: its size, its stride, and who has it.
+ *
+ * `present` is 0 on a machine whose console is still VGA text mode, where
+ * there is no framebuffer to draw on at all. A program that draws should check
+ * this and say so rather than blitting into nothing.
+ *
+ * @param out Filled in; zeroed first, so every field is defined.
+ * @return 0, or `-W_EFAULT`.
+ */
+int wdisplayinfo(wdisplay_t *out);
+
+/**
+ * Take the screen from the text console.
+ *
+ * The console does not stop -- it keeps tracking the cursor and recording
+ * everything printed -- it just stops drawing. When the screen is released
+ * everything written meanwhile is repainted, so a program that printed behind
+ * a compositor has not lost its output.
+ *
+ * There is one screen, so taking it affects every process on the machine. That
+ * makes it root's to do, like setting the clock.
+ *
+ * @return 0, `-W_EPERM` without root, `-W_ENODEV` on a machine with no
+ *         framebuffer, or `-W_EBUSY` if another process already has it.
+ *
+ * @note The screen is released automatically when the holder exits, however it
+ *       exits. A compositor that faults does not take the display with it.
+ */
+int wdisplaygrab(void);
+
+/** Give the screen back to the console, which repaints it. @return 0. */
+int wdisplaydrop(void);
+
+/**
+ * Put a rectangle of pixels on the screen.
+ *
+ * Pixels are `0x00RRGGBB`, one per 32-bit word. `stride` is the source's row
+ * length in pixels, so a rectangle can be blitted straight out of a larger
+ * back buffer without being copied out of it first.
+ *
+ * The rectangle is clipped to the screen rather than trusted, so a coordinate
+ * off the edge draws less rather than writing somewhere it should not.
+ *
+ * @param b Where the pixels are and where they go.
+ * @return 0, `-W_EPERM` if this process does not hold the screen, `-W_EINVAL`
+ *         for a rectangle wider than its own stride, or `-W_EFAULT`.
+ */
+int wdisplayblit(const wblit_t *b);
+
+/**
+ * Open the keyboard as a stream of key transitions.
+ *
+ * The console turns keystrokes into lines of text, which is what a shell wants
+ * and the opposite of what a compositor wants: a compositor has to know that a
+ * key was *released*, and which physical key it was regardless of the
+ * character it would print, so that it can tell one of its own bindings from
+ * something to forward to a window.
+ *
+ * Read the descriptor for whole `winput_t` records -- a short read is never
+ * half an event -- and wait on it with wpoll() alongside everything else.
+ *
+ * While it is open the console reads nothing at all. That is not a limitation
+ * being worked around: there is one keyboard, and the holder has it. Closing
+ * the descriptor, or exiting, gives it straight back.
+ *
+ * Key codes are the Linux evdev codes that `wl_keyboard.key` carries, so a
+ * program that knows Wayland already knows these numbers.
+ *
+ * @return A descriptor, `-W_EPERM` without root, or `-W_EBUSY` if another
+ *         process already holds the keyboard.
+ */
+int winputopen(void);
+
+/* ==================================================================== *
  *  Local sockets
  *
  *  A connection-oriented byte stream between two processes, named by a path,
@@ -731,6 +878,24 @@ void wexit(int status) __attribute__((noreturn));
  * @return The calling process's id. Never fails.
  */
 int wgetpid(void);
+
+/**
+ * Reap a child that has already exited, without waiting for one that has not.
+ *
+ * wwait() blocks, which is right for a shell running a command and wrong for
+ * anything that has other work: a compositor that started a program on a
+ * keybinding cannot stop serving its clients until that program happens to
+ * finish. Without a call like this, every program it ever started would stay
+ * in the process table as a zombie.
+ *
+ * Call it whenever it is convenient -- there is no cost to calling it when
+ * nothing has exited.
+ *
+ * @param status Where to put the exit status, or NULL.
+ * @return The pid reaped, or `-W_ECHILD` when nothing has exited (which
+ *         includes having no children at all).
+ */
+int wreap(int *status);
 
 /**
  * Grow or shrink the process heap.
@@ -1298,6 +1463,54 @@ void *realloc(void *ptr, wsize_t size);
 
 /** Release a block. Passing NULL does nothing. @param ptr Block to free. */
 void free(void *ptr);
+
+/* ==================================================================== *
+ *  Drawing text
+ *
+ *  A program that owns the framebuffer draws its own characters, and there is
+ *  no font on the screen to borrow -- the console's glyphs live in the kernel.
+ *  So the same font is here: the standard IBM VGA 8x16 set, which is what the
+ *  console draws, so a window and the console beneath it are set in one type.
+ * ==================================================================== */
+
+/** The whole font: 256 glyphs of 16 rows, one byte per row, high bit leftmost. */
+const unsigned char *wfont8x16(void);
+
+/** One glyph: 16 bytes, one per row. @param c The character. */
+const unsigned char *wglyph8x16(unsigned int c);
+
+/* ==================================================================== *
+ *  Keys
+ *
+ *  What xkbcommon answers on Linux, for a system that has not got it. The
+ *  codes are the evdev codes `wl_keyboard.key` carries and the names are the
+ *  X11 keysym names a sway configuration file is written in, so a binding
+ *  means here what it means there.
+ * ==================================================================== */
+
+/**
+ * The key code a name refers to, e.g. "Return" -> 28, "q" -> 16, "Left" -> 105.
+ * Case-insensitive. A single shifted character names the key that prints it,
+ * which is how `bindsym $mod+Shift+Q` finds the q key.
+ * @return The evdev code, or 0 if the name is not a key.
+ */
+uint32_t wkeycode_from_name(const char *name);
+
+/** What a key is called, or NULL if nothing here knows it. */
+const char *wkeyname(uint32_t keycode);
+
+/**
+ * The character a key produces with those modifiers held, or 0 for a key that
+ * prints nothing. Shift and Caps Lock behave as a keyboard does, and Ctrl
+ * turns a letter into its control code, so Ctrl+C arrives as 0x03.
+ * @param keycode An evdev key code.
+ * @param mods    `W_MOD_*` flags in force.
+ */
+uint32_t wkeychar(uint32_t keycode, uint32_t mods);
+
+/** The `W_MOD_*` bit a name refers to: "Shift", "Ctrl", "Alt", "Mod1",
+ *  "Mod4", "Super". @return The bit, or 0. */
+uint32_t wmodifier_from_name(const char *name);
 
 /* --- strings ------------------------------------------------------ */
 

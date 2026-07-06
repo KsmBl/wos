@@ -53,6 +53,57 @@ int wservicectl(int action, const char *name)
     return (int)wsyscall2(WSYS_SVCCTL, action, (long)name);
 }
 
+int wshmopen(unsigned int bytes)
+{
+    return (int)wsyscall1(WSYS_SHM_OPEN, (long)bytes);
+}
+
+void *wshmmap(int fd)
+{
+    long r = wsyscall1(WSYS_SHM_MAP, fd);
+    return r < 0 ? (void *)0 : (void *)r;
+}
+
+int wshmunmap(void *addr)
+{
+    return (int)wsyscall1(WSYS_SHM_UNMAP, (long)addr);
+}
+
+int wshmsize(int fd)
+{
+    return (int)wsyscall1(WSYS_SHM_SIZE, fd);
+}
+
+int wdisplayinfo(wdisplay_t *out)
+{
+    return (int)wsyscall1(WSYS_DISPINFO, (long)out);
+}
+
+int wdisplaygrab(void)
+{
+    return (int)wsyscall0(WSYS_DISPGRAB);
+}
+
+int wdisplaydrop(void)
+{
+    return (int)wsyscall0(WSYS_DISPDROP);
+}
+
+int wdisplayblit(const wblit_t *b)
+{
+    return (int)wsyscall1(WSYS_DISPBLIT, (long)b);
+}
+
+int wreap(int *status)
+{
+    return (int)wsyscall1(WSYS_REAP, (long)status);
+}
+
+int winputopen(void)
+{
+    return (int)wsyscall0(WSYS_INPUTOPEN);
+}
+
 int wlisten(const char *path)
 {
     return (int)wsyscall1(WSYS_LISTEN, (long)path);

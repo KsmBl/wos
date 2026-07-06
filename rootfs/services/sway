@@ -1,0 +1,3 @@
+description=sway, the tiling Wayland compositor
+exec=/app/sway/launch
+enabled=0

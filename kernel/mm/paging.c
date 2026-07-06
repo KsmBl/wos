@@ -197,7 +197,10 @@ bool paging_map_alloc(addrspace_t *as, uint64_t virt, uint64_t flags, bool zero)
     return true;
 }
 
-void paging_unmap(addrspace_t *as, uint64_t virt)
+/* Both unmaps, differing only in whether the frame goes back to the allocator.
+ * Whether it should is a question about who owns it, which the caller knows
+ * and the page tables do not record. */
+static void unmap(addrspace_t *as, uint64_t virt, bool free_frame)
 {
     uint64_t *pt = walk_to_pt(as, virt, false, 0);
     if (!pt)
@@ -209,7 +212,8 @@ void paging_unmap(addrspace_t *as, uint64_t virt)
     if (!(entry & PTE_PRESENT))
         return;
 
-    pmm_free_frame(FRAME_OF(entry));
+    if (free_frame)
+        pmm_free_frame(FRAME_OF(entry));
     pt[index] = 0;
 
     if (entry & PTE_USER)
@@ -217,6 +221,16 @@ void paging_unmap(addrspace_t *as, uint64_t virt)
 
     if (as == current_space)
         invlpg(virt);
+}
+
+void paging_unmap(addrspace_t *as, uint64_t virt)
+{
+    unmap(as, virt, true);
+}
+
+void paging_unmap_keep(addrspace_t *as, uint64_t virt)
+{
+    unmap(as, virt, false);
 }
 
 uint64_t paging_translate(addrspace_t *as, uint64_t virt)

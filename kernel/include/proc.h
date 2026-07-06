@@ -15,6 +15,7 @@
 #include "types.h"
 #include "paging.h"
 #include "vfs.h"
+#include "shm.h"
 #include "wabi.h"
 
 #define MAX_PROCESSES     32
@@ -97,6 +98,11 @@ typedef struct process {
     uint64_t     heap_start;           /* page-aligned, just past the image */
     uint64_t     heap_break;           /* current top of the heap           */
 
+    /* Shared memory this process has mapped.  Held here rather than with the
+     * objects because a mapping is a property of an address space, and because
+     * these have to come out before the address space is torn down. */
+    shm_mapping_t maps[SHM_MAX_MAPPINGS];
+
     struct process *parent;
     bool         exited;
     bool         killed;       /* asked to stop; unwinds at the next
@@ -145,6 +151,18 @@ void proc_exit(int32_t status) __attribute__((noreturn));
  * exit status in `status` if it is non-NULL.  Returns the reaped pid, or a
  * negative W_E* code. */
 int32_t proc_wait(int32_t pid, int32_t *status);
+
+/* Reap a child that has already exited, without waiting for one that has not.
+ *
+ * A program that spawns and then goes back to waiting on something else -- a
+ * compositor, which starts what a keybinding asks for and then returns to its
+ * event loop -- cannot call proc_wait(): it would stop serving everything else
+ * until that child happened to finish.  Without this, every program it started
+ * would stay in the process table as a zombie.
+ *
+ * Returns the pid reaped, or -W_ECHILD when no child has exited (which
+ * includes having no children at all). */
+int32_t proc_reap(int32_t *status);
 
 /* Ask a process to stop, from outside it.
  *

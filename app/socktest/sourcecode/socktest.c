@@ -8,12 +8,15 @@
  * It runs both halves.  With no arguments it is the server: it listens on an
  * address, starts a copy of itself as the client, waits with wpoll(), accepts,
  * and reads the message.  `socktest client` is the other half, which connects,
- * opens a file, and sends the message together with that file's descriptor.
+ * opens a file, makes a page of shared memory, and sends the message together
+ * with both descriptors.
  *
- * The interesting line of output is the last one from the server: it reads the
+ * The interesting lines are the last two from the server.  It reads the file
  * descriptor the client passed, in its own process, out of a file it never
- * opened.  That is the mechanism a display protocol hands over a buffer of
- * pixels with.
+ * opened.  Then it maps the shared memory and finds what the client wrote
+ * there -- not a copy of it, the same bytes in the same physical page.  Those
+ * two mechanisms together are how a display protocol hands over a buffer of
+ * pixels: the descriptor travels and the pixels do not.
  */
 
 #include <wkernel.h>
@@ -41,15 +44,37 @@ static int client(void)
     wwrite(file, "pixels would go here", 20);
     wlseek(file, 0, W_SEEK_SET);
 
-    int    fds[1] = { file };
-    wmsg_t msg    = { (void *)"take this file", 14, 1, fds };
+    /* And a page of shared memory with something recognisable in it.  This is
+     * a wl_shm pool in miniature: the client draws, and only the descriptor
+     * goes down the socket. */
+    int shm = wshmopen(4096);
+    if (shm < 0) {
+        wfprintf(W_STDERR, "client: shmopen: %s\n", wstrerror(-shm));
+        return 1;
+    }
+
+    char *pool = wshmmap(shm);
+    if (!pool) {
+        wfprintf(W_STDERR, "client: could not map the shared memory\n");
+        return 1;
+    }
+    strlcpy(pool, "these bytes were never copied", 4096);
+    wprintf("client: shared %d bytes, wrote into them at %p\n",
+            wshmsize(shm), (void *)pool);
+
+    int    fds[2] = { file, shm };
+    wmsg_t msg    = { (void *)"take these", 10, 2, fds };
 
     int n = wsend(fd, &msg);
-    wprintf("client: sent %d bytes and %d descriptor\n", n, msg.fd_count);
+    wprintf("client: sent %d bytes and %d descriptors\n", n, msg.fd_count);
 
-    /* The server has its own reference now, so closing this one is harmless
-     * -- which is the whole point of passing a descriptor rather than a name. */
+    /* The server has its own references now, so closing these is harmless --
+     * which is the whole point of passing a descriptor rather than a name.
+     * The shared page survives even this process exiting, for as long as the
+     * server still has it. */
     wclose(file);
+    wshmunmap(pool);
+    wclose(shm);
 
     char   reply[64];
     wmsg_t back = { reply, sizeof(reply) - 1, 0, 0 };
@@ -108,6 +133,24 @@ static int server(void)
         through[m > 0 ? m : 0] = '\0';
         wprintf("server: the passed descriptor reads \"%s\"\n", through);
         wclose(fds[0]);
+    }
+
+    if (msg.fd_count > 1) {
+        /* wshmsize() before trusting anything in it: the size is the one fact
+         * about a buffer that the sender cannot lie about, and it is what
+         * bounds every read of the pixels inside. */
+        int   size = wshmsize(fds[1]);
+        char *pool = wshmmap(fds[1]);
+
+        if (pool)
+            wprintf("server: the shared %d bytes at %p say \"%s\"\n",
+                    size, (void *)pool, pool);
+        else
+            wprintf("server: could not map the shared memory\n");
+
+        if (pool)
+            wshmunmap(pool);
+        wclose(fds[1]);
     }
 
     wmsg_t reply = { (void *)"thank you", 9, 0, 0 };

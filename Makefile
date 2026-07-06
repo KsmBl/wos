@@ -302,9 +302,13 @@ $(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(ROOTFS_SRC) $(APP_SRC) $(DISK_STAMP)
 	@# The mount point for the in-memory filesystem.  It is empty on the disk
 	@# and always will be: everything written to /ramdisk goes to memory.
 	@mkdir -p $(ROOTFS)/ramdisk
+	@# Stripped on the way in, the same way the kernel is.  Debug information
+	@# is for the build tree, where it is still there for gdb; on the disk it
+	@# is dead weight that the 268 KiB per-file ceiling eventually refuses --
+	@# sway is 88 KiB of program and 300 KiB with its symbols attached.
 	@for a in $(APPS); do \
 	    mkdir -p $(ROOTFS)/app/$$a/sourcecode; \
-	    cp $(BUILD)/app/$$a/launch $(ROOTFS)/app/$$a/launch; \
+	    objcopy --strip-debug $(BUILD)/app/$$a/launch $(ROOTFS)/app/$$a/launch; \
 	    cp app/$$a/sourcecode/* $(ROOTFS)/app/$$a/sourcecode/; \
 	done
 	@# /kernel gets the stripped binary and the source it came from. Stripped

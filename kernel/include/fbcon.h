@@ -55,4 +55,35 @@ int  fbcon_set_mode(int cols, int rows);
 /* Report the current grid size. */
 void fbcon_size(int *cols, int *rows);
 
+/* ------------------------------------------------------------------ *
+ *  Lending the screen out
+ *
+ *  A compositor and a text console cannot both own the framebuffer.  These are
+ *  how the console gives it up and takes it back; who is allowed to ask, and
+ *  who has it at the moment, is display.c's business rather than the console's.
+ * ------------------------------------------------------------------ */
+
+/* The framebuffer in pixels, and its stride in pixels (which is not always the
+ * width).  False when the console is not on a framebuffer at all, which is
+ * what a machine in VGA text mode reports. */
+bool fbcon_geometry(int *w, int *h, uint32_t *stride_px);
+
+/* Stop drawing to the glass, without stopping.  Everything written while
+ * suspended still goes into the backing store, so the console does not lose
+ * the output of a program that carried on printing behind the compositor. */
+void fbcon_suspend(void);
+
+/* Take the screen back and repaint every cell of it. */
+void fbcon_resume(void);
+
+bool fbcon_suspended(void);
+
+/* Copy a rectangle of 32-bit pixels onto the screen.  `src_stride_px` is the
+ * source's row length in pixels, which lets a caller blit part of a larger
+ * image.  The rectangle is clipped to the screen here, because it arrives from
+ * a process and a compositor's arithmetic mistake must not become a write past
+ * the aperture. */
+void fbcon_blit(const uint32_t *src, uint32_t src_stride_px,
+                int x, int y, int w, int h);
+
 #endif /* WOS_FBCON_H */

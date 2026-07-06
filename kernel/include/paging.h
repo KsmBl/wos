@@ -62,6 +62,20 @@
 #define USER_STACK_TOP   0xBFFF0000UL
 #define USER_STACK_SIZE  (64UL * 1024UL)
 
+/* Where shared memory is mapped.
+ *
+ * A window of its own rather than a slice of the heap: the heap is a run of
+ * addresses a program grows and shrinks from one end, and a shared object is
+ * mapped and unmapped in the middle of its life.  Putting the two in one range
+ * would mean a pool mapped at the wrong moment could not be released without
+ * leaving a hole the heap must then step over.
+ *
+ * It starts at the second gigabyte of user space, which caps the heap: sbrk
+ * refuses to grow past here, so the heap and the window cannot meet.  A
+ * gigabyte of heap is more than any WOS program has asked for. */
+#define USER_MMAP_BASE   0x80000000UL
+#define USER_MMAP_TOP    0xB0000000UL
+
 typedef struct addrspace {
     uint64_t *pml4;           /* identity mapped, so virtual == physical */
     uint64_t  user_frames;    /* frames mapped for user pages -- the RSS figure */
@@ -117,6 +131,14 @@ bool paging_ready(void);
 
 /* Unmap a page and release its frame. */
 void paging_unmap(addrspace_t *as, uint64_t virt);
+
+/* Unmap a page and leave its frame alone.
+ *
+ * For a frame this address space does not own: a shared memory object is
+ * mapped into several processes at once, and the frame belongs to the object
+ * rather than to any one of them.  Freeing it here would hand another
+ * process's live pixels back to the allocator. */
+void paging_unmap_keep(addrspace_t *as, uint64_t virt);
 
 /* Physical address backing `virt`, or 0 if it is not mapped. */
 uint64_t paging_translate(addrspace_t *as, uint64_t virt);

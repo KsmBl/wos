@@ -1,127 +1,141 @@
-/* wlprobe -- talk to the display server the way a Wayland client would.
+/* wlprobe -- ask a display server what it can do, and say so.
  *
- * It does what the opening moves of every Wayland client are: connect, ask for
- * the registry, ask for a roundtrip, and print what comes back.  That is
- * enough to tell whether the server is up and speaking the protocol, and it is
- * the piece a client library will grow out of.
+ * A real Wayland client, written the way every Wayland client is written:
  *
- * The wire format is the real one, so the bytes this sends are the bytes
- * libwayland would send:
+ *     connect, get the registry, add a listener, roundtrip
  *
- *     uint32  object id
- *     uint32  (size << 16) | opcode        size counts this header too
- *     ...     arguments, each padded to four bytes
+ * and then print what came back.  It binds nothing and draws nothing; it
+ * exists to answer the question "is the display server up, and what does it
+ * advertise", which is the first thing worth knowing when a client will not
+ * start.
  *
- * Object 1 is wl_display and exists before anything is asked for.  Ids are
- * chosen by the client, counting up from 2.
+ *     wlprobe                        the default display, wayland-0
+ *     wlprobe wayland-test           another display by name
+ *     wlprobe /ramdisk/wayland-0     or by path
  */
 
 #include <wkernel.h>
+#include <wayland-client.h>
 
-#define SOCKET_PATH "/ramdisk/wayland-0"
+#define MAX_GLOBALS 32
 
-#define WL_DISPLAY_ID           1
-#define WL_DISPLAY_SYNC         0
-#define WL_DISPLAY_GET_REGISTRY 1
+struct global {
+    uint32_t name;
+    uint32_t version;
+    char     interface[48];
+};
 
-/* The events this can be sent back, for naming them in the output. */
-#define WL_DISPLAY_ERROR     0
-#define WL_DISPLAY_DELETE_ID 1
+struct probe {
+    struct global globals[MAX_GLOBALS];
+    int           count;
+    int           lost;
+};
 
-static void put32(uint8_t *p, uint32_t v)
+static void handle_global(void *data, struct wl_registry *registry,
+                          uint32_t name, const char *interface,
+                          uint32_t version)
 {
-    p[0] = (uint8_t)(v);
-    p[1] = (uint8_t)(v >> 8);
-    p[2] = (uint8_t)(v >> 16);
-    p[3] = (uint8_t)(v >> 24);
+    struct probe *p = data;
+
+    if (p->count >= MAX_GLOBALS) {
+        p->lost++;
+        return;
+    }
+
+    p->globals[p->count].name    = name;
+    p->globals[p->count].version = version;
+    strlcpy(p->globals[p->count].interface, interface,
+            sizeof(p->globals[p->count].interface));
+    p->count++;
 }
 
-static uint32_t get32(const uint8_t *p)
+static void handle_global_remove(void *data, struct wl_registry *registry,
+                                 uint32_t name)
 {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    /* Globals can go as well as arrive -- an output being unplugged is the
+     * usual reason.  Nothing here holds one long enough to see it, but a
+     * listener that left this out would be an incomplete one. */
+    (void)data;
+    (void)name;
 }
 
-/* A request with one 32-bit argument, which is the shape of both of the ones
- * sent here: each asks the server to create an object under an id we choose. */
-static int request(int fd, uint32_t object, uint32_t opcode, uint32_t arg)
+static const struct wl_registry_listener registry_listener = {
+    handle_global,
+    handle_global_remove,
+};
+
+/* What each interface is for, so the output says something to somebody who has
+ * not memorised the protocol. */
+static const char *purpose(const char *interface)
 {
-    uint8_t message[12];
-
-    put32(message, object);
-    put32(message + 4, (12u << 16) | opcode);
-    put32(message + 8, arg);
-
-    wmsg_t msg = { message, sizeof(message), 0, 0 };
-    return wsend(fd, &msg);
-}
-
-static const char *event_name(uint32_t object, uint32_t opcode)
-{
-    if (object == WL_DISPLAY_ID)
-        return opcode == WL_DISPLAY_ERROR     ? "wl_display.error"
-             : opcode == WL_DISPLAY_DELETE_ID ? "wl_display.delete_id"
-                                              : "wl_display event";
-
-    /* Every other object here is one this program asked for, and the only
-     * event either of them sends is wl_callback.done. */
-    return opcode == 0 ? "wl_callback.done" : "event";
+    if (strcmp(interface, "wl_compositor") == 0)
+        return "makes surfaces";
+    if (strcmp(interface, "wl_shm") == 0)
+        return "shared memory buffers";
+    if (strcmp(interface, "wl_seat") == 0)
+        return "keyboard and pointer";
+    if (strcmp(interface, "wl_output") == 0)
+        return "a screen";
+    if (strcmp(interface, "xdg_wm_base") == 0)
+        return "windows";
+    return "";
 }
 
 int main(int argc, char **argv)
 {
-    const char *path = (argc > 1) ? argv[1] : SOCKET_PATH;
+    const char  *name = (argc > 1) ? argv[1] : NULL;
+    struct probe p    = { .count = 0, .lost = 0 };
 
-    int fd = wconnect(path);
-    if (fd < 0) {
-        wfprintf(W_STDERR, "wlprobe: cannot reach %s: %s\n", path,
-                 wstrerror(-fd));
-        if (-fd == W_ENOENT)
-            wfprintf(W_STDERR, "wlprobe: is the display server running? "
-                               "`systemctl status wayland`\n");
-        return 1;
-    }
-    wprintf("connected to %s\n", path);
-
-    request(fd, WL_DISPLAY_ID, WL_DISPLAY_GET_REGISTRY, 2);
-    wprintf("sent wl_display.get_registry, asking for object 2\n");
-
-    /* A roundtrip: the server answers this last, so its reply arriving means
-     * everything sent before it has been dealt with. */
-    request(fd, WL_DISPLAY_ID, WL_DISPLAY_SYNC, 3);
-    wprintf("sent wl_display.sync, asking for callback 3\n");
-
-    uint8_t buf[512];
-    wmsg_t  in = { buf, sizeof(buf), 0, 0 };
-
-    int n = wrecv(fd, &in);
-    if (n <= 0) {
-        wfprintf(W_STDERR, "wlprobe: the server said nothing back\n");
-        wclose(fd);
+    struct wl_display *display = wl_display_connect(name);
+    if (!display) {
+        wfprintf(W_STDERR, "wlprobe: cannot reach %s\n",
+                 name ? name : "wayland-0");
+        wfprintf(W_STDERR, "wlprobe: is a display server running? "
+                           "`systemctl status sway`\n");
         return 1;
     }
 
-    wprintf("%d bytes back:\n", n);
+    wprintf("connected to %s\n", name ? name : "wayland-0");
 
-    for (int at = 0; at + 8 <= n; ) {
-        uint32_t object = get32(buf + at);
-        uint32_t word   = get32(buf + at + 4);
-        uint32_t opcode = word & 0xFFFF;
-        uint32_t size   = word >> 16;
+    struct wl_registry *registry = wl_display_get_registry(display);
+    wl_registry_add_listener(registry, &registry_listener, &p);
 
-        if (size < 8 || at + (int)size > n) {
-            wprintf("  malformed message of %u bytes\n", size);
-            break;
+    /* The roundtrip is what makes the list complete: the server sends every
+     * global as soon as the registry exists, and the sync it answers last
+     * cannot come back before all of them have. */
+    if (wl_display_roundtrip(display) < 0) {
+        wfprintf(W_STDERR, "wlprobe: the connection broke (protocol error %d)\n",
+                 wl_display_get_error(display));
+        return 1;
+    }
+
+    if (p.count == 0) {
+        wprintf("the display server advertises nothing\n");
+    } else {
+        wprintf("%d global%s:\n", p.count, p.count == 1 ? "" : "s");
+
+        for (int i = 0; i < p.count; i++) {
+            const char *what = purpose(p.globals[i].interface);
+
+            wprintf("  %2u  %-16s version %u", p.globals[i].name,
+                    p.globals[i].interface, p.globals[i].version);
+            if (what[0])
+                wprintf("   %s", what);
+            wprintf("\n");
         }
-
-        wprintf("  object %u  %s", object, event_name(object, opcode));
-        if (size >= 12)
-            wprintf("  (%u)", get32(buf + at + 8));
-        wprintf("\n");
-
-        at += (int)size;
     }
 
-    wclose(fd);
+    if (p.lost)
+        wprintf("(%d more than this program has room for)\n", p.lost);
+
+    /* A second roundtrip, to show the connection is still good afterwards --
+     * which is the other half of "is the server healthy". */
+    if (wl_display_roundtrip(display) < 0) {
+        wfprintf(W_STDERR, "wlprobe: the server stopped answering\n");
+        return 1;
+    }
+    wprintf("the server is answering\n");
+
+    wl_display_disconnect(display);
     return 0;
 }

@@ -18,11 +18,14 @@ typedef enum {
     FD_DIR,
     FD_CONSOLE,
     FD_PIPE,
-    FD_SOCKET
+    FD_SOCKET,
+    FD_SHM,        /* a shared memory object: mapped, never read or written */
+    FD_INPUT       /* the keyboard as key transitions, for a compositor     */
 } fd_type_t;
 
 struct pipe;
 struct socket;
+struct shm;
 
 typedef struct {
     fd_type_t type;
@@ -33,6 +36,7 @@ typedef struct {
     struct pipe *pipe;     /* the pipe object, when type == FD_PIPE       */
     bool      write_end;   /* which end of that pipe this descriptor is   */
     struct socket *sock;   /* the endpoint, when type == FD_SOCKET        */
+    struct shm *shm;       /* the object, when type == FD_SHM             */
 } file_t;
 
 struct process;
@@ -83,6 +87,16 @@ int vfs_read(struct process *p, int fd, void *buf, uint32_t len);
 int vfs_write(struct process *p, int fd, const void *buf, uint32_t len);
 int vfs_lseek(struct process *p, int fd, int32_t offset, int whence);
 int vfs_stat(struct process *p, const char *path, wstat_t *out);
+
+/* Open the keyboard as a stream of key transitions: presses and releases with
+ * evdev key codes, rather than the lines or characters the console makes of
+ * them.  Reads come back as whole winput_t records, and the descriptor can be
+ * waited on with the rest of a compositor's descriptors.
+ *
+ * While it is open the console reads nothing, because there is one keyboard
+ * and the holder has it.  Returns a descriptor, or -W_EBUSY if another process
+ * already holds it. */
+int vfs_input_open(struct process *p);
 
 /* Local sockets, as descriptor numbers.  The address is a path, resolved the
  * way every other path is; no file is created there.  vfs_listen needs write

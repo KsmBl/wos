@@ -5,6 +5,7 @@
 #include "service.h"
 #include "elf.h"
 #include "vfs.h"
+#include "display.h"
 #include "pipe.h"
 #include "kheap.h"
 #include "pmm.h"
@@ -175,6 +176,24 @@ static uint64_t setup_user_stack(char *const argv[], uint64_t stack_top)
     return (uint64_t)stack;
 }
 
+/* Interrupts off, and a note of whether they were on, so a critical section
+ * can put things back the way it found them rather than assuming. */
+static bool interrupts_off(void)
+{
+    uint64_t flags;
+
+    __asm__ volatile("pushfq; popq %0" : "=r"(flags));
+    __asm__ volatile("cli");
+
+    return (flags & 0x200) != 0;
+}
+
+static void interrupts_restore(bool were_on)
+{
+    if (were_on)
+        __asm__ volatile("sti");
+}
+
 int32_t proc_spawn(const char *path, char *const argv[], process_t *parent)
 {
     return proc_spawn_io(path, argv, parent, NULL);
@@ -280,8 +299,18 @@ int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
     p->thread_count = 1;
 
     /* Switch into the new address space so the loader can write through
-     * ordinary user addresses; the kernel stays mapped throughout. */
-    addrspace_t *previous = paging_current();
+     * ordinary user addresses; the kernel stays mapped throughout.
+     *
+     * Interrupts off for the whole of the borrowing, and not as a nicety.  The
+     * scheduler restores the address space belonging to the thread it is
+     * switching to, and this thread's process is the *parent* -- so being
+     * preempted here comes back with the parent's tables installed, and the
+     * rest of the program is loaded into the parent's memory.  It is bounded
+     * work with nothing in it that blocks: a copy of an image already in
+     * memory, and a stack. */
+    bool         interrupts_were_on = interrupts_off();
+    addrspace_t *previous           = paging_current();
+
     paging_switch(p->space);
 
     uint64_t entry = 0;
@@ -304,6 +333,7 @@ int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
         user_rsp = setup_user_stack(argv, USER_STACK_TOP);
 
     paging_switch(previous);
+    interrupts_restore(interrupts_were_on);
     kfree(image);
 
     if (r < 0) {
@@ -319,20 +349,13 @@ int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
 
     /* Queueing the thread has to be atomic against the timer IRQ, which walks
      * the same run queue from schedule(). */
-    bool interrupts_were_on;
-    {
-        uint64_t flags;
-        __asm__ volatile("pushfq; popq %0" : "=r"(flags));
-        interrupts_were_on = (flags & 0x200) != 0;
-    }
-    __asm__ volatile("cli");
+    bool queued_with_interrupts_on = interrupts_off();
 
     thread_prime_stack(t, user_thread_start);
     t->state = THREAD_READY;
     sched_add(t);
 
-    if (interrupts_were_on)
-        __asm__ volatile("sti");
+    interrupts_restore(queued_with_interrupts_on);
 
     return p->pid;
 }
@@ -346,6 +369,15 @@ void proc_exit(int32_t status)
         panic("the kernel process tried to exit");
 
     vfs_close_all(p);
+
+    /* Before the address space goes.  Whoever reaps this process frees every
+     * frame it finds mapped, and a shared one is not this process's to give
+     * back -- the compositor may still be drawing from it. */
+    shm_unmap_all(p);
+
+    /* If this process had the screen, the console gets it back.  A compositor
+     * that faults must not take the machine's only output with it. */
+    display_release(p->pid);
 
     p->exited      = true;
     p->exit_status = status;
@@ -399,47 +431,66 @@ bool proc_should_exit(void)
     return p && p->killed && !p->exited;
 }
 
+/* The body both waits share.  Reaping is the same work either way; the only
+ * difference is what happens when there is nothing to reap yet. */
+static int32_t reap_one(process_t *parent, int32_t pid, int32_t *status,
+                        bool *any_children)
+{
+    *any_children = false;
+
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        process_t *c = &processes[i];
+
+        if (!c->used || c->parent != parent)
+            continue;
+        if (pid > 0 && c->pid != pid)
+            continue;
+
+        *any_children = true;
+
+        if (!c->exited)
+            continue;
+
+        int32_t reaped = c->pid;
+        if (status)
+            *status = c->exit_status;
+
+        /* Now it is safe to tear down: the child is not running. */
+        if (c->thread) {
+            sched_remove(c->thread);
+            if (c->thread->kernel_stack)
+                kfree((void *)c->thread->kernel_stack);
+            c->thread->state = THREAD_UNUSED;
+            c->thread = NULL;
+        }
+        if (c->space) {
+            paging_free_addrspace(c->space);
+            c->space = NULL;
+        }
+        c->used = false;
+
+        return reaped;
+    }
+
+    return -W_ECHILD;
+}
+
+int32_t proc_reap(int32_t *status)
+{
+    bool any;
+    return reap_one(proc_current(), -1, status, &any);
+}
+
 int32_t proc_wait(int32_t pid, int32_t *status)
 {
     process_t *parent = proc_current();
 
     for (;;) {
-        bool any_children = false;
+        bool    any_children;
+        int32_t reaped = reap_one(parent, pid, status, &any_children);
 
-        for (int i = 0; i < MAX_PROCESSES; i++) {
-            process_t *c = &processes[i];
-
-            if (!c->used || c->parent != parent)
-                continue;
-            if (pid > 0 && c->pid != pid)
-                continue;
-
-            any_children = true;
-
-            if (!c->exited)
-                continue;
-
-            int32_t reaped = c->pid;
-            if (status)
-                *status = c->exit_status;
-
-            /* Now it is safe to tear down: the child is not running. */
-            if (c->thread) {
-                sched_remove(c->thread);
-                if (c->thread->kernel_stack)
-                    kfree((void *)c->thread->kernel_stack);
-                c->thread->state = THREAD_UNUSED;
-                c->thread = NULL;
-            }
-            if (c->space) {
-                paging_free_addrspace(c->space);
-                c->space = NULL;
-            }
-            c->used = false;
-
+        if (reaped >= 0)
             return reaped;
-        }
-
         if (!any_children)
             return -W_ECHILD;
 
@@ -458,8 +509,9 @@ uint64_t proc_sbrk(int64_t increment)
     if (increment > 0) {
         uint64_t new_break = old + (uint64_t)increment;
 
-        /* Do not let the heap grow into the stack. */
-        if (new_break > USER_STACK_TOP - USER_STACK_SIZE)
+        /* Do not let the heap grow into the shared memory window, which is
+         * what stands between it and the stack. */
+        if (new_break > USER_MMAP_BASE)
             return (uint64_t)-1;
 
         for (uint64_t page = ALIGN_UP(old, PAGE_SIZE);

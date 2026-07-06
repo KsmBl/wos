@@ -35,6 +35,20 @@
 #define SOCK_CAP    4096
 #define SOCK_FD_CAP 28
 
+/* How much room a poll for W_POLLOUT promises.
+ *
+ * W_POLLOUT says a write will not block, and a write of one byte into a buffer
+ * with one byte free is the only write that claim holds for.  A protocol
+ * writes whole messages, so "writable" has to mean room for one -- otherwise
+ * two programs that each poll before writing can still both block on each
+ * other, each having been told it was safe to go ahead.
+ *
+ * So a socket reports itself writable only with this much space free, and a
+ * writer that flushes no more than this after a positive poll cannot block.
+ * The figure is in the ABI as W_SEND_CHUNK, because it is a promise made to
+ * applications rather than an internal one. */
+#define SOCK_WRITE_CHUNK W_SEND_CHUNK
+
 /* Connections a listener may have waiting to be accepted. */
 #define SOCK_BACKLOG 8
 

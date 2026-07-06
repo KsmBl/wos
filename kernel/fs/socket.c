@@ -339,7 +339,7 @@ bool socket_pollout(socket_t *s)
     if (peer_gone(s))
         return true;                 /* the write will fail, but not block */
 
-    return out_dir(s)->count < SOCK_CAP;
+    return out_dir(s)->count + SOCK_WRITE_CHUNK <= SOCK_CAP;
 }
 
 bool socket_hungup(socket_t *s)
