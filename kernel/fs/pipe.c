@@ -2,28 +2,33 @@
 
 #include "pipe.h"
 #include "sched.h"
+#include "kheap.h"
 #include "string.h"
 #include "wabi.h"
 
-/* A small fixed pool: a handful of terminals is the most this system will run
- * at once, and each needs two pipes. */
-#define MAX_PIPES 16
-
-static pipe_t pipes[MAX_PIPES];
-
+/* Pipes come from the heap, one at a time, the way socket endpoints do.
+ *
+ * They used to come from a fixed pool of sixteen, on the reasoning that a
+ * handful of terminals was the most this system would run at once.  A tiling
+ * compositor made that wrong in a way worth recording: every window running a
+ * program needs two pipes, so sixteen was a hard ceiling of eight windows --
+ * and the failure was a terminal that opened and then could not start a shell,
+ * which looks nothing like "the machine is out of pipes".
+ *
+ * A pipe is four kilobytes of buffer.  Sixteen of those sat in the kernel's
+ * BSS whether or not anything ever opened one; now they cost nothing until
+ * they exist, and the limit is the heap, which is a limit that says what it
+ * is. */
 pipe_t *pipe_create(void)
 {
-    for (int i = 0; i < MAX_PIPES; i++) {
-        if (!pipes[i].used) {
-            pipe_t *p = &pipes[i];
-            memset(p, 0, sizeof(*p));
-            p->used    = true;
-            p->readers = 1;
-            p->writers = 1;
-            return p;
-        }
-    }
-    return NULL;
+    pipe_t *p = kzalloc(sizeof(*p));
+    if (!p)
+        return NULL;
+
+    p->used    = true;
+    p->readers = 1;
+    p->writers = 1;
+    return p;
 }
 
 void pipe_ref(pipe_t *p, bool write_end)
@@ -51,8 +56,10 @@ void pipe_unref(pipe_t *p, bool write_end)
      * file, and vice versa. */
     sched_wake(WAIT_PIPE);
 
-    if (p->readers <= 0 && p->writers <= 0)
+    if (p->readers <= 0 && p->writers <= 0) {
         p->used = false;
+        kfree(p);
+    }
 }
 
 int pipe_read(pipe_t *p, void *buf, uint32_t len)

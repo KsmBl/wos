@@ -245,12 +245,19 @@ int wterm_start(struct wterm *t, const char *path, char *const argv[],
     t->pid = -1;
     term_reset_grid(t);
 
+    /* The reason is passed back rather than flattened into -1.  A window that
+     * opens and then cannot start a shell is a confusing thing to be told
+     * nothing about, and "out of pipes" and "no such program" want different
+     * responses from whoever reads it. */
     int in[2], out[2];
-    if (wpipe(in) < 0)
-        return -1;
-    if (wpipe(out) < 0) {
+    int r = wpipe(in);
+    if (r < 0)
+        return r;
+
+    r = wpipe(out);
+    if (r < 0) {
         wclose(in[0]); wclose(in[1]);
-        return -1;
+        return r;
     }
 
     wspawnio_t io = { in[0], out[1], rows, cols };
