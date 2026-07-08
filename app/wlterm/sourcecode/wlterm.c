@@ -540,8 +540,10 @@ static void start_shell(int argc, char **argv)
     if (cols < MIN_COLS) cols = MIN_COLS;
     if (rows < MIN_ROWS) rows = MIN_ROWS;
 
-    if (wterm_start(&app.term, shell, args, 1, 1, rows, cols) < 0) {
-        wfprintf(W_STDERR, "wlterm: cannot start %s\n", shell);
+    int r = wterm_start(&app.term, shell, args, 1, 1, rows, cols);
+    if (r < 0) {
+        wfprintf(W_STDERR, "wlterm: cannot start %s: %s\n", shell,
+                 wstrerror(-r));
         app.running = 0;
         return;
     }

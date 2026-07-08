@@ -122,14 +122,39 @@ static uint32_t packed_array_size(const struct wl_array *a)
     return 4 + (uint32_t)((a->size + 3) & ~(wsize_t)3);
 }
 
+/* Close the descriptors a message was carrying when the message is not going
+ * to be sent.
+ *
+ * Queueing takes ownership of every 'h' argument, and it has to do so whether
+ * it succeeds or not: a caller that had to work out which of the two happened
+ * before deciding whether to close its descriptor would get it wrong
+ * eventually, and a descriptor leaked that way is a number that stays in use
+ * forever. */
+static int give_up(const char *sig, const union wl_argument *args)
+{
+    int n = 0;
+
+    for (const char *s = sig; *s; s++) {
+        if (*s == '?')
+            continue;
+        if (*s == 'h')
+            wclose(args[n].h);
+        n++;
+    }
+
+    return -1;
+}
+
 int wl_connection_queue(struct wl_connection *c, uint32_t id, uint32_t opcode,
                         const struct wl_message *msg,
                         const union wl_argument *args)
 {
-    if (c->broken)
-        return 0;
+    const char *drop = signature_start(msg->signature);
 
-    const char *sig = signature_start(msg->signature);
+    if (c->broken)
+        return give_up(drop, args);
+
+    const char *sig = drop;
 
     /* Work out the size first: the header carries it, and it goes in front. */
     uint32_t size = 8;
@@ -154,10 +179,10 @@ int wl_connection_queue(struct wl_connection *c, uint32_t id, uint32_t opcode,
          * messages the peer has already made room for. */
         wl_connection_flush(c);
         if (size > WL_BUFFER_SIZE || c->out_len + size > WL_BUFFER_SIZE)
-            return -1;
+            return give_up(sig, args);
     }
     if (c->out_fd_count + fds > W_SEND_MAX_FDS)
-        return -1;
+        return give_up(sig, args);
 
     uint8_t *p = c->out + c->out_len;
 
@@ -260,7 +285,10 @@ int wl_connection_flush(struct wl_connection *c)
             return -1;
         }
 
-        /* The kernel took its own references, so these are ours to close. */
+        /* Sending a descriptor gives it away: the kernel took its own
+         * reference for the receiver, and the sender's copy is done with.
+         * Holding one back to send twice would close a number that something
+         * else has been given in the meantime. */
         for (int i = 0; i < c->out_fd_count; i++)
             wclose(c->out_fds[i]);
         c->out_fd_count = 0;

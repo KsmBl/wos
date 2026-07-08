@@ -54,8 +54,11 @@ struct wterm {
 };
 
 /* Start a child in a fresh terminal window at the given screen origin and
- * size.  argv[0] is the program name; `path` is what to execute.  Returns 0 or
- * a negative error. */
+ * size.  argv[0] is the program name; `path` is what to execute.
+ *
+ * Returns 0, or the negative error that stopped it -- -W_ENFILE when the
+ * system has no pipes left, -W_ENOENT for a program that is not there, and
+ * whatever else wspawn() reports. */
 int  wterm_start(struct wterm *t, const char *path, char *const argv[],
                  int oy, int ox, int rows, int cols);
 

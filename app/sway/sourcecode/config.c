@@ -558,15 +558,18 @@ static int block_depth;
 
 static void config_line(char *line)
 {
-    /* A comment runs to the end of the line, and an empty line is nothing. */
-    char *hash = strchr(line, '#');
-    if (hash)
-        *hash = '\0';
-
     char *at = line;
     while (*at == ' ' || *at == '\t')
         at++;
-    if (!*at)
+
+    /* A '#' begins a comment only at the start of a line.
+     *
+     * Anywhere else it is a colour: `client.focused #4c7899 #285577 #ffffff`
+     * is most of the appearance section, and treating the first '#' on the
+     * line as a comment would silently reduce that to `client.focused` and
+     * report it as an unknown command.  sway's own parser draws the line in
+     * the same place. */
+    if (!*at || *at == '#')
         return;
 
     if (block_depth > 0) {

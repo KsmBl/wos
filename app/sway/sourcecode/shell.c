@@ -773,14 +773,18 @@ static void keyboard_gone(struct wl_resource *r)
  * has to be something to send.  It is a page of shared memory with nothing in
  * it, and the format says so honestly: WOS has no XKB keymap to offer, and a
  * client here reads the evdev codes directly.  Sending a made-up keymap would
- * be worse than saying there is none. */
+ * be worse than saying there is none.
+ *
+ * A fresh one every time, and not as waste.  Sending a descriptor gives it
+ * away -- the connection closes it once it has gone -- so a cached one is
+ * closed after the first keyboard and its number is handed straight back to
+ * the next thing that asks: a client's socket, or a client's pool of pixels.
+ * The second keyboard would then "send the keymap" by sending somebody else's
+ * live descriptor, and close it.  A page is a small price for that not
+ * happening. */
 static int keymap_fd(void)
 {
-    static int fd = -1;
-
-    if (fd < 0)
-        fd = wshmopen(4096);
-    return fd;
+    return wshmopen(4096);
 }
 
 static void seat_get_keyboard(struct wl_client *c, struct wl_resource *r,
