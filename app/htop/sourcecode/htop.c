@@ -29,6 +29,26 @@ static wprocmem_t procs[MAX_PROCS];
 static int        proc_count;
 static int        selected;
 
+/* What each listed process has been doing with the processor, in tenths of a
+ * percent, lined up with procs[].
+ *
+ * A process reports the ticks it has run for since it started, so a load is
+ * the change in that over an interval -- which means keeping the previous
+ * total.  The history is keyed by pid rather than by row, because the rows are
+ * rebuilt on every refresh and a process moves up one whenever something above
+ * it exits: indexed by position, every load below a process that ended would
+ * be attributed to its neighbour for one refresh. */
+static unsigned cpu_tenths[MAX_PROCS];
+
+static struct {
+    int      pid;
+    unsigned ticks;      /* its total when it was last sampled */
+    unsigned tenths;     /* what that worked out to            */
+} history[MAX_PROCS];
+
+static int      history_count;
+static unsigned last_sample;      /* wticks() at that sample */
+
 /* The console size, read at startup so htop fills whatever resolution is set
  * rather than assuming 80x25. */
 static int cols = 80, rows = 25;
@@ -308,15 +328,15 @@ static int draw_summary(int row, wmeminfo_t *mem)
 
 /* The heading and every row are this wide; the rest of the line is padding, so
  * that the reverse-video bar reaches the edge of the screen. */
-#define TABLE_WIDTH 71
+#define TABLE_WIDTH 77
 
 static void draw_process_table(int row, int max_rows)
 {
     wgotoxy(row, 1);
     wcolor(W_BLACK, W_GREEN);
-    wprintf("  %5s %-12s %9s %8s %8s %8s %8s %4s",
-            "PID", "COMMAND", "RESIDENT", "CODE", "DATA", "HEAP", "STACK",
-            "THR");
+    wprintf("  %5s %-12s %5s %9s %8s %8s %8s %8s %4s",
+            "PID", "COMMAND", "CPU%", "RESIDENT", "CODE", "DATA", "HEAP",
+            "STACK", "THR");
     for (int i = 0; i < cols - TABLE_WIDTH; i++)
         wprintf(" ");
     wcolor_reset();
@@ -327,9 +347,17 @@ static void draw_process_table(int row, int max_rows)
         if (i == selected)
             wcolor(W_BLACK, W_CYAN);
 
-        wprintf("  %5d %-12s %9s %8s %8s %8s %8s %4d",
+        /* Built rather than printed as two fields, so that the number lands
+         * in the column as one thing: "%5u.%u" would right-align the whole
+         * part and leave the decimal hanging past the heading. */
+        char load[8];
+        wsnprintf(load, sizeof(load), "%u.%u",
+                  cpu_tenths[i] / 10, cpu_tenths[i] % 10);
+
+        wprintf("  %5d %-12s %5s %9s %8s %8s %8s %8s %4d",
                 procs[i].pid,
                 procs[i].name[0] ? procs[i].name : "?",
+                load,
                 whuman(procs[i].resident_bytes),
                 whuman(procs[i].code_bytes),
                 whuman(procs[i].data_bytes),
@@ -402,6 +430,63 @@ static void sample_cores(void)
     }
 }
 
+/* Take a new process list and work out what each one has done with the
+ * processor since the last list.
+ *
+ * The figure is a share of one core, as htop's is: a process that had the
+ * processor to itself for the whole interval reads 100%, whatever the machine
+ * has in the way of other cores. */
+static void sample_procs(void)
+{
+    unsigned now     = wticks();
+    unsigned elapsed = now - last_sample;
+
+    proc_count = wproclist(procs, MAX_PROCS);
+    if (proc_count < 0)
+        proc_count = 0;
+
+    for (int i = 0; i < proc_count; i++) {
+        unsigned ticks  = procs[i].cpu_ticks;
+        unsigned tenths = 0;
+
+        for (int j = 0; j < history_count; j++) {
+            if (history[j].pid != procs[i].pid)
+                continue;
+
+            /* As with the cores: a key pressed between refreshes redraws with
+             * no whole tick elapsed to divide by, and the previous figure
+             * stands rather than every process dropping to zero on a
+             * keystroke.
+             *
+             * A total that has gone backwards is not a measurement of
+             * anything -- a pid comes round again eventually -- so it starts
+             * that process's history afresh at nothing. */
+            if (elapsed == 0)
+                tenths = history[j].tenths;
+            else if (ticks > history[j].ticks)
+                tenths = (ticks - history[j].ticks) * 1000u / elapsed;
+            break;
+        }
+
+        cpu_tenths[i] = tenths > 1000 ? 1000 : tenths;
+    }
+
+    /* Only a sample that had an interval becomes the one the next is measured
+     * against; otherwise a burst of keystrokes would leave every load being
+     * worked out over a few milliseconds. */
+    if (elapsed == 0)
+        return;
+
+    for (int i = 0; i < proc_count; i++) {
+        history[i].pid    = procs[i].pid;
+        history[i].ticks  = procs[i].cpu_ticks;
+        history[i].tenths = cpu_tenths[i];
+    }
+
+    history_count = proc_count;
+    last_sample   = now;
+}
+
 static void redraw(void)
 {
     wmeminfo_t mem;
@@ -414,7 +499,7 @@ static void redraw(void)
 
     sample_cores();
 
-    proc_count = wproclist(procs, MAX_PROCS);
+    sample_procs();
     if (proc_count > 0 && selected >= proc_count)
         selected = proc_count - 1;
 
