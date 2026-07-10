@@ -112,9 +112,10 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   readable and writable by root and the kernel alone, so `passwd` and `su`
   need no setuid.
 - **Applications**: `fish` (a shell that colours commands as you type and
-  suggests from history), `vim` (a modal editor), `htop` (a live process
-  monitor, with a meter per core and per filesystem) and `fastfetch` (system
-  information). These are WOS-native programs
+  suggests from history), `vim` (a modal editor with search and hlsearch),
+  `fm` (a file manager), `htop` (a live process monitor, with a meter per core
+  and per filesystem), `stress` (load the machine on purpose) and `fastfetch`
+  (system information). These are WOS-native programs
   in the spirit of the originals — see [`docs/apps.md`](docs/apps.md) for what
   the upstream versions would need that WOS does not have.
 
