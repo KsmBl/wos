@@ -41,6 +41,8 @@ which is the price of having no shared libraries.
 | [`chsh`](#chsh) | change a user's login shell |
 | [`adduser`](#adduser) | create a user, asking for a password |
 | [`edituser`](#edituser) | add or remove roles |
+| [`fm`](#fm) | browse and manage files |
+| [`stress`](#stress) | put the machine under load on purpose |
 
 The graphical session has its own set:
 
@@ -567,6 +569,9 @@ marked with a `~` column.
 | `o` `O` | open a line below / above and insert |
 | `x`, Delete | delete the character under the cursor |
 | `dd` | delete the line |
+| `/` `?` | search forwards / backwards |
+| `n` `N` | next / previous match |
+| `*` `#` | search for the word under the cursor, forwards / backwards |
 | `:` | enter a command |
 
 ## Insert mode
@@ -589,9 +594,38 @@ identically on the VGA screen and over serial, and it does not.
 | `:wq`, `:x` | write and quit |
 | `:w!` | write regardless |
 | `:term [cmd]` | open a terminal window running `cmd` (default: a shell) |
+| `:set hlsearch` | highlight every match (`hls` for short) |
+| `:set nohlsearch` | stop highlighting (`nohls`) |
+| `:set invhlsearch` | turn it the other way |
+| `:set hlsearch?` | say which it is |
+| `:noh` | drop the highlighting until the next search |
 
 Errors use vim's own numbering where there is an equivalent, so `:q` with
 unsaved changes gives `E37: No write since last change (add ! to override)`.
+
+## Searching
+
+`/text` searches forwards from the cursor, `?text` backwards, and both wrap —
+saying so when they do, because a search that silently starts again from the
+top looks like one that found something further down. An empty pattern repeats
+the last one. `n` goes to the next match in the same direction and `N` the
+other way; `*` and `#` take the word under the cursor and search for it.
+
+Nothing is found: `E486: Pattern not found: xyzzy`, as upstream.
+
+**The pattern is literal text, not a regular expression.** vim's search is a
+regex engine and WOS has not got one, so `.` matches a dot and `^` matches a
+caret. Matching plain text is the part people use most, and it is the part
+that is here.
+
+`hlsearch` is on to begin with, which is not vim's factory default — stock vim
+starts with it off and expects a vimrc to turn it on, and there is nowhere to
+put a vimrc here. `:set nohlsearch` is how to disagree with that.
+
+`:noh` and `:set nohlsearch` are not the same thing, and the difference is the
+reason `:noh` exists: `:noh` clears the highlighting that is on the screen
+right now and the next search brings it back, while `:set nohlsearch` turns
+the feature off until you turn it on again.
 
 ## `:term` — a terminal in a window
 
@@ -636,8 +670,10 @@ through `wconsize()`, so it lays itself out to fit rather than assuming a size.
 ## What is missing
 
 No counts (`3dd`), no registers or yank/put, no undo, no visual mode, no
-search or `:%s///`, and no syntax highlighting. Undo and search are the two
-worth adding next; the rest is a long way down from what the editor is for.
+`:%s///`, and no syntax highlighting. Undo is the one worth adding next; the
+rest is a long way down from what the editor is for.
+
+Search is here but is literal rather than regular expressions — see above.
 
 The terminal is one window only, and always the right half — no stacking,
 resizing or a second terminal. A window is 40 columns wide, so a program that
@@ -1400,6 +1436,151 @@ It is the first thing to run when a client will not start: it says whether the
 display server is up and whether it advertises the thing the client needs.
 
 **Exit status:** 0, or 1 if it cannot connect or the connection breaks.
+
+---
+
+# fm
+
+```
+fm [directory]
+```
+
+A file manager for the console: one pane, arrow keys, and a line at the bottom
+saying what the keys do. It is the shape `mc` and `ranger` have, without the
+two panes and without the configuration.
+
+```
+ /home/root                                                          5 items
+ ..                                                                   <dir>
+ .config                                                              <dir>
+ photos                                                               <dir>
+ notes.txt                                                              66B
+ readme.txt                                                            758B
+ enter open  v view  x run  n newdir  t touch  c copy  m move  D delete  q quit
+```
+
+Directories come first and are shown in cyan; sizes are on the right. Starting
+with no argument opens the working directory.
+
+| Key | Effect |
+|---|---|
+| arrows, Page Up/Down, Home/End | move around |
+| Enter, Right | open a directory, or show a file |
+| Backspace, Left | go up a directory |
+| `v` | view the file |
+| `x` | run it as a program |
+| `n` | make a directory |
+| `t` | make an empty file |
+| `c` | copy, asking where to |
+| `m` | move or rename, asking where to |
+| `D` | delete, asking first |
+| `r` | reread the directory |
+| `q`, Escape | leave |
+
+The viewer shows the first 64 KiB of a file and says when there is more. It
+replaces control characters with dots rather than passing them through: what
+is inside a file should not be able to reprogram the terminal showing it.
+
+**There is no rename.** The filesystem has no call for it, so `m` copies the
+file to its new name and then deletes the old one — in that order, so a
+failure halfway leaves the original where it was rather than leaving neither.
+For a large file it is slower than it looks.
+
+`fm` never asks a shell to do anything: running a program, deleting a file and
+making a directory all go straight to the kernel, so it behaves the same under
+`whell`, under `fish`, and in a `wlterm` window with no shell behind it.
+
+Writing anywhere needs the same permission it would from a shell, so a
+non-root user gets `permission denied` outside their own home directory. See
+[`docs/users.md`](users.md).
+
+**Exit status:** 0, or 1 if the starting path is not a directory.
+
+---
+
+# stress
+
+```
+stress --cpu 2
+stress --cpu 2 --timeout 30s
+stress --vm 1 --vm-bytes 8M
+```
+
+Put the machine under load on purpose. Workers are spawned — "hogs", in the
+original's language — each doing one kind of pointless work as hard as it can,
+and the parent waits and reports.
+
+```
+root@wos:/home/root# stress --cpu 2 --timeout 5s
+stress: info: [3] 2 cpu workers on 1 core: they take turns, so the machine
+               reaches 100% and each worker gets a share of it
+stress: info: [3] dispatching hogs: 2 cpu, 0 vm, 0 hdd
+stress: info: [3] successful run completed in 5s
+```
+
+| Option | Effect |
+|---|---|
+| `-c`, `--cpu N` | N workers spinning on integer arithmetic |
+| `-m`, `--vm N` | N workers allocating, filling and freeing memory |
+| `--vm-bytes B` | how much each allocates (default 8M) |
+| `-d`, `--hdd N` | N workers writing and deleting a file |
+| `--hdd-bytes B` | how much each writes (default 128K, at most 256K) |
+| `-t`, `--timeout T` | how long: `10`, `30s`, `5m`, `2h` (default 10s) |
+| `-q`, `--quiet` | say nothing |
+| `-v`, `--verbose` | say what each worker got through |
+| `--dry-run` | show what would run, and run nothing |
+| `--version`, `--help` | |
+
+Sizes take `b`, `K`, `M` or `G`; times take `s`, `m`, `h` or `d`. The options
+are spelled as they are upstream, so a command line written for the real
+`stress` usually works here.
+
+Watch it with [`htop`](#htop) in another window: `sway`, Super+Return for a
+terminal, `stress --cpu 2 --timeout 60s`, Super+Return again, `htop`.
+
+## A worker is a process
+
+WOS has one thread per process and no way to make another, so `--cpu 2` spawns
+two children rather than two threads. For occupying the processor that is the
+same thing.
+
+**But WOS runs on the core it booted on and starts no others.** Two workers
+share one core rather than filling two: the machine reaches 100%, and each
+worker gets a share of it. `stress` says so when asked for more workers than
+there are cores, rather than letting the figure in `htop` be a surprise. A
+machine with eight cores will show seven of them idle in `htop` no matter what
+is asked for here — see [`htop`](#htop).
+
+## Every run is bounded
+
+There are no signals in WOS: nothing can be sent to a running process to ask
+it to stop. A stress test with no end could only be ended by turning the
+machine off.
+
+So each worker is told its deadline when it starts and leaves by itself, and
+`--timeout` defaults to ten seconds rather than to forever. `--timeout 0` means
+"until the machine is rebooted" and says so before it starts.
+
+The deadline is checked between batches of work, and the batch is small enough
+that a worker stops close to when it was told to.
+
+## What is different from the original
+
+The cpu worker mixes integers rather than spinning on `sqrt()`: the kernel
+never enables the floating-point unit, so the original's inner loop would
+fault on its first multiply. It is the same amount of arithmetic with the same
+property — every step depends on the one before it, so the processor cannot
+skip any of it.
+
+`--io` is not here. It exists upstream to call `sync()` repeatedly, and WOS
+has no such call: writes reach the disk as they are made. `--hdd` is the disk
+test.
+
+`--hdd-bytes` is capped at 256K because WFS holds at most 268 KiB in one file.
+A larger figure is lowered, with a line saying so, rather than failing.
+
+**Exit status:** 0 if every worker finished cleanly, 1 if any failed or if
+nothing was asked for.
 
 ---
 

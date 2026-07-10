@@ -21,6 +21,29 @@ static char status[128];
 static char command[128];
 static int  command_len;
 
+/* What the command line is for: ':' is a command, '/' and '?' are searches.
+ * vim uses one line at the bottom for all three and tells them apart by the
+ * character it opened with, and so does this. */
+static char cmd_prefix = ':';
+
+/* Searching.  The pattern is literal text rather than a regular expression:
+ * vim's search is a regex engine, and WOS has not got one.  Everything else --
+ * the wrap, `n` and `N`, the highlighting -- behaves the way it does there. */
+static char search_pattern[128];
+static int  search_dir = 1;      /* 1 forward, -1 backward */
+
+/* 'hlsearch', and whether highlighting is showing at this moment.
+ *
+ * On by default, unlike stock vim, which starts with it off and expects a
+ * vimrc to turn it on.  There is nowhere to put a vimrc here, so the setting
+ * that most people end up with is the one this starts with; `:set nohlsearch`
+ * is how to disagree.
+ *
+ * `:noh` clears the highlighting without unsetting the option, which is why
+ * these are two variables and not one: the next search turns it back on. */
+static int  opt_hlsearch = 1;
+static int  hl_showing;
+
 /* The console size, read once at startup with wconsize() so the editor follows
  * whatever text mode is in force rather than assuming one. */
 static int  con_w = W_CONSOLE_WIDTH;
@@ -110,13 +133,53 @@ static void scroll_to_cursor(void)
         col_offset = 0;
 }
 
+/* Overprint every match of the search pattern inside the visible slice of one
+ * line.
+ *
+ * Done as a second pass over a line that has already been drawn, rather than
+ * by colouring it a piece at a time: a match can start before the left edge of
+ * the window and end after the right, and painting over what is there handles
+ * that without the drawing code needing to know about searching at all. */
+static void highlight_line(int screen_row, int screen_col, int at,
+                           int base_col, int width)
+{
+    if (!opt_hlsearch || !hl_showing || !search_pattern[0])
+        return;
+    if (at < 0 || at >= line_count)
+        return;
+
+    const char *text = lines[at];
+    int         want = (int)strlen(search_pattern);
+    int         len  = (int)strlen(text);
+
+    for (int i = 0; i + want <= len; i++) {
+        if (strncmp(text + i, search_pattern, (wsize_t)want) != 0)
+            continue;
+
+        int from = i - base_col;
+        int to   = i + want - base_col;
+
+        if (to > 0 && from < width) {
+            if (from < 0)     from = 0;
+            if (to > width)   to   = width;
+
+            wgotoxy(screen_row, screen_col + from);
+            wcolor(W_BLACK, W_YELLOW);
+            wprintf("%.*s", to - from, text + base_col + from);
+            wcolor_reset();
+        }
+
+        i += want - 1;          /* matches do not overlap */
+    }
+}
+
 static void draw_status(void)
 {
     wgotoxy(con_h, 1);
 
     if (mode == MODE_COMMAND) {
         wcolor_reset();
-        wprintf(":%s", command);
+        wprintf("%c%s", cmd_prefix, command);
         wclear_line();
         return;
     }
@@ -185,6 +248,7 @@ static void draw_single(void)
         }
 
         wclear_line();
+        highlight_line(row + 1, 1, at, col_offset, con_w);
     }
 
     draw_status();
@@ -241,6 +305,7 @@ static void draw_split_editor(void)
 
         wcolor_reset();
         draw_field(row + 1, 1, sp_left_w, linebuf);
+        highlight_line(row + 1, 1, at, col_offset, sp_left_w);
     }
 }
 
@@ -500,6 +565,148 @@ static void open_terminal(const char *argline)
  *  Ex commands
  * ---------------------------------------------------------------- */
 
+/* ------------------------------------------------------------------ *
+ *  Searching
+ * ------------------------------------------------------------------ */
+
+/* What counts as part of a word, for `*` and `#`.  vim's definition: letters,
+ * digits and underscore. */
+static int is_word(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+/* The first occurrence of `needle` in `haystack` at or after `from`, or -1. */
+static int find_from(const char *haystack, int from, const char *needle)
+{
+    int len  = (int)strlen(haystack);
+    int want = (int)strlen(needle);
+
+    if (want == 0 || from < 0)
+        return -1;
+
+    for (int at = from; at + want <= len; at++)
+        if (strncmp(haystack + at, needle, (wsize_t)want) == 0)
+            return at;
+
+    return -1;
+}
+
+/* The last occurrence strictly before `before`, or -1. */
+static int find_before(const char *haystack, int before, const char *needle)
+{
+    int want  = (int)strlen(needle);
+    int found = -1;
+
+    if (want == 0)
+        return -1;
+
+    for (int at = 0; at + want <= (int)strlen(haystack) && at < before; at++)
+        if (strncmp(haystack + at, needle, (wsize_t)want) == 0)
+            found = at;
+
+    return found;
+}
+
+/* Move the cursor to the next match of `pattern` in `dir`, wrapping.
+ *
+ * Starting one column past the cursor is what makes `n` advance rather than
+ * finding the match it is already sitting on.  The wrap is reported, because
+ * a search that silently starts again from the top looks like a search that
+ * found something further down. */
+static void search_move(const char *pattern, int dir)
+{
+    if (!pattern[0]) {
+        strlcpy(status, "E35: No previous regular expression", sizeof(status));
+        return;
+    }
+
+    int wrapped = 0;
+
+    for (int step = 0; step <= line_count; step++) {
+        int at = cy + dir * step;
+
+        /* Wrap, and say so once. */
+        while (at < 0)            { at += line_count; wrapped = 1; }
+        while (at >= line_count)  { at -= line_count; wrapped = 1; }
+
+        int found;
+
+        if (dir > 0) {
+            int from = (step == 0) ? cx + 1 : 0;
+            found = find_from(lines[at], from, pattern);
+        } else {
+            int before = (step == 0) ? cx : (int)strlen(lines[at]);
+            found = find_before(lines[at], before, pattern);
+        }
+
+        if (found >= 0) {
+            cy = at;
+            cx = found;
+            hl_showing = opt_hlsearch;
+
+            if (wrapped)
+                wsnprintf(status, sizeof(status),
+                          "search hit %s, continuing at %s",
+                          dir > 0 ? "BOTTOM" : "TOP",
+                          dir > 0 ? "TOP" : "BOTTOM");
+            else
+                wsnprintf(status, sizeof(status), "%c%s",
+                          dir > 0 ? '/' : '?', pattern);
+            return;
+        }
+    }
+
+    wsnprintf(status, sizeof(status), "E486: Pattern not found: %s", pattern);
+}
+
+/* `/` and `?` from the command line. */
+static void run_search(int dir)
+{
+    const char *pattern = command;
+
+    /* An empty pattern repeats the last one, as vim does. */
+    if (pattern[0])
+        strlcpy(search_pattern, pattern, sizeof(search_pattern));
+
+    search_dir = dir;
+    search_move(search_pattern, dir);
+}
+
+/* `*` and `#`: search for the word the cursor is on. */
+static void search_word_under_cursor(int dir)
+{
+    const char *text = lines[cy];
+    int         len  = (int)strlen(text);
+
+    if (cx >= len)
+        return;
+
+    int start = cx, end = cx;
+
+    while (start > 0 && is_word(text[start - 1]))
+        start--;
+    while (end < len && is_word(text[end]))
+        end++;
+
+    if (end <= start)
+        return;
+
+    int n = end - start;
+    if (n > (int)sizeof(search_pattern) - 1)
+        n = (int)sizeof(search_pattern) - 1;
+
+    memcpy(search_pattern, text + start, (wsize_t)n);
+    search_pattern[n] = '\0';
+
+    /* From the start of the word, so `*` on the first character of a word
+     * still moves to the next one rather than matching where it stands. */
+    cx = start;
+    search_dir = dir;
+    search_move(search_pattern, dir);
+}
+
 static void run_command(void)
 {
     char *c = command;
@@ -514,6 +721,42 @@ static void run_command(void)
     /* ":term [cmd...]" opens a terminal window running cmd (default: a shell). */
     if (strcmp(c, "term") == 0 || strncmp(c, "term ", 5) == 0) {
         open_terminal(c + 4);
+        return;
+    }
+
+    /* ":noh" drops the highlighting until the next search, without unsetting
+     * the option -- which is the whole reason it exists. */
+    if (strcmp(c, "noh") == 0 || strcmp(c, "nohl") == 0 ||
+        strcmp(c, "nohlsearch") == 0) {
+        hl_showing = 0;
+        return;
+    }
+
+    if (strncmp(c, "set ", 4) == 0 || strcmp(c, "set") == 0) {
+        const char *option = c + 3;
+
+        while (*option == ' ')
+            option++;
+
+        if (strcmp(option, "hlsearch") == 0 || strcmp(option, "hls") == 0) {
+            opt_hlsearch = 1;
+            hl_showing   = search_pattern[0] != '\0';
+        } else if (strcmp(option, "nohlsearch") == 0 ||
+                   strcmp(option, "nohls") == 0) {
+            opt_hlsearch = 0;
+            hl_showing   = 0;
+        } else if (strcmp(option, "invhlsearch") == 0 ||
+                   strcmp(option, "hlsearch!") == 0) {
+            opt_hlsearch = !opt_hlsearch;
+            hl_showing   = opt_hlsearch && search_pattern[0];
+        } else if (strcmp(option, "hlsearch?") == 0 ||
+                   strcmp(option, "hls?") == 0 || !*option) {
+            wsnprintf(status, sizeof(status), "  %shlsearch",
+                      opt_hlsearch ? "" : "no");
+        } else {
+            wsnprintf(status, sizeof(status),
+                      "E518: Unknown option: %s", option);
+        }
         return;
     }
 
@@ -669,10 +912,27 @@ static void normal_key(int key)
         break;
 
     case ':':
+    case '/':
+    case '?':
         mode = MODE_COMMAND;
+        cmd_prefix = (char)key;
         command[0] = '\0';
         command_len = 0;
         status[0] = '\0';
+        break;
+
+    case 'n':
+        search_move(search_pattern, search_dir);
+        break;
+    case 'N':
+        search_move(search_pattern, -search_dir);
+        break;
+
+    case '*':
+        search_word_under_cursor(1);
+        break;
+    case '#':
+        search_word_under_cursor(-1);
         break;
 
     default:
@@ -739,7 +999,12 @@ static void command_key(int key)
     case '\n':
     case '\r':
         mode = MODE_NORMAL;
-        run_command();
+        if (cmd_prefix == '/')
+            run_search(1);
+        else if (cmd_prefix == '?')
+            run_search(-1);
+        else
+            run_command();
         command[0] = '\0';
         command_len = 0;
         break;

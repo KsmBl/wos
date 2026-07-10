@@ -28,13 +28,30 @@
 #define MIN_COLS 20
 #define MIN_ROWS 4
 
-/* The VGA palette, so a program's colours look the same in a window as they do
- * on the console it was written for. */
+/* The console's sixteen colours, so a program looks the same in a window as it
+ * does on the console it was written for.
+ *
+ * Indexed the way `struct wterm` stores them, which is ANSI's order (black,
+ * red, green, yellow, blue, magenta, cyan, white) and the order the W_* names
+ * use -- not the VGA hardware order, which puts blue at 1 and red at 4.  The
+ * two look identical until something asks for cyan and gets brown. */
 static const uint32_t palette[16] = {
-    0x000000, 0x0000AA, 0x00AA00, 0x00AAAA,
-    0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
-    0x555555, 0x5555FF, 0x55FF55, 0x55FFFF,
-    0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+    0x000000,  /* black         */
+    0xAA0000,  /* red           */
+    0x00AA00,  /* green         */
+    0xAA5500,  /* yellow, which on a VGA palette is brown */
+    0x0000AA,  /* blue          */
+    0xAA00AA,  /* magenta       */
+    0x00AAAA,  /* cyan          */
+    0xAAAAAA,  /* white         */
+    0x555555,  /* bright black  */
+    0xFF5555,  /* bright red    */
+    0x55FF55,  /* bright green  */
+    0xFFFF55,  /* bright yellow */
+    0x5555FF,  /* bright blue   */
+    0xFF55FF,  /* bright magenta*/
+    0x55FFFF,  /* bright cyan   */
+    0xFFFFFF,  /* bright white  */
 };
 
 struct frame {
