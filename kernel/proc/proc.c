@@ -550,6 +550,7 @@ void proc_meminfo(const process_t *p, wprocmem_t *out)
     out->stack_bytes    = p->stack_bytes;
     out->heap_bytes     = p->heap_break - p->heap_start;
     out->thread_count   = p->thread_count;
+    out->cpu_ticks      = (uint32_t)p->cpu_ticks;
 }
 
 void thread_meminfo(const thread_t *t, wthreadmem_t *out)

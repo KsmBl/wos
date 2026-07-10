@@ -124,6 +124,13 @@ typedef struct {
     uint32_t heap_bytes;     /* grown through wsbrk()                  */
     uint32_t stack_bytes;    /* user stack                             */
     int32_t  thread_count;
+
+    /* Timer ticks this process has been on a processor for, over its whole
+     * life.  A total, not a rate: a load is a change over an interval, so
+     * anything wanting a percentage samples this twice and divides by the
+     * time between.  Charged to the process rather than read back from its
+     * threads, so that what a thread ran for is not lost when it ends. */
+    uint32_t cpu_ticks;
 } wprocmem_t;
 
 typedef struct {

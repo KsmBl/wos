@@ -241,8 +241,14 @@ void sched_tick(regs_t *regs)
     if (!active)
         return;
 
-    if (current)
+    /* Charge the tick to the thread and to the process behind it.  The idle
+     * thread belongs to the kernel's own process, which is not in the process
+     * table, so idle time is not billed to anything a monitor can list. */
+    if (current) {
         current->cpu_ticks++;
+        if (current->proc)
+            current->proc->cpu_ticks++;
+    }
 
     wake_expired(pit_ticks());
 

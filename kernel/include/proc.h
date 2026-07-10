@@ -91,6 +91,11 @@ typedef struct process {
     uint32_t     term_rows;
     uint32_t     term_cols;
 
+    /* Timer ticks this process has been on a processor for.  Kept here as
+     * well as on the thread because a thread's count dies with the thread,
+     * and a process's time is the sum of every thread it ever had. */
+    uint64_t     cpu_ticks;
+
     /* Memory accounting, in bytes. */
     uint64_t     code_bytes;
     uint64_t     data_bytes;

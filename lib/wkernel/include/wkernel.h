@@ -266,9 +266,15 @@ int wmeminfo(wmeminfo_t *out);
  * process's address space, counted from its page tables -- what the process
  * genuinely occupies, not a reservation.
  *
+ * `cpu_ticks` is how many timer ticks the process has run for since it
+ * started, at the timer's 100 ticks a second.  It is a total, not a rate:
+ * to show a load, read it twice and divide the difference by the ticks that
+ * passed in between -- see wticks().
+ *
  * @param pid Process to inspect, or 0 for the calling process.
  * @param out Filled in with the pid, name, resident bytes, and the code,
- *            data, heap and stack breakdown, plus the thread count.
+ *            data, heap and stack breakdown, plus the thread count and the
+ *            processor time used.
  * @return 0 on success, `-W_ESRCH` if there is no such process, `-W_EFAULT`
  *         if @p out is not writable.
  */
