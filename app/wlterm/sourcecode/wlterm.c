@@ -180,6 +180,9 @@ static void pool_release(void)
         wshmunmap(app.pool_data);
         app.pool_data = NULL;
     }
+    /* Only when it never reached the compositor: pool_create() forgets the
+     * number as soon as it hands it over, so a descriptor still here is one
+     * that was opened and then not used. */
     if (app.shm_fd >= 0) {
         wclose(app.shm_fd);
         app.shm_fd = -1;
@@ -211,6 +214,17 @@ static int pool_create(void)
     }
 
     app.pool = wl_shm_create_pool(app.shm, app.shm_fd, app.pool_bytes);
+
+    /* And the descriptor is no longer ours.  Queueing a message takes
+     * ownership of every descriptor in it -- the connection closes its copy
+     * once the message has gone, and closes it too if the message cannot be
+     * queued at all -- so the number is forgotten here rather than in
+     * pool_release().  Closing it a second time on the next resize would
+     * close whatever had been handed the number in the meantime, which on
+     * this connection means the socket to the compositor: the window went
+     * away the first time it was resized twice. */
+    app.shm_fd = -1;
+
     if (!app.pool)
         return -1;
 
