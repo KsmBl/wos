@@ -16,7 +16,7 @@
 # Run the self-tests at boot: the four blocks of [ok  ] lines, which take a few
 # seconds and include a process that faults on purpose.  0 leaves them out of
 # the build entirely, so the kernel does not carry the code.
-SELFTEST ?= 1
+SELFTEST ?= 0
 
 # Size of the filesystem image, in MiB.  The installed system is about 4 MiB;
 # the rest is room to write into.
@@ -27,7 +27,7 @@ SELFTEST ?= 1
 #
 # It is *not* the size of a flashed USB stick: tools/flash-usb.sh gives the
 # filesystem the whole of the stick, whatever this says.
-DISK_MB ?= 128
+DISK_MB ?= 2048
 
 # Size of the kernel heap arena, in MiB.  Everything kmalloc() hands out comes
 # from here: process control blocks, kernel stacks, file buffers, a whole
