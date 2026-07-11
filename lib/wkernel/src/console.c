@@ -91,6 +91,21 @@ int wgetkey(void)
 
     if (wread(W_STDIN, &c, 1) != 1)
         return W_KEY_ESCAPE;
+
+    /* ESC O introduces the short forms, which are only F1 to F4. */
+    if (c == 'O') {
+        if (wread(W_STDIN, &c, 1) != 1)
+            return W_KEY_ESCAPE;
+
+        switch (c) {
+        case 'P': return W_KEY_F1;
+        case 'Q': return W_KEY_F2;
+        case 'R': return W_KEY_F3;
+        case 'S': return W_KEY_F4;
+        default:  return W_KEY_ESCAPE;
+        }
+    }
+
     if (c != '[')
         return W_KEY_ESCAPE;
 
@@ -122,9 +137,19 @@ int wgetkey(void)
         }
 
         switch (value) {
-        case 3: return W_KEY_DELETE;
-        case 5: return W_KEY_PGUP;
-        case 6: return W_KEY_PGDN;
+        case 3:  return W_KEY_DELETE;
+        case 5:  return W_KEY_PGUP;
+        case 6:  return W_KEY_PGDN;
+        /* F5 up. The numbering skips 16, and 22, a gap the VT220 left and
+         * nothing since has filled in. */
+        case 15: return W_KEY_F5;
+        case 17: return W_KEY_F6;
+        case 18: return W_KEY_F7;
+        case 19: return W_KEY_F8;
+        case 20: return W_KEY_F9;
+        case 21: return W_KEY_F10;
+        case 23: return W_KEY_F11;
+        case 24: return W_KEY_F12;
         default: break;
         }
     }

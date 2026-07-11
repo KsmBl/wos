@@ -340,6 +340,30 @@ static void keyboard_irq(regs_t *regs)
     default: break;
     }
 
+    /* The function keys, which are single-byte scancodes rather than the 0xE0
+     * pairs the arrows arrive as -- so they are decoded here rather than up
+     * there, but delivered the same way, as the sequences a terminal sends.
+     * F1-F4 have short forms in every terminal; the rest are numbered, and
+     * with a gap at 16 that VT220s left and nobody has filled since. */
+    if (!(sc & SC_RELEASE) && raw_mode) {
+        static const char *const fkeys[] = {
+            "\033OP",   "\033OQ",   "\033OR",   "\033OS",     /* F1-F4   */
+            "\033[15~", "\033[17~", "\033[18~", "\033[19~",   /* F5-F8   */
+            "\033[20~", "\033[21~",                           /* F9, F10 */
+        };
+
+        if (sc >= 0x3B && sc <= 0x44) {
+            ring_push_string(fkeys[sc - 0x3B]);
+            sched_wake(WAIT_INPUT);
+            return;
+        }
+        if (sc == 0x57 || sc == 0x58) {           /* F11, F12 */
+            ring_push_string(sc == 0x57 ? "\033[23~" : "\033[24~");
+            sched_wake(WAIT_INPUT);
+            return;
+        }
+    }
+
     char c = shift_down ? keymap_shift[sc] : keymap[sc];
     if (c == 0)
         return;

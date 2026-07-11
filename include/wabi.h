@@ -600,7 +600,8 @@ typedef struct {
 #define WSYS_DISPBLIT   71
 #define WSYS_INPUTOPEN  72
 #define WSYS_REAP       73
-#define WSYS_MAX        74
+#define WSYS_SEATGRANT  74
+#define WSYS_MAX        75
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0
@@ -641,6 +642,18 @@ typedef struct {
 #define W_KEY_PGUP   0x106
 #define W_KEY_PGDN   0x107
 #define W_KEY_DELETE 0x108
+#define W_KEY_F1     0x110
+#define W_KEY_F2     0x111
+#define W_KEY_F3     0x112
+#define W_KEY_F4     0x113
+#define W_KEY_F5     0x114
+#define W_KEY_F6     0x115
+#define W_KEY_F7     0x116
+#define W_KEY_F8     0x117
+#define W_KEY_F9     0x118
+#define W_KEY_F10    0x119
+#define W_KEY_F11    0x11A
+#define W_KEY_F12    0x11B
 #define W_KEY_ESCAPE 0x1B
 
 /* Colours for wcolor(). Add W_BRIGHT to a foreground for the bright variant. */
