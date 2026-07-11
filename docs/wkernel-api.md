@@ -268,7 +268,7 @@ wprintf("%s free of %s\n", whuman(m.free_bytes), whuman(m.total_bytes));
 
 ## `int wprocmem(int pid, wprocmem_t *out)`
 
-Memory use of one process. Pass `0` for the calling process.
+Memory and CPU use of one process. Pass `0` for the calling process.
 
 ```c
 typedef struct {
@@ -280,11 +280,31 @@ typedef struct {
     uint32_t heap_bytes;      /* grown through wsbrk()                  */
     uint32_t stack_bytes;     /* user stack                             */
     int32_t  thread_count;
+    uint32_t cpu_ticks;       /* timer ticks this process has run for   */
 } wprocmem_t;
 ```
 
 `resident_bytes` is counted from the process's page tables — what it actually
 occupies, including its page tables themselves, not a reservation.
+
+`cpu_ticks` is a running total since the process started, at the timer's 100
+ticks a second, and it counts every thread the process has had rather than
+only the ones it still has. It is not a rate: to show a load, read it twice
+and divide the difference by the [`wticks()`](#unsigned-int-wticksvoid) that
+passed in between.
+
+```c
+wprocmem_t before, after;
+unsigned   start = wticks();
+
+wprocmem(pid, &before);
+wsleep(1000);
+wprocmem(pid, &after);
+
+unsigned tenths = (after.cpu_ticks - before.cpu_ticks) * 1000
+                / (wticks() - start);
+wprintf("%u.%u%%\n", tenths / 10, tenths % 10);
+```
 
 **Returns** 0, or `-W_ESRCH`, `-W_EFAULT`.
 

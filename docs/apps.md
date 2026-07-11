@@ -393,9 +393,10 @@ meaning.
 
 ## A note on the "ports"
 
-`fastfetch`, `htop`, `vim` and `fish` here are **WOS-native programs written in
-the spirit of the originals, not builds of the upstream source.** That is not a
-shortcut taken to save effort — the upstream programs cannot run here:
+`fastfetch`, `htop`, `vim`, `fish` and `thunar` here are **WOS-native programs
+written in the spirit of the originals, not builds of the upstream source.**
+That is not a shortcut taken to save effort — the upstream programs cannot run
+here:
 
 | Program | What it needs that WOS does not have |
 |---|---|
@@ -403,6 +404,7 @@ shortcut taken to save effort — the upstream programs cannot run here:
 | htop | ncurses, `/proc`, signals, `ioctl` |
 | vim | ~400k lines of C over a full libc, `termios`, `fork`, signals, regex |
 | fish | a C++ runtime, `fork`/`exec` job control, `termios`, PCRE |
+| thunar | GTK, GLib, GIO and gvfs, an icon theme, a MIME database, a mouse |
 
 WOS has a 30-call kernel API, no `fork`, no signals, no `termios`, no dynamic
 linking, and a 268 KiB limit on any single file. Building the real thing would
@@ -476,9 +478,9 @@ redraws immediately when a key is pressed.
 
   Tasks: 2      Threads: 2      Kernel: 9.1M
 
-   PID COMMAND       RESIDENT     CODE     DATA     HEAP    STACK  THR
-     6 whell           100.0K    20.0K     8.0K       0B    64.0K    1
-     7 htop             88.0K     8.0K     8.0K       0B    64.0K    1
+   PID COMMAND       CPU%  RESIDENT     CODE     DATA     HEAP    STACK  THR
+     6 whell           0.0    100.0K    20.0K     8.0K       0B    64.0K    1
+     7 htop            0.4     88.0K     8.0K     8.0K       0B    64.0K    1
 
  up/dn  Select  q  Quit   r  Refresh now
 ```
@@ -513,6 +515,23 @@ for, and the process table takes whatever rows are left.
 The meters change colour with load, as htop's do: green below 70%, yellow to
 90%, red above. A non-zero amount always shows at least one bar, so a small
 but real allocation does not read as nothing.
+
+`CPU%` is what each process did with the processor over the last interval, as
+a share of one core: a process that had it to itself for the whole second
+reads 100.0. The kernel charges every timer tick to whatever was running when
+it fired, so the column is a measurement of where the time went rather than an
+estimate — put the machine under load with [`stress`](#stress) and the process
+doing the work is the one the figure moves for.
+
+The reading is a *change*, so it needs two samples to exist: everything shows
+0.0 for the first second, and a process that has only just started shows 0.0
+until it has been seen twice. The history behind it is kept per pid rather
+than per row, because a process exiting moves everything below it up a line
+and the loads would otherwise follow the rows rather than the processes.
+
+Idle time is not charged to anything in the table. It belongs to the kernel's
+own idle thread, which is not a process anyone can list, so the CPU% column
+sums to roughly what the CPU meter reads rather than always to 100.
 
 `RESIDENT` is what the process actually has mapped, counted from its page
 tables, which is why it exceeds the four columns beside it — those do not
@@ -1328,6 +1347,83 @@ buffer the terminal is drawing into.
 
 **Exit status:** 0 when the shell exits or the window is closed.
 
+## thunar
+
+```
+thunar [directory]
+```
+
+A graphical file manager: a places sidebar on the left, a file list on the
+right, a location bar across the top and a status line along the bottom. It is
+the shape Xfce's Thunar has, and like `wlterm` it is an ordinary Wayland
+client with no privileges — it asks for a surface, draws into shared memory
+and hands over the descriptor.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ [📁 /home/root                                          ] │
+├───────────────┬──────────────────────────────────────────┤
+│ PLACES        │ 📁 ..                                  up │
+│ 📁 Home       │ 📁 .config                         folder │
+│ 📁 Filesystem │ 📄 notes.txt                          66B │
+│ 📁 Applications│📄 readme.txt                         758B │
+│ 📁 Services   │                                          │
+│ 📁 RAM disk   │                                          │
+├───────────────┴──────────────────────────────────────────┤
+│ "notes.txt" (66B)                             1.9G free  │
+└──────────────────────────────────────────────────────────┘
+```
+
+Everything is drawn by the program itself, a pixel at a time, with the
+kernel's 8x16 font: there is no toolkit here to ask. The folder and document
+icons are drawn rather than loaded, because there is no image decoder and no
+icon theme to load them from.
+
+| Key | Effect |
+|---|---|
+| arrows, Page Up/Down, Home/End | move around |
+| Enter, Right | open — enter a directory, or open a file |
+| Backspace, Left | go up a directory |
+| Tab | move between the sidebar and the file list |
+| `n` | make a directory, asking for the name |
+| Delete | delete the selected item, asking first |
+| `t` | open a terminal in this directory |
+| `h` | go home |
+| `u` | go up |
+| F5 | reread the directory |
+| `q`, Escape | leave |
+
+**It is driven from the keyboard, because this machine has no mouse.** There
+is no pointer device in the kernel and sway's seat advertises a keyboard and
+nothing else, so there is no clicking, no drag and drop and no context menu.
+The pane the arrows will move is the one drawn with a blue selection; the
+other one's selection is grey, so which is which can be seen rather than
+remembered.
+
+**Opening a file hands it to another program.** There is no MIME database and
+no desktop files to register a handler in, so the rule is the one this system
+can justify: a directory is entered, a file called `launch` is a WOS program
+and is run, and anything else opens in `vim` in a new `wlterm` window. What
+opens is a sibling window rather than a child, so closing thunar afterwards
+leaves the editor where it is.
+
+The working directory follows what is being shown, which is what makes `t`
+work: the terminal it opens starts where you were looking, and so does
+anything started from it.
+
+In a window too narrow for both panes — a second window on a 640x400 screen
+gets 320 pixels — the sidebar goes away and the list takes the whole width.
+The shortcuts are the part worth losing first, since every one of them can
+also be reached by walking there.
+
+Writing anywhere needs the same permission it would from a shell. See
+[`docs/users.md`](users.md).
+
+For the same thing on the console, without a compositor, see [`fm`](#fm).
+
+**Exit status:** 0, or 1 if the starting path is not a directory or there is
+no display server to connect to.
+
 ## swaymsg
 
 ```
@@ -1448,6 +1544,8 @@ fm [directory]
 A file manager for the console: one pane, arrow keys, and a line at the bottom
 saying what the keys do. It is the shape `mc` and `ranger` have, without the
 two panes and without the configuration.
+
+For the graphical one, in a window under sway, see [`thunar`](#thunar).
 
 ```
  /home/root                                                          5 items

@@ -92,7 +92,8 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   by unit files in `/services` and managed with `systemctl` — list, start,
   stop, enable, disable.
 - **A graphical session**: `sway`, a tiling Wayland compositor, with `wlterm`
-  as a terminal emulator in it and `swaymsg` to drive it. Type `sway` and
+  as a terminal emulator in it, `thunar` as a file manager and `swaymsg` to
+  drive it. Type `sway` and
   Super+Return opens a window; Super+Shift+E gives the console back with
   everything printed behind it still there. Windows tile in i3's tree,
   configuration is read from `~/.config/sway/config` in sway's own language,
@@ -113,8 +114,10 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   need no setuid.
 - **Applications**: `fish` (a shell that colours commands as you type and
   suggests from history), `vim` (a modal editor with search and hlsearch),
-  `fm` (a file manager), `htop` (a live process monitor, with a meter per core
-  and per filesystem), `stress` (load the machine on purpose) and `fastfetch`
+  `fm` (a file manager for the console) and `thunar` (a graphical one, in a
+  window under sway), `htop` (a live process monitor, with a meter per core
+  and per filesystem, and the processor time each process is using),
+  `stress` (load the machine on purpose) and `fastfetch`
   (system information). These are WOS-native programs
   in the spirit of the originals — see [`docs/apps.md`](docs/apps.md) for what
   the upstream versions would need that WOS does not have.
