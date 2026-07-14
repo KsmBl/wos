@@ -337,34 +337,62 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     run_shell();
 }
 
-/* Launch the shell and keep it running.
+#define LOGIN_PATH "/app/login/launch"
+
+/* What the machine runs once it is up: the login screen if it is installed,
+ * and root's login shell if it is not.
+ *
+ * The fallback is not politeness.  login is the only way to reach a session,
+ * so a machine whose copy of it has gone missing would otherwise be a machine
+ * with no way in -- and deleting /app/login is therefore how you turn the
+ * login screen off, rather than a way to lock yourself out. */
+static void first_program(char *out, size_t cap)
+{
+    uint32_t ino;
+
+    if (wfs_lookup(LOGIN_PATH, &ino) == 0) {
+        strlcpy(out, LOGIN_PATH, cap);
+        return;
+    }
+
+    /* Root's login shell, so `chsh` still decides what a machine with no
+     * login screen starts. */
+    user_shell(W_ROOT_UID, out, cap);
+    if (wfs_lookup(out, &ino) != 0)
+        strlcpy(out, "/app/whell/launch", cap);
+}
+
+/* Launch it and keep it running.
  *
  * This runs on the boot context, which the scheduler has adopted as the idle
  * thread, so it must never block: if it did, and every other thread were
  * waiting too, there would be nothing left to switch to.  Hence the poll and
- * halt rather than a blocking wait. */
+ * halt rather than a blocking wait.
+ *
+ * Restarting is what brings the login screen back when a session ends.  login
+ * drops itself to whoever logged in and cannot climb back, so it exits with
+ * the session rather than trying to; the fresh one started here is a new
+ * process, spawned by the kernel, and therefore root again.
+ *
+ * It is re-read on each relaunch, so installing or removing the login screen
+ * takes effect at the next logout rather than the next boot. */
 static void run_shell(void)
 {
-    /* The boot shell is root's login shell, so `chsh` changes what starts
-     * here.  It is re-read on each (re)launch, and falls back to whell if the
-     * configured one has gone missing. */
-    char     shell[W_SHELL_MAX + 1];
+    char     program[W_SHELL_MAX + 1];
     char    *argv[] = { "shell", NULL };
     uint32_t ino;
 
-    user_shell(W_ROOT_UID, shell, sizeof(shell));
-    if (wfs_lookup(shell, &ino) != 0)
-        strlcpy(shell, "/app/whell/launch", sizeof(shell));
+    first_program(program, sizeof(program));
 
-    if (wfs_lookup(shell, &ino) != 0) {
-        kprintf("\n[kernel] %s is missing; nothing to run.\n", shell);
+    if (wfs_lookup(program, &ino) != 0) {
+        kprintf("\n[kernel] %s is missing; nothing to run.\n", program);
         for (;;)
             hlt();
     }
 
-    int32_t pid = proc_spawn(shell, argv, NULL);
+    int32_t pid = proc_spawn(program, argv, NULL);
     if (pid < 0) {
-        panic("cannot start the shell (error %d)", -pid);
+        panic("cannot start %s (error %d)", program, -pid);
     }
 
     for (;;) {
@@ -374,15 +402,13 @@ static void run_shell(void)
             int32_t status = 0;
             proc_wait(pid, &status);     /* already exited, so returns at once */
 
-            user_shell(W_ROOT_UID, shell, sizeof(shell));
-            if (wfs_lookup(shell, &ino) != 0)
-                strlcpy(shell, "/app/whell/launch", sizeof(shell));
+            first_program(program, sizeof(program));
 
-            kprintf("\n[kernel] the shell exited with status %d; restarting %s\n",
-                    status, shell);
-            pid = proc_spawn(shell, argv, NULL);
+            kprintf("\n[kernel] exited with status %d; restarting %s\n",
+                    status, program);
+            pid = proc_spawn(program, argv, NULL);
             if (pid < 0)
-                panic("cannot restart the shell (error %d)", -pid);
+                panic("cannot restart %s (error %d)", program, -pid);
         }
 
         sti();

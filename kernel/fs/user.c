@@ -370,19 +370,25 @@ void user_init(void)
         }
     }
 
-    /* A system with no root is unusable, so make one.  It starts without a
-     * password: there is no sensible default to ship, and a known one would
-     * be worse than none. */
+    /* A system with no root is unusable, so make one.
+     *
+     * It gets the same password the shipped image gives root -- 1234, the one
+     * in the documentation.  This path is reached only when /userconfig/users
+     * is gone, which is a machine being recovered rather than a machine being
+     * installed, and a recovery that ends at a login screen nobody can get
+     * past is not a recovery.  Change it once you are in; passwd does that. */
     if (!find_by_uid(W_ROOT_UID)) {
         users[0].used  = true;
         users[0].uid   = W_ROOT_UID;
         users[0].roles = 0;         /* root bypasses roles entirely */
-        users[0].salt  = 0;
-        users[0].hash  = 0;         /* 0 means no password set */
+        users[0].salt  = make_salt();
+        users[0].hash  = hash_password(users[0].salt, "1234");
         strlcpy(users[0].name, "root", sizeof(users[0].name));
 
         if (save_user_list() < 0)
             kprintf("user   : could not write %s\n", USER_LIST_FILE);
+        if (save_password(&users[0]) < 0)
+            kprintf("user   : could not write root's password\n");
     }
 
     int count = 0;
