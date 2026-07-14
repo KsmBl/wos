@@ -65,11 +65,20 @@ this console or from a serial terminal:
 | Home / End | `ESC[H` / `ESC[F` |
 | Page Up / Page Down | `ESC[5~` / `ESC[6~` |
 | Delete | `ESC[3~` |
+| F1 – F4 | `ESC OP` / `ESC OQ` / `ESC OR` / `ESC OS` |
+| F5 – F8 | `ESC[15~` / `ESC[17~` / `ESC[18~` / `ESC[19~` |
+| F9 – F12 | `ESC[20~` / `ESC[21~` / `ESC[23~` / `ESC[24~` |
 
 [`wgetkey()`](wkernel-api.md) decodes these into `W_KEY_*` constants, so a
 program does not have to parse them. Special keys are only delivered in raw
 mode — in canonical mode the driver is assembling a line, and an arrow key has
 no meaning within one.
+
+The arrows arrive from the hardware as two-byte scancodes and the function keys
+as one, which is why the driver decodes them in different places; by the time
+they reach a program the difference has gone. Note the gaps in the numbering:
+F5 is 15 rather than 14, and 16 and 22 are skipped. That is the VT220's
+numbering, kept because every terminal since has kept it.
 
 Escape both introduces these sequences and is a key in its own right.
 `wgetkey()` tells them apart by checking whether anything follows immediately,

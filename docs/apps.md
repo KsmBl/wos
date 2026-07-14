@@ -1187,11 +1187,112 @@ is not the usual one.
 
 | Command | What it does |
 |---|---|
+| [`login`](#login) | the login screen, and what starts your session |
 | [`sway`](#sway) | the tiling Wayland compositor |
 | [`wlterm`](#wlterm) | a terminal emulator, as a Wayland client |
+| [`thunar`](#thunar) | a graphical file manager |
 | [`swaymsg`](#swaymsg) | ask sway something, or tell it to do something |
 | [`waylandd`](#waylandd) | a bare display server, for testing clients against |
 | [`wlprobe`](#wlprobe) | list what a display server advertises |
+
+## login
+
+```
+login
+```
+
+The screen the machine boots to. One box per account, the arrows to walk
+between them, and the password typed into the box of whoever you are; a correct
+one starts [`sway`](#sway) as that user.
+
+```
+ WOS                                                        2026-08-10 17:03
+                          Choose an account                          1 of 4
+
+  ╔══════════════════════╗  ┌──────────────────────┐  ┌──────────────────────┐
+  ║         root         ║  │        alice         │  │         bob          │
+  ║    administrator     ║  │       app user       │  │   standard account   │
+  ║                      ║  │                      │  │                      │
+  ║   ┌──────────────┐   ║  │   ┌──────────────┐   │  │   ┌──────────────┐   │
+  ║   │ ▪▪▪▪         │   ║  │   │              │   │  │   │              │   │
+  ║   └──────────────┘   ║  │   └──────────────┘   │  │   └──────────────┘   │
+  ╚══════════════════════╝  └──────────────────────┘  └──────────────────────┘
+
+            Choose an account, type its password, press Enter
+
+  arrows  choose account   Enter  log in   F2  console session   Esc  clear
+```
+
+The account you are on has the double frame as well as the bright one, so it
+reads as chosen on a monitor whose colours have washed out. Accounts that do
+not fit across the screen scroll; the counter in the heading says where in the
+list you are, since with the boxes filling the width there is no room for an
+arrow beside them.
+
+| Key | Effect |
+|---|---|
+| left/right, up/down, Tab | choose an account |
+| Home, End | the first account, the last |
+| printable keys, Backspace | type the password |
+| Enter | log in, and start sway |
+| F2 | log in to a text session on the console instead |
+| Esc | clear the field |
+
+Under each name is what the account is: `administrator` for root, and otherwise
+the [roles](users.md#roles) it holds, or `standard account` for one with none.
+It is the only thing distinguishing two accounts here, there being no avatars
+to load and nowhere to load them from.
+
+An account with **no password** is entered by pressing Enter on an empty field.
+That is not a special case in `login` — it is what the kernel does with an
+account whose password has been cleared, and the login screen is only the place
+you notice.
+
+A wrong password waits about three-quarters of a second before saying so. It
+defeats nothing determined — there is one keyboard and no way to try in
+parallel — but it stops a mistyped password from being retried faster than the
+message can be read.
+
+### What it does when you get it right
+
+Three things, in an order that is forced rather than chosen:
+
+1. **Arm the seat**, with [`wseatgrant()`](wkernel-api.md#int-wseatgrantvoid).
+2. **Check the password**, with `wlogin()`, which on success makes this process
+   that user — permanently, since nothing here can climb back to root.
+3. **Start the session**: `sway`, or the user's [login shell](users.md#commands)
+   for F2. It is spawned, so it collects the armed grant and may take the
+   screen and the keyboard even though it is not root.
+
+Step 1 has to come before step 2, which reads oddly until you notice that
+succeeding at step 2 is what stops this program being able to do step 1. The
+grant is not a hole: it is spent by one spawn, and the only thing `login` ever
+spawns is a session somebody has already given a password for. See
+[the seat](users.md#the-seat-and-the-one-way-past-that-rule).
+
+`login` then waits for the session and exits with it. The kernel starts a fresh
+one — as root again, since the kernel is root — and that is what brings the
+login screen back after a logout, rather than anything here undoing the drop it
+made.
+
+A session that ends **badly** says so and waits for a key first. Without that,
+a machine whose compositor cannot start would loop between a login screen and
+an error nobody can read.
+
+### Turning it off
+
+The kernel runs `/app/login/launch` if it is there and root's login shell if it
+is not, and it looks again on every restart. So deleting `/app/login` is how
+you get a machine that boots straight to a shell, and a machine whose copy has
+gone missing is not a machine you are locked out of.
+
+**F2 gives a text session**, which is the way in on a machine with no
+framebuffer — `login` says so in its heading when it finds none — and the way
+back when the compositor is the thing you are trying to fix. That session
+carries the seat too, so `sway` typed into it still works.
+
+**Exit status:** 0 once a session has ended, 1 if there are no accounts to
+offer or the console is too small to draw the screen on.
 
 ## sway
 
@@ -1202,6 +1303,12 @@ sway
 A tiling Wayland compositor. It takes the screen and the keyboard, draws
 windows on the framebuffer the text console was using, and gives both back when
 it exits.
+
+Normally you do not type this: [`login`](#login) starts it for you when you log
+in, which is the only way a user who is not root gets a compositor at all — it
+runs as you, holding a [seat](users.md#the-seat-and-the-one-way-past-that-rule)
+that `login` granted. Started by hand it needs root, or a shell that was itself
+started by `login` and so carries the seat.
 
 ```
 root@wos:/home/root# sway
@@ -1218,10 +1325,12 @@ root@wos:/home/root# systemctl start sway
 sway: running as pid 7, disabled at boot
 ```
 
-It is disabled at boot on purpose. A compositor that starts before you log in
-takes the console away from you before you have used it, and on a machine where
-the console is also how you fix things that is the wrong default. `systemctl
-enable sway` changes it if you disagree.
+It is disabled at boot on purpose, and now for a sharper reason than before:
+services start *before* anyone logs in, so a compositor among them would take
+the screen out from under the login screen and run as root whoever turns up.
+Logging in is what starts sway, and `login` is what decides who it runs as.
+`systemctl enable sway` still changes that if you disagree — a machine with no
+accounts worth separating may well prefer it.
 
 ### The keys
 

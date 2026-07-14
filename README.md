@@ -18,6 +18,10 @@ make clean
 sudo tools/flash-usb.sh   # put it on a USB stick and boot it on real hardware
 ```
 
+It boots to a login screen. The only account on a fresh image is `root` and its
+password is **`1234`** — a known default, so change it with `passwd` on any
+machine other people can reach. Enter starts the desktop; F2 gives a console.
+
 Requirements: `gcc`, `binutils`, `grub-mkrescue` with the `i386-pc` platform
 modules, `xorriso`, `mtools` and `qemu-system-x86_64`; `dosfstools` to write a
 USB stick.
@@ -91,9 +95,15 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 - **Services**: programs the machine runs rather than a person does, described
   by unit files in `/services` and managed with `systemctl` — list, start,
   stop, enable, disable.
+- **A login screen**: the machine boots to `login`, a full-screen picker with a
+  box per account and a password field in each. A correct password starts a
+  graphical session **as that user** — which needs a seat handed over by root
+  at the moment of login, since one screen and one keyboard cannot be a role.
+  F2 gives a text session instead. Root's password on a fresh image is `1234`;
+  see [`docs/users.md`](docs/users.md).
 - **A graphical session**: `sway`, a tiling Wayland compositor, with `wlterm`
   as a terminal emulator in it, `thunar` as a file manager and `swaymsg` to
-  drive it. Type `sway` and
+  drive it. Logging in starts it, and
   Super+Return opens a window; Super+Shift+E gives the console back with
   everything printed behind it still there. Windows tile in i3's tree,
   configuration is read from `~/.config/sway/config` in sway's own language,

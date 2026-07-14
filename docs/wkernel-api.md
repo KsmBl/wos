@@ -1022,11 +1022,19 @@ Requires raw mode, and blocks until a key is pressed.
 | `W_KEY_HOME` `W_KEY_END` | Home, End |
 | `W_KEY_PGUP` `W_KEY_PGDN` | Page Up, Page Down |
 | `W_KEY_DELETE` | Delete |
+| `W_KEY_F1` … `W_KEY_F12` | the function keys |
 | `W_KEY_ESCAPE` | a bare Escape |
 
 Escape both introduces sequences and is a key in its own right; they are told
 apart by whether anything follows immediately, which is the same guess a
 terminal program makes.
+
+The function keys are sent as the sequences a terminal sends — `ESC O P` for
+F1 to F4, and the numbered `ESC [ 15 ~` form from F5 up, with the gaps at 16
+and 22 that the VT220 left and nothing since has filled in. So a program
+decodes them identically whether the keys came from this console or down the
+serial port. Like the arrows, they exist only in raw mode: in canonical mode
+the driver is assembling a line, and F5 has no meaning within one.
 
 ```c
 wconsole_raw(W_CONSOLE_RAW);
@@ -1225,10 +1233,12 @@ rather than blitting into nothing.
 Take the screen from the console.
 
 There is one screen, so taking it affects every process on the machine. That
-makes it root's to do, in the same way setting the clock is.
+makes it root's to do, in the same way setting the clock is — or a session's,
+when root started it and handed it a seat with
+[`wseatgrant()`](#int-wseatgrantvoid).
 
-**Returns** 0, `-W_EPERM` without root, `-W_ENODEV` on a machine with no
-framebuffer, or `-W_EBUSY` if another process already has it.
+**Returns** 0, `-W_EPERM` without root or a seat, `-W_ENODEV` on a machine with
+no framebuffer, or `-W_EBUSY` if another process already has it.
 
 **The screen is released automatically when the holder exits, however it
 exits.** A compositor that faults does not take the machine's only output with
@@ -1288,8 +1298,41 @@ an event — and wait on it with `wpoll()` alongside everything else.
 being worked around: there is one keyboard, and the holder has it. Closing the
 descriptor, or exiting, gives it straight back.
 
-**Returns** a descriptor, `-W_EPERM` without root, or `-W_EBUSY` if another
-process already holds the keyboard.
+**Returns** a descriptor, `-W_EPERM` without root or a seat, or `-W_EBUSY` if
+another process already holds the keyboard.
+
+## `int wseatgrant(void)`
+
+Arm a seat grant: let the next process this one spawns take the screen and the
+keyboard, whoever it runs as.
+
+The **seat** is both devices together. A session with a screen and no keys is
+not one anybody could use, so `wdisplaygrab()` and `winputopen()` accept the
+same grant and there is no way to hand over half of it.
+
+This exists so a login manager can be written, and its shape is that job's
+shape. Such a program starts as root, checks a password, becomes the user who
+gave it, and starts their session — but a process that drops to a user can
+never climb back, so by the time it has somebody to hand the seat to it is no
+longer anybody who could grant one.
+
+```c
+wseatgrant();                            /* while still root       */
+wlogin(name, password);                  /* now uid 1, no way back */
+wspawn("/app/sway/launch", argv);        /* takes the seat with it */
+```
+
+Arming before the password is checked reads oddly, and is the point: succeeding
+at the check is what stops the program being able to arm. It is not a hole —
+only root may arm, the grant is spent by **one** spawn, and it does not descend
+past that process. The session leader holds the seat; the terminals and editors
+it goes on to start are ordinary processes that cannot take the display from
+the compositor drawing them.
+
+**Returns** 0, or `-W_EPERM` for anyone but root.
+
+See [the seat](users.md#the-seat-and-the-one-way-past-that-rule) and
+[`login`](apps.md#login).
 
 ```c
 typedef struct {

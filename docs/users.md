@@ -117,6 +117,58 @@ everybody at once. It can put anything it likes on the display, including a
 convincing login prompt, and it sees every key anybody types. Handing that out
 short of root would be handing out the machine.
 
+### The seat, and the one way past that rule
+
+A rule that strict would mean only root could ever have a desktop, which is not
+a system anybody wants. So there is exactly one way for a program that is not
+root to take the screen, and it goes through root either way: **root may arm a
+grant, and the next process it spawns collects it.**
+
+```c
+wseatgrant();                            /* while still root      */
+wlogin("bob", password);                 /* now uid 1, no way back */
+wspawn("/app/sway/launch", argv);        /* takes the seat with it */
+```
+
+The screen and the keyboard travel together — a compositor with a display and
+no keys is not a session anyone could use — and the pair of them is what is
+called a **seat**.
+
+That shape is forced by the order the work has to happen in.
+[`login`](apps.md#login) starts as root, checks a password, becomes the user
+who gave it, and starts their session; but a process that drops to a user can
+never climb back, so by the time it has somebody to hand the seat to it is no
+longer anybody who could grant one. Hence granting in advance.
+
+What the grant does not do is widen who may take the screen:
+
+- only root may arm it;
+- it is spent by **one** spawn, and a second spawn gets nothing;
+- it does not descend. The session leader has the seat; the terminals, editors
+  and file managers it goes on to start are ordinary processes, and a program
+  running inside your desktop cannot take the display away from the compositor
+  drawing it.
+
+So the machine still has exactly one path to the screen that does not begin at
+root, and it runs through a program root chose to start. This is what
+`systemd-logind` does for `sddm` and `lightdm`, with the parts that need a
+session bus left out.
+
+### `/ramdisk` is writable by everyone
+
+A session needs somewhere to put its socket and its log, and a session is not
+root, so the in-memory filesystem is writable by every user. It is this
+system's `/tmp`, and it makes the same bargain — stated here rather than
+discovered later:
+
+- nothing in `/ramdisk` is private;
+- with no per-file ownership, nothing there is safe from being overwritten by
+  another account on the machine — including a compositor's socket, so a
+  session's address is only as trustworthy as the accounts that exist;
+- none of it survives a reboot, which is the part that limits the damage.
+
+Every other path keeps the rules in the table above.
+
 ## Passwords
 
 The user database lives under `/userconfig`:
@@ -175,11 +227,20 @@ The salt comes from the timer tick and an address, because WOS has no entropy
 source. It varies between users, which is all a salt has to do, but it is not
 unpredictable.
 
-## Root starts with no password
+## Root's password is `1234`
 
-A fresh image has one account, `root`, with no password set. There is no
-sensible default to ship and a known one would be worse than none, so the
-first thing to do is:
+A fresh image has one account, `root`, and its password is **`1234`**. That is
+what the [login screen](apps.md#login) wants the first time the machine boots.
+
+```
+Choose an account
+        root
+   administrator
+   [ 1234       ]
+```
+
+**It is a known default, published in this file, and every WOS image has the
+same one.** Change it on any machine that other people can reach:
 
 ```
 root@wos:/home/root# passwd
@@ -189,9 +250,21 @@ Retype new password:
 Password updated.
 ```
 
-An account with no password can be entered by anyone who names it. Setting a
-password to the empty string deliberately returns it to that state, and
-`passwd` says so when it happens.
+The alternative was shipping an account with no password at all, which is not
+better — it is the same door, without even a number on it. What a known default
+buys is that the login screen has something to check, so the mechanism is
+exercised from the first boot rather than being a code path nobody meets until
+they set a password by hand.
+
+An account with no password can be entered by anyone who names it: at the login
+screen, pressing Enter on an empty field lets them in. Setting a password to
+the empty string deliberately returns an account to that state, and `passwd`
+says so when it happens.
+
+The same `1234` is used in one other place. If `/userconfig/users` is lost, the
+kernel recreates `root` with it — that path is a machine being recovered rather
+than installed, and a recovery that ends at a login screen nobody can get past
+is not a recovery.
 
 ## Becoming another user
 
@@ -219,8 +292,9 @@ that password to anything first, so asking would be theatre.
 | `adduser [-a] [-u] [-f] [-s] <name>` | create a user, asking for a password; `-a` grants appeditor, `-u` usereditor, `-f` editfreq, `-s` systemctleditor |
 | `edituser <name> [+role] [-role]` | add or remove roles; with no change, prints what they hold |
 
-Each user has a **login shell** — the program started for them at boot (root)
-or by `su`. It is a fourth field on their line in `/userconfig/users`
+Each user has a **login shell** — the program started for them by `su`, and by
+[`login`](apps.md#login) when a text session is asked for with F2. It is a
+fourth field on their line in `/userconfig/users`
 (`name:uid:roles:shell`), defaulting to `whell`, and is changed with
 [`chsh`](apps.md#chsh). Unlike the password, it is not a secret, so it lives in
 the list rather than a protected file.
@@ -255,8 +329,9 @@ carry no meaning, and allowing it would only suggest otherwise.
 - **No locking on the database.** `edituser` reads the current roles and writes
   back the result, so two simultaneous edits would have one overwrite the
   other. With a single console there is no way to try.
-- **No login prompt at boot.** The machine starts a shell as root. `su` is how
-  you become anyone else.
+- **No sessions in parallel.** There is one screen and one keyboard, so there
+  is one session. [`login`](apps.md#login) does not offer to switch users while
+  somebody is logged in; you end the session and the login screen comes back.
 - **No audit trail.** Nothing records who did what.
 
 Adding per-file ownership is the natural next step, and it needs a bigger
