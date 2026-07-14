@@ -85,6 +85,20 @@ typedef struct process {
      * by a successful login. */
     uint32_t     uid;
 
+    /* The seat: the one screen and the one keyboard, together.
+     *
+     * `seat` says this process may take them even though it is not root.  It
+     * is how a session started by the login manager gets a display without
+     * the screen being handed to every user on the machine -- see
+     * sys_seat_grant().
+     *
+     * `seat_pending` is the grant armed but not yet spent: root sets it on
+     * itself, and the next process it spawns is the one that carries it away.
+     * Two fields rather than one because the grant has to be made while the
+     * granter is still root and collected after it is not. */
+    bool         seat;
+    bool         seat_pending;
+
     /* The size of the terminal this process draws to, reported by wconsize().
      * The console is a fixed 80x25; a program started into a pipe by vim's
      * :term is told the size of the window it was given instead. */

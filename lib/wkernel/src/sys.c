@@ -104,6 +104,11 @@ int winputopen(void)
     return (int)wsyscall0(WSYS_INPUTOPEN);
 }
 
+int wseatgrant(void)
+{
+    return (int)wsyscall0(WSYS_SEATGRANT);
+}
+
 int wlisten(const char *path)
 {
     return (int)wsyscall1(WSYS_LISTEN, (long)path);

@@ -480,10 +480,11 @@ int wdisplayinfo(wdisplay_t *out);
  * a compositor has not lost its output.
  *
  * There is one screen, so taking it affects every process on the machine. That
- * makes it root's to do, like setting the clock.
+ * makes it root's to do, like setting the clock -- or a session's, when root
+ * started it and handed it the seat with wseatgrant().
  *
- * @return 0, `-W_EPERM` without root, `-W_ENODEV` on a machine with no
- *         framebuffer, or `-W_EBUSY` if another process already has it.
+ * @return 0, `-W_EPERM` without root or a seat, `-W_ENODEV` on a machine with
+ *         no framebuffer, or `-W_EBUSY` if another process already has it.
  *
  * @note The screen is released automatically when the holder exits, however it
  *       exits. A compositor that faults does not take the display with it.
@@ -528,10 +529,38 @@ int wdisplayblit(const wblit_t *b);
  * Key codes are the Linux evdev codes that `wl_keyboard.key` carries, so a
  * program that knows Wayland already knows these numbers.
  *
- * @return A descriptor, `-W_EPERM` without root, or `-W_EBUSY` if another
- *         process already holds the keyboard.
+ * @return A descriptor, `-W_EPERM` without root or a seat, or `-W_EBUSY` if
+ *         another process already holds the keyboard.
  */
 int winputopen(void);
+
+/**
+ * Arm a seat grant: let the next process this one spawns take the screen and
+ * the keyboard, whoever it runs as.
+ *
+ * The seat is both devices together. A session with a screen and no keys is
+ * not one anybody can use, so wdisplaygrab() and winputopen() accept the same
+ * grant and there is no way to hand over half of it.
+ *
+ * This is for writing a login manager, and its shape is that job's shape. Such
+ * a program starts as root, checks a password, becomes the user who gave it
+ * with wlogin(), and starts their session -- but a process that has dropped to
+ * a user can never climb back, so by the time it has someone to hand the seat
+ * to, it is no longer anyone who could grant it. Hence arming it in advance:
+ *
+ * ```c
+ * wseatgrant();                 // while still root
+ * wlogin(name, password);       // now uid 1, and cannot undo that
+ * wspawn("/app/sway/launch", argv);   // takes the seat with it
+ * ```
+ *
+ * The grant is spent by that one spawn and does not descend any further: the
+ * session leader has the seat, and the terminals and editors it goes on to
+ * start are ordinary processes that cannot take the display from it.
+ *
+ * @return 0, or `-W_EPERM` for anyone but root.
+ */
+int wseatgrant(void);
 
 /* ==================================================================== *
  *  Local sockets

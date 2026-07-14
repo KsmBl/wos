@@ -236,6 +236,15 @@ int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
     p->uid    = parent->uid;        /* a child runs as whoever started it */
     strlcpy(p->cwd, parent->cwd, sizeof(p->cwd));
 
+    /* An armed seat grant is spent here, on the first child spawned after it
+     * was made.  Spent rather than copied: the session leader gets the screen,
+     * and everything it goes on to start -- a terminal, an editor -- is an
+     * ordinary process that cannot take the display from it. */
+    if (parent->seat_pending) {
+        parent->seat_pending = false;
+        p->seat = true;
+    }
+
     /* A child sees the same terminal size as its parent unless it is being
      * given a fresh window of its own below. */
     p->term_rows = parent->term_rows;

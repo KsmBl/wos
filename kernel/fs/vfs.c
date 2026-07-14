@@ -713,6 +713,20 @@ static bool may_write(struct process *p, const char *abs)
     if (path_within(abs, "/services"))
         return user_has_role(p->uid, W_ROLE_SYSCTLEDIT);
 
+    /* The in-memory filesystem is scratch, and shared.  It has to be: a
+     * graphical session puts its socket and its log here and a session does
+     * not run as root, so a root-only /ramdisk would mean only root could
+     * ever have a desktop.
+     *
+     * This is the bargain /tmp makes, with the same two costs stated rather
+     * than discovered.  Nothing here is private, and with no per-file owner
+     * nothing here is safe from being overwritten by another user -- so a
+     * session's socket is only as trustworthy as the accounts on the machine.
+     * None of it survives a reboot, which is the part that limits the damage.
+     */
+    if (path_within(abs, "/ramdisk"))
+        return true;
+
     char home[W_PATH_MAX + 1];
     if (!home_of(p, home, sizeof(home)))
         return false;

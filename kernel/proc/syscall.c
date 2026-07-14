@@ -1021,15 +1021,43 @@ static int64_t sys_dispinfo(uint64_t out)
     return 0;
 }
 
-/* Taking the screen takes it from everybody: whatever the console was showing
- * stops being visible, on the one display the machine has.  That is a
- * system-wide effect in the same way setting the clock is, so it is root's to
- * do -- and a compositor is a service, which runs as root. */
-static int64_t sys_dispgrab(void)
+/* Arm a seat grant: the next process this one spawns may take the screen and
+ * the keyboard, whoever it ends up running as.
+ *
+ * This exists for the login manager, and its shape is that job's shape.  A
+ * display manager starts as root, checks a password, becomes the user who gave
+ * it, and runs their session -- and a process that has dropped to a user can
+ * never climb back, so by the time it has someone to hand the seat to it is no
+ * longer anyone who could grant it.  The grant is therefore made in advance,
+ * while the granter is still root, and collected by the spawn.
+ *
+ * What it does not do is widen who may take the screen.  Only root can arm it,
+ * it is spent by one spawn, and it does not descend past that process: a
+ * session leader has the seat, and the terminals and editors it starts are
+ * ordinary processes.  The machine still has exactly one path to the display
+ * that does not begin at root -- through a program root chose to start.
+ *
+ * @return 0, or -W_EPERM for anyone but root. */
+static int64_t sys_seat_grant(void)
 {
     process_t *p = proc_current();
 
     if (p->uid != W_ROOT_UID)
+        return -W_EPERM;
+
+    p->seat_pending = true;
+    return 0;
+}
+
+/* Taking the screen takes it from everybody: whatever the console was showing
+ * stops being visible, on the one display the machine has.  That is a
+ * system-wide effect in the same way setting the clock is, so it is root's to
+ * do -- or a session's, when root started it and said so. */
+static int64_t sys_dispgrab(void)
+{
+    process_t *p = proc_current();
+
+    if (p->uid != W_ROOT_UID && !p->seat)
         return -W_EPERM;
 
     return display_acquire(p->pid);
@@ -1072,12 +1100,14 @@ static int64_t sys_dispblit(uint64_t arg)
 }
 
 /* Taking the keyboard takes it from the console, on the one keyboard the
- * machine has.  Root's to do, for the same reason taking the screen is. */
+ * machine has.  Root's to do, for the same reason taking the screen is, and
+ * carried by the same grant: a seat is both devices or it is neither, since a
+ * compositor with a screen and no keys is not a session anyone can use. */
 static int64_t sys_input_open(void)
 {
     process_t *p = proc_current();
 
-    if (p->uid != W_ROOT_UID)
+    if (p->uid != W_ROOT_UID && !p->seat)
         return -W_EPERM;
 
     return vfs_input_open(p);
@@ -1184,6 +1214,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_DISPDROP:  r = sys_dispdrop(); break;
     case WSYS_DISPBLIT:  r = sys_dispblit(regs->rdi); break;
     case WSYS_INPUTOPEN: r = sys_input_open(); break;
+    case WSYS_SEATGRANT: r = sys_seat_grant(); break;
     case WSYS_REAP:      r = sys_reap(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
