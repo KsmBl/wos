@@ -109,6 +109,15 @@ client.unfocused #333333 #222222 #888888 #292d2e #222222
 gaps inner 0
 gaps outer 0
 
+# The bar is drawn by the compositor rather than by swaybar -- a bar as a
+# client would need layer-shell, and a window that tiles is not a bar -- so
+# only the settings that mean something here are acted on.  The rest of a real
+# bar block is read and ignored, as it always was.
+bar {
+    position top
+    mode dock
+}
+
 ### Things this compositor has not got
 #
 # Each of these is read and ignored, and says so in /ramdisk/sway.log:
@@ -116,6 +125,5 @@ gaps outer 0
 #   font              one 8x16 font is built in and cannot be changed
 #   floating_modifier nothing floats -- there is no pointer to drag it with
 #   input / seat      the keyboard is whatever the kernel found
-#   bar { ... }       the bar is drawn by the compositor, not by swaybar:
-#                     a bar as a client would need layer-shell, and a window
-#                     that tiles is not a bar
+#   status_command    the bar's right-hand side is the clock and the battery,
+#                     read by the compositor rather than by running a program

@@ -157,6 +157,11 @@ struct config {
     int      bar_top;            /* at the top rather than the bottom */
 };
 
+/* How tall the bar is.  One number, so the row it is drawn on and the rows
+ * left for windows cannot disagree -- they did, and a bar at the top was drawn
+ * over the window under it. */
+#define BAR_HEIGHT 20
+
 /* ------------------------------------------------------------------ *
  *  The compositor
  * ------------------------------------------------------------------ */
@@ -243,5 +248,6 @@ void ipc_shutdown(void);
 /* --- sway.c --- */
 void sway_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void sway_spawn(const char *command);
+void sway_update_usable(void);
 
 #endif /* SWAY_H */

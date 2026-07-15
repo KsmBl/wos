@@ -169,6 +169,20 @@ static void read_input(void)
  *  The bar's clock
  * ------------------------------------------------------------------ */
 
+/* What is left of the screen once the bar has had its strip, and where that
+ * strip is.  Both come from one place because they are one decision: a bar at
+ * the top takes rows off the top, and windows have to start below them.
+ *
+ * Called again whenever the bar is turned off or moved, so `swaymsg bar
+ * position top` rearranges rather than drawing over the window at the top. */
+void sway_update_usable(void)
+{
+    int bar_h = sway.config.bar ? BAR_HEIGHT : 0;
+
+    sway.usable_y = (bar_h && sway.config.bar_top) ? bar_h : 0;
+    sway.usable_h = (int)sway.screen.height - bar_h;
+}
+
 static void update_status(void)
 {
     static uint32_t last_minute = 0xFFFFFFFF;
@@ -295,8 +309,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    sway.usable_y = 0;
-    sway.usable_h = (int)sway.screen.height - (sway.config.bar ? 20 : 0);
+    sway_update_usable();
 
     shell_init();
     layout_init();
@@ -320,9 +333,9 @@ int main(int argc, char **argv)
         config_run_command("bindsym Mod4+Shift+e exit");
     }
 
-    /* The bar height depends on nothing the configuration can change yet, but
-     * `bar` itself can be turned off, so this is settled after reading it. */
-    sway.usable_h = (int)sway.screen.height - (sway.config.bar ? 20 : 0);
+    /* Settled again after the configuration, which can turn the bar off and
+     * can move it to the other end of the screen. */
+    sway_update_usable();
     layout_arrange();
 
     sway.running = 1;

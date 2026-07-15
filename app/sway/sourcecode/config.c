@@ -256,6 +256,61 @@ static void run(char *words[], int count)
         return;
     }
 
+    /* --- the bar --- */
+
+    /* `bar position top`, and the same words the `bar { ... }` block uses --
+     * the block hands its lines here with `bar` put back on the front, so
+     * there is one place that knows what a bar setting means whether it came
+     * from the file or from swaymsg.
+     *
+     * Real sway takes a bar id here (`bar bar-0 position top`) because it can
+     * have several.  There is one bar and it is drawn by the compositor, so
+     * the id is accepted and skipped rather than demanded. */
+    if (strcmp(cmd, "bar") == 0 && count > 1) {
+        int at = 1;
+
+        if (count > 2 && strcmp(config_expand(words[1]), "position") != 0 &&
+                         strcmp(config_expand(words[1]), "mode") != 0)
+            at = 2;                       /* a bar id we do not need */
+
+        const char *what = config_expand(words[at]);
+
+        if (strcmp(what, "position") == 0 && count > at + 1) {
+            const char *where = config_expand(words[at + 1]);
+
+            if (strcmp(where, "top") == 0)
+                sway.config.bar_top = 1;
+            else if (strcmp(where, "bottom") == 0)
+                sway.config.bar_top = 0;
+            else {
+                sway_log("bar position %s: not top or bottom", where);
+                return;
+            }
+        } else if (strcmp(what, "mode") == 0 && count > at + 1) {
+            /* dock is the bar as it is; invisible is the bar turned off.
+             * `hide` would need it to come back on the modifier, which needs
+             * the modifier to be watched while no binding matches. */
+            const char *mode = config_expand(words[at + 1]);
+
+            if (strcmp(mode, "dock") == 0)
+                sway.config.bar = 1;
+            else if (strcmp(mode, "invisible") == 0)
+                sway.config.bar = 0;
+            else {
+                sway_log("bar mode %s: read but not acted on", mode);
+                return;
+            }
+        } else {
+            sway_log("bar %s: read but not acted on", what);
+            return;
+        }
+
+        sway_update_usable();
+        layout_arrange();
+        sway.dirty = 1;
+        return;
+    }
+
     if (strcmp(cmd, "focus") == 0 && count > 1) {
         enum direction dir;
         if (direction_from_name(config_expand(words[1]), &dir))
@@ -531,7 +586,7 @@ void config_defaults(void)
     c->gaps_outer   = 0;
     c->background   = 0x101820;
     c->bar          = 1;
-    c->bar_top      = 0;
+    c->bar_top      = 1;
 
     c->focused.border       = 0x4C7899;
     c->focused.background   = 0x285577;
@@ -555,6 +610,7 @@ void config_defaults(void)
  * it means a real sway configuration file goes through without every line
  * inside being reported as unknown. */
 static int block_depth;
+static int in_bar_block;        /* the block being skipped is a bar's */
 
 static void config_line(char *line)
 {
@@ -573,10 +629,21 @@ static void config_line(char *line)
         return;
 
     if (block_depth > 0) {
-        if (strchr(at, '}'))
-            block_depth--;
-        else if (strchr(at, '{'))
+        if (strchr(at, '}')) {
+            if (--block_depth == 0)
+                in_bar_block = 0;
+        } else if (strchr(at, '{')) {
             block_depth++;
+        } else if (in_bar_block && block_depth == 1) {
+            /* A line inside `bar { ... }`, handed to the ordinary command
+             * table with the word `bar` put back on the front.  So `position
+             * top` in the file and `bar position top` from swaymsg are one
+             * command with one implementation, which is the whole reason this
+             * parser reads both. */
+            char line_with_bar[COMMAND_MAX];
+            wsnprintf(line_with_bar, sizeof(line_with_bar), "bar %s", at);
+            config_run_command(line_with_bar);
+        }
         return;
     }
 
@@ -587,6 +654,11 @@ static void config_line(char *line)
 
         char *words[MAX_WORDS];
         int   n = split(at, words, MAX_WORDS);
+
+        if (n > 0 && strcmp(words[0], "bar") == 0) {
+            in_bar_block = 1;
+            return;
+        }
 
         if (n > 0)
             sway_log("%s { ... }: read but not acted on", words[0]);
@@ -613,6 +685,7 @@ int config_load(const char *path)
     sway.bindings  = NULL;
     variable_count = 0;
     block_depth    = 0;
+    in_bar_block   = 0;
 
     char text[8192];
     int  n = wread(fd, text, sizeof(text) - 1);

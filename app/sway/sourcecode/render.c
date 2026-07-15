@@ -203,7 +203,7 @@ static void draw_bar(void)
     if (!sway.config.bar)
         return;
 
-    int h = 20;
+    int h = BAR_HEIGHT;
     int y = sway.config.bar_top ? 0 : (int)sway.screen.height - h;
     int w = (int)sway.screen.width;
 
