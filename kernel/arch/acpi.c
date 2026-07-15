@@ -401,8 +401,16 @@ static uint16_t pm1_address(uint32_t legacy, const struct acpi_gas *extended)
 /* Walk the root table's list and copy out the first entry whose signature
  * matches.  `min_length` rejects a table too short to hold what the caller is
  * about to read out of it. */
-static struct acpi_header *find_table(const struct acpi_header *root, bool xsdt,
-                                      const char *signature, uint32_t min_length)
+/* The `skip`th table with this signature, rather than the first.
+ *
+ * A machine has one DSDT and any number of SSDTs, and the SSDTs are not
+ * optional extras: a laptop's battery is as likely to be described in one as
+ * in the DSDT.  So the AML loader walks them by index until this returns
+ * nothing, which is why the count is a parameter rather than the first match
+ * being the answer. */
+static struct acpi_header *find_table_nth(const struct acpi_header *root,
+                                          bool xsdt, const char *signature,
+                                          uint32_t min_length, int skip)
 {
     uint32_t entries = (root->length - sizeof(*root)) / (xsdt ? 8 : 4);
     const uint8_t *list = (const uint8_t *)(root + 1);
@@ -423,8 +431,10 @@ static struct acpi_header *find_table(const struct acpi_header *root, bool xsdt,
             continue;
 
         if (memcmp(table->signature, signature, 4) == 0 &&
-            table->length >= min_length)
-            return table;
+            table->length >= min_length) {
+            if (skip-- == 0)
+                return table;
+        }
 
         kfree(table);
     }
@@ -432,10 +442,34 @@ static struct acpi_header *find_table(const struct acpi_header *root, bool xsdt,
     return NULL;
 }
 
+static struct acpi_header *find_table(const struct acpi_header *root, bool xsdt,
+                                      const char *signature, uint32_t min_length)
+{
+    return find_table_nth(root, xsdt, signature, min_length, 0);
+}
+
 /* Where the root table was, so a later caller can go back for a table this
  * file has no interest in itself. */
 static uint64_t root_phys;
 static bool     root_is_xsdt;
+
+/* The DSDT is the one table not listed in the root table: the FADT points at
+ * it.  Remembered here so the AML loader can go back for it without parsing
+ * the FADT a second time. */
+static uint64_t dsdt_phys_saved;
+
+void *acpi_dsdt(uint32_t *length_out)
+{
+    if (length_out)
+        *length_out = 0;
+    if (!dsdt_phys_saved)
+        return NULL;
+
+    struct acpi_header *t = copy_table(dsdt_phys_saved);
+    if (t && length_out)
+        *length_out = t->length;
+    return t;
+}
 
 void *acpi_table(const char *signature, uint32_t *length_out)
 {
@@ -450,6 +484,26 @@ void *acpi_table(const char *signature, uint32_t *length_out)
 
     struct acpi_header *table =
         find_table(root, root_is_xsdt, signature, sizeof(*root));
+    kfree(root);
+
+    if (table && length_out)
+        *length_out = table->length;
+    return table;
+}
+
+void *acpi_table_nth(const char *signature, int index, uint32_t *length_out)
+{
+    if (length_out)
+        *length_out = 0;
+    if (!root_phys)
+        return NULL;
+
+    struct acpi_header *root = copy_table(root_phys);
+    if (!root)
+        return NULL;
+
+    struct acpi_header *table =
+        find_table_nth(root, root_is_xsdt, signature, sizeof(*root), index);
     kfree(root);
 
     if (table && length_out)
@@ -509,6 +563,8 @@ void acpi_init(const struct multiboot_info *mbi)
     if (!dsdt_phys && FADT_HAS(fadt, x_dsdt))
         dsdt_phys = fadt->x_dsdt;
     kfree((struct acpi_fadt *)fadt);
+
+    dsdt_phys_saved = dsdt_phys;
 
     struct acpi_header *dsdt = copy_table(dsdt_phys);
     if (!dsdt)
