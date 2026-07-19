@@ -27,6 +27,7 @@
 #include "net.h"
 #include "rtc.h"
 #include "acpi.h"
+#include "aml.h"
 #include "cpu.h"
 #include "battery.h"
 #include "user.h"
@@ -196,6 +197,11 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
         else
             kputs("acpi   : no soft-off found; the machine can only halt\n");
     }
+
+    /* The rest of what the firmware has to say, which is a bytecode and needs
+     * interpreting rather than reading.  After acpi_init(), which found the
+     * tables; before the battery, which asks it questions. */
+    aml_init();
 
     /* After ACPI, which is where the processor list comes from, and after the
      * timer, which is what a clock gets measured against. */
