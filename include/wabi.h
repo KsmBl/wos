@@ -389,7 +389,10 @@ typedef struct {
  *  against, so a client that knows Wayland already knows these numbers.
  * ------------------------------------------------------------------ */
 
-#define W_INPUT_KEY 1        /* a key went down or came up */
+#define W_INPUT_KEY            1  /* a key went down or came up      */
+#define W_INPUT_POINTER_MOTION 2  /* the pointer moved               */
+#define W_INPUT_POINTER_BUTTON 3  /* a mouse button went up or down  */
+#define W_INPUT_POINTER_AXIS   4  /* the wheel turned                */
 
 /* Modifiers, in the bit positions XKB gives them -- so this value is the one
  * wl_keyboard.modifiers carries, without translation. */
@@ -400,15 +403,35 @@ typedef struct {
 #define W_MOD_LOGO  (1u << 6)   /* Mod4: the Super key, sway's default $mod */
 
 typedef struct {
-    uint32_t type;       /* W_INPUT_KEY                                   */
-    uint32_t code;       /* evdev key code                                */
+    uint32_t type;       /* W_INPUT_*                                     */
+    uint32_t code;       /* evdev key code, or W_BTN_* for a button, or
+                          * the axis for a wheel event                    */
     uint32_t state;      /* 1 pressed, 0 released                         */
     uint32_t mods;       /* W_MOD_* held, as of after this event          */
     uint32_t unicode;    /* the character it would produce, or 0 for none
                           * -- a convenience, so a program that only wants
                           * text need not carry a keymap of its own       */
     uint32_t time_ms;    /* milliseconds since boot, for wl_keyboard.key  */
+
+    /* Where the pointer is, in pixels, and how far it just moved.  Absolute
+     * as well as relative because the two have different owners: only the
+     * kernel knows how big the screen is and can stop the pointer leaving it,
+     * and only the compositor knows what is under a given pixel.  A keyboard
+     * event carries the position too, unchanged, so a client that wants to
+     * know where the pointer was when a key was pressed has it. */
+    int32_t  x, y;
+    int32_t  dx, dy;     /* for a wheel event, dy is the number of steps  */
 } winput_t;
+
+/* Buttons, in the evdev numbering wl_pointer.button carries -- so, as with the
+ * key codes, the number that goes on the wire is the number that arrives. */
+#define W_BTN_LEFT   0x110
+#define W_BTN_RIGHT  0x111
+#define W_BTN_MIDDLE 0x112
+
+/* Wheel axes, in wl_pointer.axis's numbering. */
+#define W_AXIS_VERTICAL   0
+#define W_AXIS_HORIZONTAL 1
 
 /* A few evdev codes worth naming, because a compositor's default bindings are
  * written in terms of them. */

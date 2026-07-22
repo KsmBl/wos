@@ -8,6 +8,8 @@
 #include "sched.h"
 #include "pit.h"
 #include "proc.h"
+#include "mouse.h"
+#include "string.h"
 
 #define KBD_DATA   0x60
 #define KBD_STATUS 0x64
@@ -226,15 +228,58 @@ static void event_push(uint32_t code, bool pressed, uint32_t unicode)
     if (next == event_tail)
         return;                     /* full: drop the oldest end of the type */
 
-    event_ring[event_head].type    = W_INPUT_KEY;
-    event_ring[event_head].code    = code;
-    event_ring[event_head].state   = pressed ? 1 : 0;
-    event_ring[event_head].mods    = modifier_mask();
-    event_ring[event_head].unicode = unicode;
-    event_ring[event_head].time_ms = pit_uptime_ms();
+    /* Cleared before it is filled, because the slot holds whatever event was
+     * in it a ring ago.  Without this a key event would carry the pointer
+     * position from some earlier motion, which is worse than carrying none. */
+    winput_t e;
+    memset(&e, 0, sizeof(e));
 
+    /* Where the pointer is, so a client that wants to know where the mouse
+     * was when a key was pressed does not have to track it. */
+    mouse_position(&e.x, &e.y);
+
+    e.type    = W_INPUT_KEY;
+    e.code    = code;
+    e.state   = pressed ? 1 : 0;
+    e.mods    = modifier_mask();
+    e.unicode = unicode;
+    e.time_ms = pit_uptime_ms();
+
+    event_ring[event_head] = e;
     event_head = next;
     sched_wake(WAIT_INPUT);
+}
+
+/* The same ring, filled by the mouse.
+ *
+ * One stream for both devices, because a compositor wants them interleaved in
+ * the order they happened: a click that arrives before the motion that led to
+ * it lands on whatever used to be under the pointer.  Two rings could not
+ * promise that, and the reader would have to merge them by timestamp.
+ *
+ * The event is dropped when nobody is in event mode, for the same reason a
+ * keystroke is: the console has nothing to do with a pointer, and a ring
+ * filling up behind a console that will never read it is a ring that loses the
+ * events of whoever opens the device next. */
+void keyboard_push_input(const winput_t *e)
+{
+    if (event_refs == 0)
+        return;
+
+    size_t next = (event_head + 1) % EVENT_RING;
+    if (next == event_tail)
+        return;
+
+    event_ring[event_head] = *e;
+    event_head = next;
+    sched_wake(WAIT_INPUT);
+}
+
+/* What is held right now, for an event the mouse is filling in.  A click while
+ * Shift is down has to say so, and only this file knows. */
+uint32_t keyboard_modifiers(void)
+{
+    return modifier_mask();
 }
 
 /* One scancode, in event mode.  Every key produces an event, modifiers

@@ -16,6 +16,7 @@
 #include "pic.h"
 #include "pit.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "pmm.h"
 #include "kheap.h"
 #include "paging.h"
@@ -244,6 +245,10 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     } else {
         kputs("video  : no framebuffer; staying in VGA text mode\n");
     }
+
+    /* After the display, because the pointer is clamped to the screen and the
+     * driver has to know how big it is before the first movement. */
+    mouse_init();
 
     if (ata_init()) {
         uint32_t sectors = ata_sector_count();

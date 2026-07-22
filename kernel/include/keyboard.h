@@ -64,4 +64,12 @@ bool keyboard_events_pending(void);
  * how many were written. */
 int keyboard_read_events(winput_t *out, int max);
 
+/* Put an event into that same stream from another driver.  The mouse uses it:
+ * one device as far as a reader is concerned, so that a click and the motion
+ * that led to it arrive in the order they happened. */
+void keyboard_push_input(const winput_t *e);
+
+/* The modifiers held right now, for a driver filling in an event of its own. */
+uint32_t keyboard_modifiers(void);
+
 #endif /* WOS_KEYBOARD_H */
