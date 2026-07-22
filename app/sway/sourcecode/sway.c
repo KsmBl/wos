@@ -166,7 +166,7 @@ static void read_input(void)
 }
 
 /* ------------------------------------------------------------------ *
- *  The bar's clock
+ *  The bar's right-hand side
  * ------------------------------------------------------------------ */
 
 /* What is left of the screen once the bar has had its strip, and where that
@@ -183,21 +183,80 @@ void sway_update_usable(void)
     sway.usable_h = (int)sway.screen.height - bar_h;
 }
 
+/* The battery, written the way a bar writes it: a percentage, and a mark
+ * saying which way it is going.
+ *
+ * Everything here can be missing, and each absence means something different.
+ * A machine with no battery says nothing at all rather than 0%.  A machine
+ * with a battery whose charge cannot be read says so -- that is a laptop whose
+ * firmware this kernel could not run, and printing a number there would be
+ * inventing one.  Only on mains, with no pack, is the mark on its own enough.
+ */
+static void battery_text(char *out, wsize_t size)
+{
+    wbattery_t b;
+
+    out[0] = '\0';
+
+    if (wbattery(&b) < 0 || (!b.present && b.ac_online < 0))
+        return;
+
+    if (!b.present) {
+        strlcpy(out, b.ac_online ? "AC" : "", size);
+        return;
+    }
+
+    /* A word rather than a symbol.  The arrows a real bar uses are not in the
+     * 8x16 font, and the obvious ASCII stand-ins do not survive being put in
+     * front of a number: "-50%" reads as minus fifty. */
+    const char *what = (b.state == W_BATTERY_CHARGING)    ? "CHG"
+                     : (b.state == W_BATTERY_DISCHARGING) ? "BAT"
+                                                          : "AC";
+
+    if (b.charge_percent < 0) {
+        strlcpy(out, "BAT ?", size);
+        return;
+    }
+
+    wsnprintf(out, size, "%s %d%%", what, b.charge_percent);
+}
+
 static void update_status(void)
 {
-    static uint32_t last_minute = 0xFFFFFFFF;
+    static uint32_t last_minute  = 0xFFFFFFFF;
+    static uint32_t last_battery = 0xFFFFFFFF;
     wtime_t         now;
 
     if (wtime_get(&now) < 0)
         return;
 
+    char battery[24];
+    battery_text(battery, sizeof(battery));
+
+    /* Redrawn when either half changes.  The clock moves once a minute and the
+     * charge moves whenever it likes, so watching only the clock would leave a
+     * percentage up to a minute stale -- which on a machine being unplugged is
+     * exactly when somebody is looking at it. */
     uint32_t minute = (uint32_t)(now.hour * 60 + now.minute);
-    if (minute == last_minute)
+    uint32_t stamp  = 0;
+
+    for (const char *p = battery; *p; p++)
+        stamp = stamp * 31 + (uint8_t)*p;
+
+    if (minute == last_minute && stamp == last_battery)
         return;
 
-    last_minute = minute;
-    wsnprintf(sway.status, sizeof(sway.status), "%04d-%02d-%02d  %02d:%02d",
-              now.year, now.month, now.day, now.hour, now.minute);
+    last_minute  = minute;
+    last_battery = stamp;
+
+    if (battery[0])
+        wsnprintf(sway.status, sizeof(sway.status),
+                  "%s   %04d-%02d-%02d  %02d:%02d", battery,
+                  now.year, now.month, now.day, now.hour, now.minute);
+    else
+        wsnprintf(sway.status, sizeof(sway.status), "%04d-%02d-%02d  %02d:%02d",
+                  now.year, now.month, now.day, now.hour, now.minute);
+
     sway.dirty = 1;
 }
 
