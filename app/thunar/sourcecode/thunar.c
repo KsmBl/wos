@@ -131,6 +131,7 @@ static struct {
     struct wl_shm        *shm;
     struct wl_seat       *seat;
     struct wl_keyboard   *keyboard;
+    struct wl_pointer    *pointer;
     struct xdg_wm_base   *wm_base;
 
     struct wl_surface   *surface;
@@ -149,6 +150,19 @@ static struct {
     int redraw;
 
     uint32_t mods;
+
+    /* Where the pointer is, tracked from the motion events.  A button event
+     * does not carry a position -- the protocol says the pointer is wherever
+     * the last motion put it -- so a click can only be placed by having
+     * followed it there. */
+    int      ptr_x, ptr_y;
+    int      ptr_in;
+
+    /* For telling a double click from two clicks: when and where the last one
+     * was.  Both, because two clicks on different rows are two clicks however
+     * quickly they arrive. */
+    uint32_t last_click_ms;
+    int      last_click_row;
 } app;
 
 static struct entry entries[MAX_ENTRIES];
@@ -1472,6 +1486,164 @@ static void keyboard_repeat(void *data, struct wl_keyboard *keyboard,
 {
 }
 
+/* ------------------------------------------------------------------ *
+ *  The pointer
+ *
+ *  The window was keyboard-only because the machine had no mouse.  It has one
+ *  now, and the shape Thunar has is a shape built for clicking: the sidebar is
+ *  a list of places to click, and a file is opened by double-clicking it.  The
+ *  keys all still work, because a file manager that needs a mouse is worse
+ *  than one that does not.
+ * ------------------------------------------------------------------ */
+
+/* Which row of the sidebar a y coordinate is on, or -1.  Laid out the same way
+ * draw_sidebar() lays it out -- the heading, then a row each. */
+static int place_row_at(int y)
+{
+    int top_y = TOOLBAR_H + 6 + CELL_H + 6;
+
+    if (y < top_y || y >= app.height - STATUS_H)
+        return -1;
+
+    int row = (y - top_y) / ROW_H;
+    return row < place_count ? row : -1;
+}
+
+/* Which entry a y coordinate is on, or -1.  `top` is the first row shown, so
+ * this is the scroll position plus however far down the list the click was. */
+static int file_row_at(int y)
+{
+    if (y < list_y() || y >= list_y() + list_height())
+        return -1;
+
+    int row = top + (y - list_y()) / ROW_H;
+    return (row >= 0 && row < count) ? row : -1;
+}
+
+static void pointer_enter(void *data, struct wl_pointer *pointer,
+                          uint32_t serial, struct wl_surface *surface,
+                          wl_fixed_t sx, wl_fixed_t sy)
+{
+    app.ptr_x  = wl_fixed_to_int(sx);
+    app.ptr_y  = wl_fixed_to_int(sy);
+    app.ptr_in = 1;
+}
+
+static void pointer_leave(void *data, struct wl_pointer *pointer,
+                          uint32_t serial, struct wl_surface *surface)
+{
+    app.ptr_in = 0;
+}
+
+static void pointer_motion(void *data, struct wl_pointer *pointer,
+                           uint32_t time, wl_fixed_t sx, wl_fixed_t sy)
+{
+    app.ptr_x  = wl_fixed_to_int(sx);
+    app.ptr_y  = wl_fixed_to_int(sy);
+    app.ptr_in = 1;
+}
+
+static void pointer_button(void *data, struct wl_pointer *pointer,
+                           uint32_t serial, uint32_t time, uint32_t button,
+                           uint32_t state)
+{
+    if (state != WL_POINTER_BUTTON_STATE_PRESSED)
+        return;
+
+    /* A dialog is asking for a name or a yes.  Clicking behind it would act on
+     * something the person cannot see the state of, so it does not. */
+    if (mode != MODE_BROWSE)
+        return;
+
+    if (button != W_BTN_LEFT && button != W_BTN_MIDDLE)
+        return;
+
+    int x = app.ptr_x;
+    int y = app.ptr_y;
+
+    say_nothing();
+
+    /* The sidebar: one click goes there.  A place is a shortcut and a shortcut
+     * that needed two clicks would not be one -- which is also how Thunar
+     * itself treats them, and the one asymmetry with the file list worth
+     * having. */
+    if (sidebar_w() && x < sidebar_w()) {
+        int row = place_row_at(y);
+
+        focus = PANE_PLACES;
+
+        if (row >= 0) {
+            place_at = row;
+            go_to(places[row].path);
+            focus = PANE_FILES;
+        }
+
+        app.redraw = 1;
+        return;
+    }
+
+    /* The location bar and the status line have nothing to click. */
+    if (y < list_y() || y >= list_y() + list_height())
+        return;
+
+    focus = PANE_FILES;
+
+    int row = file_row_at(y);
+    if (row < 0) {
+        app.redraw = 1;
+        return;
+    }
+
+    /* Two clicks on the same row, close enough together, is one double click.
+     * A quarter of a second is the interval every toolkit settles on, and the
+     * row has to match because two clicks on different files are two clicks
+     * however fast the hand was. */
+    int same    = (row == app.last_click_row);
+    int quickly = (time - app.last_click_ms) < 400;
+
+    selected = row;
+
+    if (same && quickly) {
+        app.last_click_ms  = 0;
+        app.last_click_row = -1;
+        open_selected();
+    } else {
+        app.last_click_ms  = time;
+        app.last_click_row = row;
+    }
+
+    app.redraw = 1;
+}
+
+/* The wheel scrolls the file list, and moves the selection with it rather than
+ * leaving it behind off the top of the window -- there is one selection here
+ * and it is also the cursor, so a selection that has scrolled out of sight is
+ * one whose next arrow key jumps somewhere unexpected. */
+static void pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
+                         uint32_t axis, wl_fixed_t value)
+{
+    if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL || mode != MODE_BROWSE)
+        return;
+
+    int steps = wl_fixed_to_int(value) / 10;
+
+    if (steps == 0)
+        steps = (value > 0) ? 1 : -1;
+
+    selected += steps * 3;
+
+    if (selected < 0)
+        selected = 0;
+    if (selected >= count)
+        selected = count ? count - 1 : 0;
+
+    app.redraw = 1;
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+    pointer_enter, pointer_leave, pointer_motion, pointer_button, pointer_axis,
+};
+
 static const struct wl_keyboard_listener keyboard_listener = {
     keyboard_keymap, keyboard_enter, keyboard_leave, keyboard_key,
     keyboard_modifiers, keyboard_repeat,
@@ -1485,10 +1657,14 @@ static void seat_capabilities(void *data, struct wl_seat *seat,
         wl_keyboard_add_listener(app.keyboard, &keyboard_listener, NULL);
     }
 
-    /* There is deliberately no wl_pointer here.  WOS has no mouse driver, so
-     * the capability never arrives; asking for one anyway and waiting for
-     * motion events that cannot happen is how a program ends up looking
-     * broken rather than looking keyboard-driven. */
+    /* Asked for only when the compositor says there is one.  On a machine
+     * with no mouse the capability never arrives, and a program that took a
+     * pointer anyway and waited for motion would look broken rather than
+     * keyboard-driven. */
+    if ((capabilities & WL_SEAT_CAPABILITY_POINTER) && !app.pointer) {
+        app.pointer = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(app.pointer, &pointer_listener, NULL);
+    }
 }
 
 static void seat_name(void *data, struct wl_seat *seat, const char *name)
@@ -1546,10 +1722,13 @@ static const struct wl_registry_listener registry_listener = {
 
 int main(int argc, char **argv)
 {
-    app.width   = 720;
-    app.height  = 460;
-    app.shm_fd  = -1;
-    app.running = 1;
+    app.width          = 720;
+    app.height         = 460;
+    app.shm_fd         = -1;
+    app.running        = 1;
+
+    /* No row, so the first click can never be the second half of a double. */
+    app.last_click_row = -1;
 
     if (argc > 1) {
         strlcpy(path, argv[1], sizeof(path));
