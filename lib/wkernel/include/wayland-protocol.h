@@ -157,6 +157,12 @@ const struct wl_interface *wl_interface_by_name(const char *name);
 #define WL_POINTER_BUTTON           3
 #define WL_POINTER_AXIS             4
 
+#define WL_POINTER_BUTTON_STATE_RELEASED 0
+#define WL_POINTER_BUTTON_STATE_PRESSED  1
+
+#define WL_POINTER_AXIS_VERTICAL_SCROLL   0
+#define WL_POINTER_AXIS_HORIZONTAL_SCROLL 1
+
 /* wl_output */
 #define WL_OUTPUT_RELEASE           0
 #define WL_OUTPUT_GEOMETRY          0
