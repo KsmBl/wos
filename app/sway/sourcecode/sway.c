@@ -153,6 +153,138 @@ static void handle_key(const winput_t *ev)
     }
 }
 
+/* ------------------------------------------------------------------ *
+ *  The pointer
+ * ------------------------------------------------------------------ */
+
+/* Which view is under a point on the screen.
+ *
+ * Walked front to back, which on a tiling compositor is the same as any order
+ * -- windows do not overlap -- except for a fullscreen one, which covers the
+ * workspace and is therefore checked first.  The rectangle is the frame,
+ * title bar and border included, because clicking a title bar is clicking the
+ * window. */
+static struct view *view_at(int x, int y)
+{
+    struct workspace *ws = ws_current();
+
+    if (ws->fullscreen)
+        return ws->fullscreen->mapped ? ws->fullscreen : NULL;
+
+    for (struct view *v = sway.views; v; v = v->next) {
+        if (!v->mapped || v->node == NULL)
+            continue;
+
+        /* A view on another workspace is laid out but not on screen. */
+        if (layout_workspace_of(v) != sway.current)
+            continue;
+
+        if (x >= v->x && x < v->x + v->w && y >= v->y && y < v->y + v->h)
+            return v;
+    }
+
+    return NULL;
+}
+
+/* The client's own top-left corner, which is inside the decoration the
+ * compositor drew.  A client is never told about its frame, so a coordinate
+ * measured from the frame would be off by the border and the title bar --
+ * which is exactly the kind of error that puts a text cursor one line out. */
+static void surface_local(struct view *v, int x, int y, int *sx, int *sy)
+{
+    *sx = x - (v->x + sway.config.border_width);
+    *sy = y - (v->y + sway.config.title_height + sway.config.border_width);
+}
+
+/* A click on the bar: the workspace blocks are the only part of it that does
+ * anything, and they are laid out here the same way draw_bar() lays them out.
+ * Non-zero when the click was the bar's, whether or not it hit a block -- a
+ * click on the empty half of the bar must not also reach the window under it. */
+static int bar_click(int x, int y)
+{
+    if (!sway.config.bar)
+        return 0;
+
+    int bar_y = sway.config.bar_top ? 0 : (int)sway.screen.height - BAR_HEIGHT;
+
+    if (y < bar_y || y >= bar_y + BAR_HEIGHT)
+        return 0;
+
+    int at = 0;
+
+    for (int i = 0; i < MAX_WORKSPACES; i++) {
+        struct workspace *ws = &sway.workspaces[i];
+
+        if (i != sway.current && layout_view_count(ws) == 0)
+            continue;
+
+        int width = render_text_width(ws->name) + 16;
+
+        if (x >= at && x < at + width) {
+            layout_switch_workspace(i + 1);
+            return 1;
+        }
+
+        at += width;
+    }
+
+    return 1;
+}
+
+/* Where the pointer is now, and what that means for who has it.
+ *
+ * Enter and leave are sent only when the view under the cursor changes, which
+ * is what the protocol requires: a client that received an enter for every
+ * motion event would redraw its hover state continuously. */
+static void pointer_moved(const winput_t *ev)
+{
+    sway.cursor_x = ev->x;
+    sway.cursor_y = ev->y;
+    sway.dirty    = 1;                 /* the cursor itself has to be redrawn */
+
+    struct view *now = view_at(ev->x, ev->y);
+
+    if (now != sway.pointer_focus) {
+        shell_pointer_leave(sway.pointer_focus);
+        sway.pointer_focus = now;
+
+        if (now) {
+            int sx, sy;
+            surface_local(now, ev->x, ev->y, &sx, &sy);
+            shell_pointer_enter(now, sx, sy);
+        }
+    }
+
+    if (now) {
+        int sx, sy;
+        surface_local(now, ev->x, ev->y, &sx, &sy);
+        shell_pointer_motion(now, ev->time_ms, sx, sy);
+    }
+}
+
+static void pointer_button(const winput_t *ev)
+{
+    sway.mods = ev->mods;
+
+    if (ev->state && bar_click(ev->x, ev->y))
+        return;
+
+    struct view *v = sway.pointer_focus;
+
+    /* Click to focus, on the press rather than the release: a click that
+     * focuses and a click that the window acts on are the same click, and the
+     * window must already have the keyboard by the time it hears about it. */
+    if (ev->state && v && v != sway.focused)
+        layout_focus(v);
+
+    shell_pointer_button(v, ev->time_ms, ev->code, ev->state);
+}
+
+static void pointer_axis(const winput_t *ev)
+{
+    shell_pointer_axis(sway.pointer_focus, ev->time_ms, ev->code, ev->dy);
+}
+
 static void read_input(void)
 {
     winput_t events[16];
@@ -161,8 +293,17 @@ static void read_input(void)
     if (n <= 0)
         return;
 
-    for (int i = 0; i < n / (int)sizeof(events[0]); i++)
-        handle_key(&events[i]);
+    for (int i = 0; i < n / (int)sizeof(events[0]); i++) {
+        const winput_t *ev = &events[i];
+
+        switch (ev->type) {
+        case W_INPUT_KEY:            handle_key(ev);    break;
+        case W_INPUT_POINTER_MOTION: pointer_moved(ev); break;
+        case W_INPUT_POINTER_BUTTON: pointer_button(ev); break;
+        case W_INPUT_POINTER_AXIS:   pointer_axis(ev);  break;
+        default: break;
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -366,6 +507,20 @@ int main(int argc, char **argv)
                  wstrerror(-sway.input_fd));
         wdisplaydrop();
         return 1;
+    }
+
+    /* Whether there is a pointer at all decides what the seat advertises and
+     * whether a cursor is drawn, so it is settled before any client can bind
+     * the seat and hear the answer.  Telling clients there is a mouse when
+     * there is not leaves them waiting for motion that never comes. */
+    {
+        wpointer_t pointer;
+
+        if (wpointer(&pointer) == 0 && pointer.present) {
+            sway.have_pointer = 1;
+            sway.cursor_x     = pointer.x;
+            sway.cursor_y     = pointer.y;
+        }
     }
 
     sway_update_usable();

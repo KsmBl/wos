@@ -15,6 +15,26 @@
 
 #include "sway.h"
 
+/* Which workspace a view is on: found by climbing to the root of its node
+ * tree and asking which workspace that root belongs to.  A view knows its node
+ * and a node knows its parent, so the answer is up rather than stored -- one
+ * fewer field to keep true when a window is moved. */
+int layout_workspace_of(const struct view *v)
+{
+    if (!v || !v->node)
+        return -1;
+
+    const struct node *root = v->node;
+    while (root->parent)
+        root = root->parent;
+
+    for (int i = 0; i < MAX_WORKSPACES; i++)
+        if (sway.workspaces[i].root == root)
+            return i;
+
+    return -1;
+}
+
 struct workspace *ws_current(void)
 {
     return &sway.workspaces[sway.current];

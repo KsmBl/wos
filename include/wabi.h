@@ -429,6 +429,15 @@ typedef struct {
 #define W_BTN_RIGHT  0x111
 #define W_BTN_MIDDLE 0x112
 
+/* What the machine's pointer is doing, for a program that wants to know
+ * without having watched every event -- a compositor deciding whether to
+ * advertise one at all, and where to put the cursor before the first
+ * movement. */
+typedef struct {
+    uint32_t present;    /* 0 when the machine has no pointing device */
+    int32_t  x, y;       /* where it is, in pixels                    */
+} wpointer_t;
+
 /* Wheel axes, in wl_pointer.axis's numbering. */
 #define W_AXIS_VERTICAL   0
 #define W_AXIS_HORIZONTAL 1
@@ -624,7 +633,8 @@ typedef struct {
 #define WSYS_INPUTOPEN  72
 #define WSYS_REAP       73
 #define WSYS_SEATGRANT  74
-#define WSYS_MAX        75
+#define WSYS_POINTER    75
+#define WSYS_MAX        76
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0
