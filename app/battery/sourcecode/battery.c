@@ -3,12 +3,16 @@
  *   battery        what the firmware says about the pack
  *   battery -s     one line, for a prompt or a script
  *
- * The charge is the one thing not here, and the reason is worth stating rather
- * than hiding behind a dash: a laptop reports its charge through an ACPI
- * method that reads the embedded controller, and calling one means
- * interpreting AML bytecode.  WOS has no interpreter.  Everything static --
- * that there is a battery, who made it, what it holds when new -- comes out of
- * the firmware's tables without running anything, and that is what this shows.
+ * The charge used to be the one thing not here, because reading it means
+ * running `_BST` -- an ACPI method that talks to the embedded controller --
+ * and there was no interpreter to run it with.  There is one now, so the
+ * figure is shown when the firmware will give it.
+ *
+ * It can still be missing, and the two ways it can be missing are different
+ * things.  A machine with no battery has nothing to report.  A machine with a
+ * battery whose `_BST` did not run, or which has no `_BST` at all, is a laptop
+ * whose firmware this kernel could not follow -- and that says so, because a
+ * dash where a number should be is a question, not an answer.
  */
 
 #include <wkernel.h>
@@ -102,12 +106,12 @@ int main(int argc, char **argv)
     } else {
         wprintf("charge   : not readable\n");
         wprintf("\n");
-        wprintf("The charge is reported by an ACPI method that reads the\n");
-        wprintf("embedded controller, and calling one means interpreting AML\n");
-        wprintf("bytecode. WOS has no interpreter, so everything above comes\n");
-        wprintf("from the firmware's tables, read without running anything,\n");
-        wprintf("and the one figure that changes minute to minute is missing\n");
-        wprintf("rather than guessed at.\n");
+        wprintf("The charge comes from _BST, an ACPI method that reads the\n");
+        wprintf("embedded controller. The kernel has an interpreter for those\n");
+        wprintf("now, so this means one of two things: the firmware declares\n");
+        wprintf("no _BST for this pack, or the method used something the\n");
+        wprintf("interpreter does not implement and stopped rather than\n");
+        wprintf("returning a number nobody measured. The boot log says which.\n");
     }
 
     if (b.ac_online == 1)
