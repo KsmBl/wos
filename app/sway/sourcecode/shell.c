@@ -1009,11 +1009,17 @@ static void send_axis(struct wl_resource *p, void *user)
 {
     struct axis_args *a = user;
 
-    /* One wheel notch is ten units upstream, and the sign is the direction
-     * the surface content should move rather than the direction the wheel
-     * turned -- which is why scrolling down is a positive value. */
+    /* One wheel notch is ten units upstream, and the sign is the direction the
+     * surface content should move rather than the direction the wheel turned:
+     * scrolling down is positive.
+     *
+     * Which is the sign the kernel already reports.  A PS/2 wheel counts down
+     * when it is turned away from the user, so the driver's steps and
+     * wl_pointer.axis agree, and negating them here sent every client the
+     * opposite of what happened -- wlterm answered a scroll upwards with a
+     * page downwards. */
     wl_resource_post_event(p, WL_POINTER_AXIS, a->time, a->axis,
-                           wl_fixed_from_int(-a->steps * 10));
+                           wl_fixed_from_int(a->steps * 10));
 }
 
 void shell_pointer_enter(struct view *v, int sx, int sy)

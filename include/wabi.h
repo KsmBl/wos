@@ -420,7 +420,12 @@ typedef struct {
      * event carries the position too, unchanged, so a client that wants to
      * know where the pointer was when a key was pressed has it. */
     int32_t  x, y;
-    int32_t  dx, dy;     /* for a wheel event, dy is the number of steps  */
+
+    /* For a wheel event, dy is the number of notches, counting *down* when
+     * the wheel is turned away from the user -- the sign the mouse itself
+     * reports, and the same sign wl_pointer.axis carries, so a compositor
+     * passes it on rather than deciding which way up a wheel is. */
+    int32_t  dx, dy;
 } winput_t;
 
 /* Buttons, in the evdev numbering wl_pointer.button carries -- so, as with the

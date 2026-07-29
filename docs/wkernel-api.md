@@ -1404,7 +1404,10 @@ typedef struct {
     uint32_t unicode;    /* the character it would make, or 0       */
     uint32_t time_ms;    /* milliseconds since boot                 */
     int32_t  x, y;       /* where the pointer is, in pixels         */
-    int32_t  dx, dy;     /* how far it moved; dy is wheel steps     */
+    int32_t  dx, dy;     /* how far it moved; dy is wheel notches,
+                          * counting down when the wheel is turned
+                          * away from the user -- the sign the mouse
+                          * reports and the one wl_pointer.axis wants */
 } winput_t;
 ```
 
