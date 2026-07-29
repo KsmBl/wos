@@ -33,6 +33,23 @@ set $term wlterm
 # the background is the only output setting that does anything.
 output * bg #101820 solid_color
 
+### Input
+
+# How far the pointer moves for how far the mouse does, on sway's scale: -1 is
+# as slow as it goes, 0 leaves the mouse's counts alone at one to one, and 1 is
+# four times them.  Anything between works -- `pointer_accel 0.5` is half way
+# up.  Takes effect the moment it is read, so `swaymsg 'input * pointer_accel
+# 0.5'` is how to find the number you want before writing it down here.
+#
+# There is one pointer, the one the kernel found, so the identifier selects
+# nothing: it is read and dropped, and any name does.  The block form real sway
+# configurations use works too, and means the same thing:
+#
+#     input "type:pointer" {
+#         pointer_accel 0.5
+#     }
+input * pointer_accel 0
+
 ### Key bindings
 
 # Programs

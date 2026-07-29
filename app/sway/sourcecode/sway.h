@@ -155,6 +155,12 @@ struct config {
 
     int      bar;                /* draw the status bar */
     int      bar_top;            /* at the top rather than the bottom */
+
+    /* `input <id> pointer_accel <-1..1>`, kept in hundredths because there is
+     * no floating point here: -100 is sway's -1.0 and 100 is its 1.0.  What it
+     * means for the mouse is worked out when it is set and handed to the
+     * kernel, which is what turns counts into pixels. */
+    int      pointer_accel;
 };
 
 /* How tall the bar is.  One number, so the row it is drawn on and the rows

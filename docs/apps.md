@@ -1398,6 +1398,49 @@ The seat advertises a pointer **only when the kernel found one**. Telling a
 client there is a mouse when there is not leaves it waiting for motion that
 never comes, which is worse than the silence a machine without one gets.
 
+**How fast it moves** is `pointer_accel`, written the way sway writes it:
+
+```
+input * pointer_accel 0.5
+```
+
+−1 is as slow as it goes, 0 leaves the mouse's own counts alone at one to one,
+and 1 is four times them. It takes effect as it is read, from the file or from
+`swaymsg`, so the number can be found by trying it:
+
+```
+root@wos:/home/root# swaymsg 'input * pointer_accel -0.4'
+root@wos:/home/root# swaymsg 'input * pointer_accel 0.8'
+```
+
+The block form works too and means the same thing, because a block's lines are
+run with its heading in front of them:
+
+```
+input "type:pointer" {
+    pointer_accel 0.5
+}
+```
+
+The identifier is **read and dropped**. sway needs one because a machine can
+have several mice and a file has to name the one it means; there is one pointer
+here, the one the kernel found, and nothing for a second name to select — so a
+file that sets the speed for a device this machine has not got sets it for the
+one it has.
+
+It is a plain multiplier and not a curve. `accel_profile flat` is what this
+already is; `adaptive` — further for a quick movement than for a slow one of
+the same length — needs the interval between packets to mean something, and on
+a PS/2 mouse sampled at whatever rate the firmware left it that interval is not
+a speed.
+
+**The kernel applies it**, not the compositor: the kernel is what turns the
+mouse's counts into a position, and a compositor that scaled the movement
+itself would draw its cursor somewhere the kernel's pointer was not. It is a
+machine-wide setting that outlives the process, which is why sway puts the
+default back when it starts rather than assuming it. See
+[`wpointerspeed()`](wkernel-api.md#int-wpointerspeedint-percent).
+
 ### The bar
 
 Across the top, which is where `bar { position top }` puts it and where it now
@@ -1448,6 +1491,7 @@ set $mod Mod4
 set $term wlterm
 
 output * bg #101820 solid_color
+input * pointer_accel 0
 
 bindsym $mod+Return exec $term
 bindsym $mod+Shift+q kill
@@ -1471,7 +1515,8 @@ root@wos:/home/root# cat /ramdisk/sway.log
 sway on a 640x400 screen
 ipc: listening on /ramdisk/sway-ipc.sock
 font: this compositor draws one 8x16 font and cannot change it
-bar { ... }: read but not acted on
+pointer_accel: the pointer moves at 100% of the mouse
+input tap: read but not acted on
 read /home/root/.config/sway/config
 ```
 
