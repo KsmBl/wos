@@ -313,6 +313,16 @@ new position and the movement that caused it, so the compositor can draw a
 cursor without tracking anything and a client can be told a distance without
 knowing where the screen ends.
 
+That is also why the pointer's *speed* is the kernel's — `wpointerspeed()`,
+which sway drives from `input * pointer_accel`. The counts a mouse reports
+become pixels in exactly one place, and a compositor that scaled them itself
+would draw its cursor where the kernel's pointer was not. The scaling keeps
+what its rounding left over, because half of a pixel dropped on every packet is
+a pointer that will not move at all below half speed. It is a multiplier and
+not a curve: acceleration would need the interval between packets to mean
+something, and on a mouse sampled at whatever rate the firmware left it that
+interval is not a speed.
+
 Taking the screen or the keyboard affects every process on the machine, so
 both need root or a seat granted by root — see
 [`docs/users.md`](users.md). Both come back when the holder exits, however it

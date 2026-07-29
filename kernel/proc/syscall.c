@@ -1121,6 +1121,30 @@ static int64_t sys_pointer(uint64_t out)
     return 0;
 }
 
+/* How fast the pointer moves.  Machine-wide, like the screen and the keyboard
+ * it belongs with, so it is the seat's to set rather than any program's: a
+ * process that could speed up somebody else's mouse while they were using it
+ * would be a nuisance no configuration file could undo.
+ *
+ * Reading it is free (pass a negative value), because a compositor that has to
+ * change the speed to find out what it is cannot report the setting it found.
+ */
+static int64_t sys_pointer_speed(uint64_t percent)
+{
+    process_t *p = proc_current();
+
+    if ((int64_t)percent < 0)
+        return mouse_speed();
+
+    if (p->uid != W_ROOT_UID && !p->seat)
+        return -W_EPERM;
+
+    if (!mouse_present())
+        return -W_ENODEV;
+
+    return mouse_set_speed((int)(int64_t)percent);
+}
+
 /* Taking the keyboard takes it from the console, on the one keyboard the
  * machine has.  Root's to do, for the same reason taking the screen is, and
  * carried by the same grant: a seat is both devices or it is neither, since a
@@ -1238,6 +1262,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_INPUTOPEN: r = sys_input_open(); break;
     case WSYS_SEATGRANT: r = sys_seat_grant(); break;
     case WSYS_POINTER:   r = sys_pointer(regs->rdi); break;
+    case WSYS_PTRSPEED:  r = sys_pointer_speed(regs->rdi); break;
     case WSYS_REAP:      r = sys_reap(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;

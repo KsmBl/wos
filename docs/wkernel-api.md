@@ -1328,6 +1328,40 @@ could bring back.
 
 **Returns** 0, or `-W_EFAULT`.
 
+## `int wpointerspeed(int percent)`
+
+How far the pointer moves for how far the mouse does, as a percentage.
+
+```c
+#define W_POINTER_SPEED_MIN     10
+#define W_POINTER_SPEED_DEFAULT 100
+#define W_POINTER_SPEED_MAX     800
+```
+
+100 is one count from the mouse to one pixel on the screen, 50 is half as fast
+and 200 twice. A value outside the range is clamped rather than refused, and a
+negative one reads the speed in force without changing it — a compositor that
+had to set the speed to find out what it was could not report the setting it
+found.
+
+It is a plain multiplier and nothing else: the same movement always moves the
+pointer the same distance, however quickly the hand made it. **Acceleration —
+further for a fast movement than for a slow one of the same length — needs the
+interval between packets to mean something**, and on a PS/2 mouse sampled at
+whatever rate the firmware left it that interval is not a speed.
+
+The kernel applies it, in the same place it turns counts into a position, and
+it keeps what the rounding left over so a slow setting is slow rather than
+sticky: at 50%, a one-count movement is half a pixel, and a driver that rounded
+each packet on its own would throw both halves away.
+
+The speed is the machine's, not the process's — it stays as it was set after
+the program that set it exits, which is why [`sway`](apps.md#sway) puts the
+default back when it starts.
+
+**Returns** the speed now in force, `-W_EPERM` without root or the seat, or
+`-W_ENODEV` on a machine with no pointing device.
+
 ## `int wseatgrant(void)`
 
 Arm a seat grant: let the next process this one spawns take the screen and the

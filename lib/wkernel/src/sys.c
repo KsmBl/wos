@@ -109,6 +109,11 @@ int wpointer(wpointer_t *out)
     return (int)wsyscall1(WSYS_POINTER, (long)out);
 }
 
+int wpointerspeed(int percent)
+{
+    return (int)wsyscall1(WSYS_PTRSPEED, (long)percent);
+}
+
 int wseatgrant(void)
 {
     return (int)wsyscall0(WSYS_SEATGRANT);

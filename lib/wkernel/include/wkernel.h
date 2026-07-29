@@ -552,6 +552,26 @@ int winputopen(void);
 int wpointer(wpointer_t *out);
 
 /**
+ * How far the pointer moves for how far the mouse does, as a percentage.
+ *
+ * 100 is one count from the mouse to one pixel on the screen, 50 is half as
+ * fast and 200 twice; `W_POINTER_SPEED_MIN` to `W_POINTER_SPEED_MAX`, and a
+ * value outside that is clamped rather than refused. It is a plain multiplier:
+ * the same movement always moves the pointer the same distance, however
+ * quickly the hand made it.
+ *
+ * The kernel applies it, because the kernel is what turns the mouse's counts
+ * into a position on the screen. A compositor that scaled the movement itself
+ * would draw its cursor somewhere the kernel's pointer is not.
+ *
+ * @param percent The speed to set, or a negative number to read the one in
+ *                force without changing it.
+ * @return The speed now in force, `-W_EPERM` without root or the seat, or
+ *         `-W_ENODEV` on a machine with no pointing device.
+ */
+int wpointerspeed(int percent);
+
+/**
  * Arm a seat grant: let the next process this one spawns take the screen and
  * the keyboard, whoever it runs as.
  *
