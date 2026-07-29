@@ -91,6 +91,13 @@ static int text_width(const char *s)
     return (int)strlen(s) * 8;
 }
 
+/* The same, for the pointer code: a click on the bar has to be matched against
+ * the blocks draw_bar() drew, and both have to measure them the same way. */
+int render_text_width(const char *s)
+{
+    return text_width(s);
+}
+
 /* ------------------------------------------------------------------ *
  *  Windows
  * ------------------------------------------------------------------ */
@@ -203,7 +210,7 @@ static void draw_bar(void)
     if (!sway.config.bar)
         return;
 
-    int h = 20;
+    int h = BAR_HEIGHT;
     int y = sway.config.bar_top ? 0 : (int)sway.screen.height - h;
     int w = (int)sway.screen.width;
 
@@ -275,6 +282,58 @@ static void draw_empty_workspace(void)
               (int)sway.screen.width);
 }
 
+/* The cursor.
+ *
+ * Drawn by the compositor in one shape, rather than composited from whatever
+ * surface a client set with wl_pointer.set_cursor.  A client-drawn cursor is a
+ * surface that has to be blended at the hotspot on every frame, and this
+ * compositor does not blend -- so the choice is one shape that is always
+ * right, or a client's shape drawn opaquely over a square of its own
+ * background, which looks worse than no cursor at all.
+ *
+ * The shape is the arrow every desktop has: an outline in black with a white
+ * fill, so it stays visible over a dark window and a light one alike.  Eleven
+ * rows is enough to read at 640x400 and small enough not to cover what is
+ * being pointed at.
+ */
+static const char *const cursor_shape[] = {
+    "X          ",
+    "XX         ",
+    "X.X        ",
+    "X..X       ",
+    "X...X      ",
+    "X....X     ",
+    "X.....X    ",
+    "X......X   ",
+    "X.......X  ",
+    "X....XXXXX ",
+    "X..X.X     ",
+    "X.X  X.X   ",
+    "XX   X.X   ",
+    "X     X.X  ",
+    "      XXX  ",
+};
+
+static void draw_cursor(void)
+{
+    if (!sway.have_pointer)
+        return;
+
+    int rows = (int)(sizeof(cursor_shape) / sizeof(cursor_shape[0]));
+
+    for (int row = 0; row < rows; row++) {
+        const char *line = cursor_shape[row];
+
+        for (int col = 0; line[col]; col++) {
+            if (line[col] == ' ')
+                continue;
+
+            fill(sway.cursor_x + col, sway.cursor_y + row, 1, 1,
+                 line[col] == 'X' ? 0x000000 : 0xFFFFFF);
+        }
+    }
+}
+
 void render_frame(void)
 {
     struct workspace *ws = ws_current();
@@ -297,6 +356,10 @@ void render_frame(void)
 
         draw_bar();
     }
+
+    /* Last, and over everything including a fullscreen window: a cursor
+     * behind what it is pointing at is not a cursor. */
+    draw_cursor();
 
     wblit_t blit = {
         sway.back, sway.screen.width, 0, 0,

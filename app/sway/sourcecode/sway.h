@@ -157,6 +157,11 @@ struct config {
     int      bar_top;            /* at the top rather than the bottom */
 };
 
+/* How tall the bar is.  One number, so the row it is drawn on and the rows
+ * left for windows cannot disagree -- they did, and a bar at the top was drawn
+ * over the window under it. */
+#define BAR_HEIGHT 20
+
 /* ------------------------------------------------------------------ *
  *  The compositor
  * ------------------------------------------------------------------ */
@@ -188,6 +193,19 @@ struct sway {
     struct wl_resource *keyboards[16];
     int                 keyboard_count;
 
+    /* The same, for pointers.  Kept apart from the keyboards because a client
+     * may hold one and not the other, and an event for the wrong kind of
+     * object is a protocol error rather than something ignored. */
+    struct wl_resource *pointers[16];
+    int                 pointer_count;
+
+    /* Where the cursor is, and what it is over.  The position is the
+     * kernel's -- it clamps to the screen -- and mirrored here so the frame
+     * can be drawn without asking. */
+    int          cursor_x, cursor_y;
+    int          have_pointer;       /* the machine has a mouse at all */
+    struct view *pointer_focus;      /* the view the pointer is inside */
+
     struct view *focused;        /* which view has the keyboard */
     uint32_t     mods;           /* modifiers held right now */
 
@@ -212,13 +230,26 @@ void   layout_set_layout(enum layout how);
 void   layout_switch_workspace(int number);
 void   layout_move_to_workspace(int number);
 int    layout_view_count(const struct workspace *ws);
+int    layout_workspace_of(const struct view *v);
 struct node *layout_first_leaf(struct node *n);
 
 /* --- render.c --- */
 void render_frame(void);
+int  render_text_width(const char *s);
 
 /* --- shell.c --- */
 void shell_init(void);
+/* The pointer, into whatever surface it is over.  `sx`/`sy` are surface-local:
+ * measured from the client's own top-left corner, not the screen's, and not
+ * from the frame the compositor drew around it. */
+void shell_pointer_enter(struct view *v, int sx, int sy);
+void shell_pointer_leave(struct view *v);
+void shell_pointer_motion(struct view *v, uint32_t time_ms, int sx, int sy);
+void shell_pointer_button(struct view *v, uint32_t time_ms, uint32_t button,
+                          uint32_t state);
+void shell_pointer_axis(struct view *v, uint32_t time_ms, uint32_t axis,
+                        int steps);
+
 void shell_send_key(struct view *v, uint32_t code, uint32_t state,
                     uint32_t time_ms);
 void shell_send_modifiers(struct view *v, uint32_t mods);
@@ -243,5 +274,6 @@ void ipc_shutdown(void);
 /* --- sway.c --- */
 void sway_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void sway_spawn(const char *command);
+void sway_update_usable(void);
 
 #endif /* SWAY_H */

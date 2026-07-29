@@ -41,6 +41,16 @@ void acpi_power_off(void);
  * Only valid after acpi_init(); before that there is no root table to search. */
 void *acpi_table(const char *signature, uint32_t *length_out);
 
+/* The `index`th table with this signature, counting from 0, or NULL once
+ * there are no more.  A machine has any number of SSDTs and the AML loader
+ * has to read all of them, so it walks with this until it comes back empty. */
+void *acpi_table_nth(const char *signature, int index, uint32_t *length_out);
+
+/* The DSDT, which is the one table the root table does not list -- the FADT
+ * points at it, and acpi_init() is where that gets read.  Same ownership as
+ * acpi_table(): the caller frees the copy, or keeps it forever. */
+void *acpi_dsdt(uint32_t *length_out);
+
 /* Copy `len` bytes of physical memory onto the heap, through the same window
  * and with the same boot-time-only restriction.  The firmware leaves more than
  * ACPI tables above the identity map -- the SMBIOS structures, for one -- and

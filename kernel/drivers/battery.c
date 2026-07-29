@@ -2,6 +2,31 @@
 
 #include "battery.h"
 #include "acpi.h"
+#include "aml.h"
+
+/* ------------------------------------------------------------------ *
+ *  The charge, which only the firmware's own code knows
+ * ------------------------------------------------------------------ */
+
+/* The battery device in the namespace, found once at boot.  There may be more
+ * than one on a laptop with two packs; the first is the one reported, because
+ * wbattery_t describes a battery rather than a set of them. */
+static aml_node_t *battery_device;
+static aml_node_t *adapter_device;
+
+static void remember_battery(aml_node_t *device, void *user)
+{
+    (void)user;
+    if (!battery_device)
+        battery_device = device;
+}
+
+static void remember_adapter(aml_node_t *device, void *user)
+{
+    (void)user;
+    if (!adapter_device)
+        adapter_device = device;
+}
 #include "kheap.h"
 #include "kprintf.h"
 #include "string.h"
@@ -270,6 +295,104 @@ void battery_init(void)
         present = true;
 
     ac_declared = acpi_has_ac_adapter();
+
+    /* Which device in the namespace the numbers come from.  A machine whose
+     * firmware declares a battery the byte scan missed is still found here,
+     * and counts as present: the namespace is the better authority, being the
+     * thing the charge will actually be read through. */
+    aml_each_device("PNP0C0A", remember_battery, NULL);
+    aml_each_device("ACPI0003", remember_adapter, NULL);
+
+    if (battery_device)
+        present = true;
+}
+
+/* _BST is four numbers: state, present rate, remaining capacity, voltage.
+ * _BIF is thirteen, of which the third is what the pack holds when full *now*
+ * -- not when it was new.  A percentage against the design capacity would read
+ * over 100 on a new pack and flatter an old one, so the last-full figure is
+ * the one to divide by. */
+static bool read_charge(int32_t *percent, uint32_t *state)
+{
+    if (!battery_device || !aml_ready())
+        return false;
+
+    aml_node_t *bst_node = aml_lookup(battery_device, "_BST");
+    if (!bst_node)
+        return false;
+
+    aml_object_t *bst = aml_evaluate_node(bst_node, NULL, 0);
+    uint64_t      raw_state = 0, remaining = 0;
+
+    if (!bst || !aml_package_integer(bst, 0, &raw_state) ||
+                !aml_package_integer(bst, 2, &remaining)) {
+        aml_unref(bst);
+        return false;
+    }
+    aml_unref(bst);
+
+    /* The state is a bitmask, and both bits set at once is a battery the
+     * firmware is confused about rather than one doing both. */
+    if (raw_state & 0x01)
+        *state = W_BATTERY_DISCHARGING;
+    else if (raw_state & 0x02)
+        *state = W_BATTERY_CHARGING;
+    else
+        *state = W_BATTERY_FULL;
+
+    /* 0xFFFFFFFF is how the specification spells "unknown", and it appears
+     * while a pack is settling after being plugged in. */
+    if (remaining == 0xFFFFFFFFULL)
+        return false;
+
+    uint64_t full = 0;
+
+    aml_node_t *bif = aml_lookup(battery_device, "_BIF");
+    if (!bif)
+        bif = aml_lookup(battery_device, "_BIX");
+
+    if (bif) {
+        aml_object_t *info = aml_evaluate_node(bif, NULL, 0);
+
+        /* _BIX puts a revision field first, so everything in it is one place
+         * further along than in _BIF. */
+        uint32_t at = (bif->name[3] == 'X') ? 3 : 2;
+
+        if (info)
+            aml_package_integer(info, at, &full);
+        aml_unref(info);
+    }
+
+    if (!full || full == 0xFFFFFFFFULL)
+        return false;
+
+    if (remaining > full)
+        remaining = full;
+
+    *percent = (int32_t)((remaining * 100) / full);
+    return true;
+}
+
+/* _PSR on the mains adapter: 1 when it is supplying power. */
+static int32_t read_ac_online(void)
+{
+    if (!adapter_device || !aml_ready())
+        return -1;
+
+    aml_node_t *psr = aml_lookup(adapter_device, "_PSR");
+    if (!psr)
+        return -1;
+
+    aml_object_t *v = aml_evaluate_node(psr, NULL, 0);
+    uint64_t      n = 0;
+
+    if (!v || !aml_to_integer(v, &n)) {
+        aml_unref(v);
+        return -1;
+    }
+
+    aml_unref(v);
+    return n ? 1 : 0;
 }
 
 void battery_info(wbattery_t *out)
@@ -279,9 +402,20 @@ void battery_info(wbattery_t *out)
     out->present   = present ? 1 : 0;
     out->state     = W_BATTERY_UNKNOWN;
 
-    /* Never measured, so never claimed.  See the note in wabi.h. */
+    /* Read every time rather than cached: a charge that does not change is
+     * worse than none, because it looks like a measurement. */
     out->charge_percent = -1;
-    out->ac_online      = -1;
+    out->ac_online      = read_ac_online();
+
+    if (present) {
+        int32_t  percent = -1;
+        uint32_t state   = W_BATTERY_UNKNOWN;
+
+        if (read_charge(&percent, &state)) {
+            out->charge_percent = percent;
+            out->state          = state;
+        }
+    }
 
     out->design_mwh = design_mwh;
     out->design_mv  = design_mv;
@@ -311,8 +445,24 @@ void battery_print_report(void)
         kprintf(", %u.%u V", design_mv / 1000, (design_mv % 1000) / 100);
 
     kputs("\n");
-    kprintf("battery: %s; the charge needs an AML interpreter, which this "
-            "kernel has not got\n",
-            ac_declared ? "a mains adapter is declared too"
-                        : "no mains adapter is declared");
+
+    wbattery_t now;
+    battery_info(&now);
+
+    if (now.charge_percent >= 0)
+        kprintf("battery: %d%% and %s", now.charge_percent,
+                now.state == W_BATTERY_CHARGING    ? "charging"
+              : now.state == W_BATTERY_DISCHARGING ? "discharging"
+                                                   : "full");
+    else if (battery_device)
+        kputs("battery: the charge is declared but did not read");
+    else
+        kputs("battery: no charge to read -- the firmware declares no "
+              "battery device");
+
+    if (now.ac_online >= 0)
+        kprintf(", %s mains\n", now.ac_online ? "on" : "off");
+    else
+        kprintf("; %s\n", ac_declared ? "a mains adapter is declared too"
+                                       : "no mains adapter is declared");
 }

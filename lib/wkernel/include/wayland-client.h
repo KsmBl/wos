@@ -185,6 +185,28 @@ struct wl_keyboard_listener {
                         int32_t delay);
 };
 
+/* The pointer's events, in the order the protocol declares them.
+ *
+ * Coordinates are wl_fixed_t and surface-local: measured from this surface's
+ * own corner, in 24.8 fixed point, so wl_fixed_to_int() is what turns one into
+ * a pixel.  A compositor that draws its own decoration never includes it here,
+ * so (0,0) is the client's first pixel and not the frame's.
+ *
+ * `axis` carries a distance rather than a count of notches, positive meaning
+ * the content should move up -- the direction a finger would push it. */
+struct wl_pointer_listener {
+    void (*enter)(void *data, struct wl_pointer *pointer, uint32_t serial,
+                  struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy);
+    void (*leave)(void *data, struct wl_pointer *pointer, uint32_t serial,
+                  struct wl_surface *surface);
+    void (*motion)(void *data, struct wl_pointer *pointer, uint32_t time,
+                   wl_fixed_t sx, wl_fixed_t sy);
+    void (*button)(void *data, struct wl_pointer *pointer, uint32_t serial,
+                   uint32_t time, uint32_t button, uint32_t state);
+    void (*axis)(void *data, struct wl_pointer *pointer, uint32_t time,
+                 uint32_t axis, wl_fixed_t value);
+};
+
 struct wl_output_listener {
     void (*geometry)(void *data, struct wl_output *output, int32_t x, int32_t y,
                      int32_t physical_width, int32_t physical_height,
@@ -263,6 +285,13 @@ static inline int wl_keyboard_add_listener(struct wl_keyboard *keyboard,
         const struct wl_keyboard_listener *listener, void *data)
 {
     return wl_proxy_add_listener(WL_PROXY(keyboard),
+                                 (void (**)(void))listener, data);
+}
+
+static inline int wl_pointer_add_listener(struct wl_pointer *pointer,
+        const struct wl_pointer_listener *listener, void *data)
+{
+    return wl_proxy_add_listener(WL_PROXY(pointer),
                                  (void (**)(void))listener, data);
 }
 

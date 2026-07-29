@@ -653,13 +653,17 @@ typedef struct {
 } wbattery_t;
 ```
 
-`charge_percent` is almost always -1, and that is not a failure. Every laptop
-reports its charge through an ACPI method that reads the embedded controller,
-and calling one means interpreting AML bytecode, which WOS has no interpreter
-for. Everything static is read out of the firmware's tables; the one figure
-that changes minute to minute is the one that needs the interpreter, so it is
-reported as unknown rather than guessed at. `state` and `ac_online` are unknown
-for the same reason. See [`battery`](apps.md#battery).
+`charge_percent` is a percentage of what the pack holds **when full now**, not
+of what it held when new — a battery that has aged reports how much of itself
+is left, rather than how much of the battery it used to be. It comes from
+`_BST`, an ACPI method that reads the embedded controller, which the kernel
+runs; `state` and `ac_online` come from the same place and from `_PSR`.
+
+It is -1 when there is nothing to read: no battery, no `_BST` declared for it,
+or a `_BST` that used something the interpreter does not implement and stopped.
+Reported as unknown rather than guessed at, in every case. Nothing is cached,
+so two calls a minute apart give two readings. See
+[`battery`](apps.md#battery).
 
 **Returns** 0, or `-W_EFAULT`. Every field is zeroed first, so an absent battery
 reads as `present == 0` and nothing else.
@@ -1301,6 +1305,29 @@ descriptor, or exiting, gives it straight back.
 **Returns** a descriptor, `-W_EPERM` without root or a seat, or `-W_EBUSY` if
 another process already holds the keyboard.
 
+## `int wpointer(wpointer_t *out)`
+
+Where the pointer is, and whether the machine has one.
+
+```c
+typedef struct {
+    uint32_t present;    /* 0 when the machine has no pointing device */
+    int32_t  x, y;       /* where it is, in pixels                    */
+} wpointer_t;
+```
+
+A compositor asks this before it advertises a seat. Telling clients there is a
+pointer when there is none leaves them waiting for motion that will never come,
+and a cursor drawn on a machine with no mouse is a cursor nobody can move. It
+is also where the first cursor position comes from, so the arrow starts
+wherever the kernel has been keeping it rather than in a corner.
+
+The position is clamped to the screen by the kernel, which is the only place
+that knows how big the screen is — a pointer that could leave it is one nobody
+could bring back.
+
+**Returns** 0, or `-W_EFAULT`.
+
 ## `int wseatgrant(void)`
 
 Arm a seat grant: let the next process this one spawns take the screen and the
@@ -1336,14 +1363,38 @@ See [the seat](users.md#the-seat-and-the-one-way-past-that-rule) and
 
 ```c
 typedef struct {
-    uint32_t type;       /* W_INPUT_KEY                             */
-    uint32_t code;       /* evdev key code                          */
+    uint32_t type;       /* W_INPUT_*                               */
+    uint32_t code;       /* evdev key code, W_BTN_*, or the axis     */
     uint32_t state;      /* 1 pressed, 0 released                   */
     uint32_t mods;       /* W_MOD_* held, as of after this event    */
     uint32_t unicode;    /* the character it would make, or 0       */
     uint32_t time_ms;    /* milliseconds since boot                 */
+    int32_t  x, y;       /* where the pointer is, in pixels         */
+    int32_t  dx, dy;     /* how far it moved; dy is wheel steps     */
 } winput_t;
 ```
+
+| `type` | What it is | Which fields mean anything |
+|---|---|---|
+| `W_INPUT_KEY` | a key went down or came up | `code`, `state`, `unicode` |
+| `W_INPUT_POINTER_MOTION` | the pointer moved | `x`, `y`, `dx`, `dy` |
+| `W_INPUT_POINTER_BUTTON` | a button went down or came up | `code` (`W_BTN_LEFT`, `W_BTN_RIGHT`, `W_BTN_MIDDLE`), `state`, `x`, `y` |
+| `W_INPUT_POINTER_AXIS` | the wheel turned | `code` (the axis), `dy` (steps) |
+
+`mods`, `time_ms`, `x` and `y` are filled in on **every** event, whatever its
+type. A key event carrying the pointer position means a program that wants to
+know where the mouse was when a key was pressed does not have to track it.
+
+**Both devices arrive in one stream.** That is deliberate: a compositor needs
+them interleaved in the order they happened, because a click that arrived
+before the motion that led to it would land on whatever used to be under the
+pointer. Two streams could only promise that by being merged on timestamps at
+the far end.
+
+The pointer position is **absolute and already clamped to the screen**, because
+only the kernel knows how big the screen is — and a pointer that could leave it
+is one nobody could bring back. The delta is there as well, for a client that
+wants a distance rather than a place.
 
 Key codes are the Linux **evdev** codes, which for the main block of a PS/2
 keyboard are the AT set 1 scancodes they were originally defined from. They are

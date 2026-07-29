@@ -823,17 +823,70 @@ static void seat_get_keyboard(struct wl_client *c, struct wl_resource *r,
     }
 }
 
+static void pointer_gone(struct wl_resource *r)
+{
+    for (int i = 0; i < sway.pointer_count; i++)
+        if (sway.pointers[i] == r) {
+            sway.pointers[i] = sway.pointers[--sway.pointer_count];
+            return;
+        }
+}
+
+/* A client asking for its own cursor image.
+ *
+ * Accepted and not acted on.  The cursor here is drawn by the compositor in
+ * one shape, because the alternative is compositing a client-provided surface
+ * at the hotspot every frame -- and a client whose set_cursor was refused
+ * outright would be left believing it had drawn something. */
+static void pointer_set_cursor(struct wl_client *c, struct wl_resource *r,
+                               uint32_t serial, struct wl_resource *surface,
+                               int32_t hotspot_x, int32_t hotspot_y)
+{
+    (void)c; (void)r; (void)serial; (void)surface;
+    (void)hotspot_x; (void)hotspot_y;
+}
+
+static void pointer_release(struct wl_client *c, struct wl_resource *r)
+{
+    (void)c;
+    wl_resource_destroy(r);
+}
+
+static const struct {
+    void (*set_cursor)(struct wl_client *, struct wl_resource *, uint32_t,
+                       struct wl_resource *, int32_t, int32_t);
+    void (*release)(struct wl_client *, struct wl_resource *);
+} pointer_implementation = { pointer_set_cursor, pointer_release };
+
 static void seat_get_pointer(struct wl_client *c, struct wl_resource *r,
                              uint32_t id)
 {
-    /* Created and never sent anything: this machine has no pointer, and the
-     * capabilities event has already said so.  A client that asks anyway gets
-     * an object that works and is silent, which is better than an error --
-     * plenty of toolkits ask unconditionally. */
     struct wl_resource *p = wl_resource_create(c, &wl_pointer_interface,
                                                wl_resource_get_version(r), id);
-    if (p)
-        wl_resource_set_implementation(p, NULL, NULL, NULL);
+    if (!p)
+        return;
+
+    wl_resource_set_implementation(p, &pointer_implementation, NULL,
+                                   pointer_gone);
+
+    if (sway.pointer_count < (int)(sizeof(sway.pointers) /
+                                   sizeof(sway.pointers[0])))
+        sway.pointers[sway.pointer_count++] = p;
+
+    /* A pointer created while the cursor is already inside a window of this
+     * client has to be told so, the way a keyboard is: otherwise the client
+     * waits for an enter that happened before it asked. */
+    if (sway.pointer_focus && sway.pointer_focus->client == c) {
+        struct view *v = sway.pointer_focus;
+        int title = sway.config.title_height;
+        int bw    = sway.config.border_width;
+
+        wl_resource_post_event(p, WL_POINTER_ENTER,
+                               wl_display_next_serial(sway.display),
+                               v->surface,
+                               wl_fixed_from_int(sway.cursor_x - v->x - bw),
+                               wl_fixed_from_int(sway.cursor_y - v->y - title - bw));
+    }
 }
 
 static void seat_get_touch(struct wl_client *c, struct wl_resource *r,
@@ -865,9 +918,15 @@ static void seat_bind(struct wl_client *client, void *data, uint32_t version,
 
     wl_resource_set_implementation(r, &seat_implementation, NULL, NULL);
 
-    /* Keyboard only, and truthfully: there is no mouse driver, so claiming a
-     * pointer would leave clients waiting for motion that never comes. */
-    wl_resource_post_event(r, WL_SEAT_CAPABILITIES, WL_SEAT_CAPABILITY_KEYBOARD);
+    /* Truthfully, which now means it depends on the machine: a pointer is
+     * claimed only when the kernel found one, because a client told there is
+     * a mouse waits for motion that would never come. */
+    uint32_t caps = WL_SEAT_CAPABILITY_KEYBOARD;
+
+    if (sway.have_pointer)
+        caps |= WL_SEAT_CAPABILITY_POINTER;
+
+    wl_resource_post_event(r, WL_SEAT_CAPABILITIES, caps);
 
     if (version >= 2)
         wl_resource_post_event(r, WL_SEAT_NAME, "seat0");
@@ -889,6 +948,118 @@ static void for_each_keyboard_of(struct wl_client *c, uint32_t opcode,
         else
             wl_resource_post_event(kb, WL_KEYBOARD_MODIFIERS, a, b, d, e, 0);
     }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Pointer events
+ * ------------------------------------------------------------------ */
+
+/* Every pointer belonging to one client.  Same shape as the keyboard version
+ * and separate from it, because the two live in different arrays and carry
+ * different argument types -- a surface-local coordinate is a fixed-point
+ * number, and a key code is not. */
+static void for_each_pointer_of(struct wl_client *c,
+                                void (*send)(struct wl_resource *, void *),
+                                void *user)
+{
+    for (int i = 0; i < sway.pointer_count; i++)
+        if (wl_resource_get_client(sway.pointers[i]) == c)
+            send(sway.pointers[i], user);
+}
+
+struct enter_args { struct wl_resource *surface; int sx, sy; };
+struct motion_args { uint32_t time; int sx, sy; };
+struct button_args { uint32_t time, button, state; };
+struct axis_args { uint32_t time, axis; int steps; };
+
+static void send_enter(struct wl_resource *p, void *user)
+{
+    struct enter_args *a = user;
+
+    wl_resource_post_event(p, WL_POINTER_ENTER,
+                           wl_display_next_serial(sway.display), a->surface,
+                           wl_fixed_from_int(a->sx), wl_fixed_from_int(a->sy));
+}
+
+static void send_leave(struct wl_resource *p, void *user)
+{
+    wl_resource_post_event(p, WL_POINTER_LEAVE,
+                           wl_display_next_serial(sway.display),
+                           (struct wl_resource *)user);
+}
+
+static void send_motion(struct wl_resource *p, void *user)
+{
+    struct motion_args *a = user;
+
+    wl_resource_post_event(p, WL_POINTER_MOTION, a->time,
+                           wl_fixed_from_int(a->sx), wl_fixed_from_int(a->sy));
+}
+
+static void send_button(struct wl_resource *p, void *user)
+{
+    struct button_args *a = user;
+
+    wl_resource_post_event(p, WL_POINTER_BUTTON,
+                           wl_display_next_serial(sway.display),
+                           a->time, a->button, a->state);
+}
+
+static void send_axis(struct wl_resource *p, void *user)
+{
+    struct axis_args *a = user;
+
+    /* One wheel notch is ten units upstream, and the sign is the direction
+     * the surface content should move rather than the direction the wheel
+     * turned -- which is why scrolling down is a positive value. */
+    wl_resource_post_event(p, WL_POINTER_AXIS, a->time, a->axis,
+                           wl_fixed_from_int(-a->steps * 10));
+}
+
+void shell_pointer_enter(struct view *v, int sx, int sy)
+{
+    if (!v)
+        return;
+
+    struct enter_args a = { v->surface, sx, sy };
+    for_each_pointer_of(v->client, send_enter, &a);
+}
+
+void shell_pointer_leave(struct view *v)
+{
+    if (!v)
+        return;
+
+    for_each_pointer_of(v->client, send_leave, v->surface);
+}
+
+void shell_pointer_motion(struct view *v, uint32_t time_ms, int sx, int sy)
+{
+    if (!v)
+        return;
+
+    struct motion_args a = { time_ms, sx, sy };
+    for_each_pointer_of(v->client, send_motion, &a);
+}
+
+void shell_pointer_button(struct view *v, uint32_t time_ms, uint32_t button,
+                          uint32_t state)
+{
+    if (!v)
+        return;
+
+    struct button_args a = { time_ms, button, state };
+    for_each_pointer_of(v->client, send_button, &a);
+}
+
+void shell_pointer_axis(struct view *v, uint32_t time_ms, uint32_t axis,
+                        int steps)
+{
+    if (!v)
+        return;
+
+    struct axis_args a = { time_ms, axis, steps };
+    for_each_pointer_of(v->client, send_axis, &a);
 }
 
 void shell_send_key(struct view *v, uint32_t code, uint32_t state,

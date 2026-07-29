@@ -11,6 +11,7 @@
  */
 
 #include "proc.h"
+#include "mouse.h"
 #include "sched.h"
 #include "vfs.h"
 #include "pipe.h"
@@ -1099,6 +1100,27 @@ static int64_t sys_dispblit(uint64_t arg)
                         b.stride, b.x, b.y, b.width, b.height);
 }
 
+/* Where the pointer is, and whether there is one.
+ *
+ * Not privileged: it says no more about the machine than the screen's size
+ * does, and a program that has to take the keyboard before it can find out
+ * whether a mouse exists would have to take it to decide whether to. */
+static int64_t sys_pointer(uint64_t out)
+{
+    if (!user_range_ok((void *)out, sizeof(wpointer_t), true))
+        return -W_EFAULT;
+
+    wpointer_t *p = (wpointer_t *)out;
+
+    memset(p, 0, sizeof(*p));
+    p->present = mouse_present() ? 1 : 0;
+
+    if (p->present)
+        mouse_position(&p->x, &p->y);
+
+    return 0;
+}
+
 /* Taking the keyboard takes it from the console, on the one keyboard the
  * machine has.  Root's to do, for the same reason taking the screen is, and
  * carried by the same grant: a seat is both devices or it is neither, since a
@@ -1215,6 +1237,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_DISPBLIT:  r = sys_dispblit(regs->rdi); break;
     case WSYS_INPUTOPEN: r = sys_input_open(); break;
     case WSYS_SEATGRANT: r = sys_seat_grant(); break;
+    case WSYS_POINTER:   r = sys_pointer(regs->rdi); break;
     case WSYS_REAP:      r = sys_reap(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;

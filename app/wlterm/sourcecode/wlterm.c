@@ -67,6 +67,7 @@ static struct {
     struct wl_shm        *shm;
     struct wl_seat       *seat;
     struct wl_keyboard   *keyboard;
+    struct wl_pointer    *pointer;
     struct xdg_wm_base   *wm_base;
 
     struct wl_surface  *surface;
@@ -452,12 +453,81 @@ static const struct wl_keyboard_listener keyboard_listener = {
     keyboard_modifiers, keyboard_repeat,
 };
 
+/* ------------------------------------------------------------------ *
+ *  The pointer
+ * ------------------------------------------------------------------ */
+
+static void pointer_enter(void *data, struct wl_pointer *pointer,
+                          uint32_t serial, struct wl_surface *surface,
+                          wl_fixed_t sx, wl_fixed_t sy)
+{
+}
+
+static void pointer_leave(void *data, struct wl_pointer *pointer,
+                          uint32_t serial, struct wl_surface *surface)
+{
+}
+
+static void pointer_motion(void *data, struct wl_pointer *pointer,
+                           uint32_t time, wl_fixed_t sx, wl_fixed_t sy)
+{
+}
+
+static void pointer_button(void *data, struct wl_pointer *pointer,
+                           uint32_t serial, uint32_t time, uint32_t button,
+                           uint32_t state)
+{
+    /* Nothing.  Clicking a terminal selects text, and there is no selection
+     * here to make and no clipboard to put one in -- the protocol for that is
+     * wl_data_device, which this compositor has not got.  The click has
+     * already done the one thing it can: the compositor focused this window
+     * before forwarding it. */
+}
+
+/* The wheel sends arrow keys.
+ *
+ * wterm has no scrollback -- it holds the screen and nothing behind it -- so
+ * there is genuinely nothing to scroll.  What a terminal does in that position
+ * is send the cursor keys instead, which is xterm's alternateScroll and is why
+ * a wheel moves through shell history in every terminal you have used while a
+ * full-screen program is running.  Here it is not a mode, because the case
+ * where it would be wrong -- a pager with its own scrollback -- cannot arise.
+ */
+static void pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
+                         uint32_t axis, wl_fixed_t value)
+{
+    if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL)
+        return;
+
+    int steps = wl_fixed_to_int(value) / 10;
+    int key   = (steps > 0) ? W_KEY_DOWN : W_KEY_UP;
+
+    if (steps < 0)
+        steps = -steps;
+    if (steps == 0)
+        steps = 1;
+    if (steps > 8)
+        steps = 8;                     /* a flick of the wheel, not a burst */
+
+    for (int i = 0; i < steps; i++)
+        wterm_input(&app.term, key);
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+    pointer_enter, pointer_leave, pointer_motion, pointer_button, pointer_axis,
+};
+
 static void seat_capabilities(void *data, struct wl_seat *seat,
                               uint32_t capabilities)
 {
     if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) && !app.keyboard) {
         app.keyboard = wl_seat_get_keyboard(seat);
         wl_keyboard_add_listener(app.keyboard, &keyboard_listener, NULL);
+    }
+
+    if ((capabilities & WL_SEAT_CAPABILITY_POINTER) && !app.pointer) {
+        app.pointer = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(app.pointer, &pointer_listener, NULL);
     }
 }
 

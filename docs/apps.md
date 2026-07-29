@@ -1061,7 +1061,8 @@ pack     : LGC DELL AB01
 chemistry: lithium ion
 when new : 45.0 Wh at 11.4 V
 fitted   : Rear
-charge   : not readable
+charge   : 62%, discharging
+mains    : not connected
 ```
 
 On a machine with no battery, which is every virtual one:
@@ -1071,35 +1072,45 @@ root@wos:/home/root# battery
 No battery: this machine runs on mains.
 ```
 
-`-s` prints a single line — `none`, or `present, charge unknown` — for a prompt
-or a script.
+`-s` prints a single line — `none`, `62% discharging`, or `present, charge
+unknown` — for a prompt or a script.
 
-## Why there is no percentage
+## Where the percentage comes from
 
 Every laptop built this century reports its charge through an ACPI method,
 `_BST`, which reads the embedded controller and returns a package. Calling one
-means interpreting AML bytecode, and WOS has no interpreter: the one piece of
-AML the kernel reads is the sleep type for soft-off, which is a constant
-sitting in a fixed shape, not a program.
+means interpreting AML bytecode, and the kernel has an interpreter for that —
+see [`docs/architecture.md`](architecture.md#the-firmwares-bytecode).
 
-So the charge is missing rather than guessed at, and everything else is read
-without executing anything:
+Four sources, answering different questions:
 
 | Fact | Where it comes from |
 |---|---|
-| there is a battery | a `PNP0C0A` device, or a `_BST` method, named in the DSDT |
+| there is a battery | a `PNP0C0A` device in the namespace, or named in the DSDT |
 | there is a mains adapter | an `ACPI0003` device, or a `_PSR` method |
+| the charge, and whether it is going up or down | `_BST`, run |
+| what the pack holds when full | `_BIF`, or `_BIX` |
 | maker, name, chemistry, capacity, voltage, where it is fitted | the SMBIOS tables, structure type 22 |
 
-The two sources answer slightly different questions and both are used. SMBIOS
-describes the machine as it was built, so a laptop sold with its battery
+SMBIOS describes the machine as it was built, so a laptop sold with its battery
 removed still carries the structure; ACPI describes what the firmware is
 willing to talk to. Either saying yes is taken as a battery being present.
 
-Writing the AML interpreter would be the way to finish this, and it is a large
-piece of work: a namespace, operation regions, embedded-controller
-transactions, and enough of the language to run a method that was written
-assuming a complete implementation.
+The percentage is the remaining capacity over the **last-full** capacity, not
+the design capacity. A pack holds less as it ages, and dividing by what it held
+when new reads over 100% on a new one and flatters an old one — the figure
+people want is how much of this battery is left, not how much of the battery it
+used to be.
+
+Nothing is cached. A charge that never changes is worse than none, because it
+looks like a measurement.
+
+### When it is still missing
+
+`charge: not readable` means the firmware declares no `_BST` for the pack, or
+that its `_BST` used something the interpreter does not implement and stopped
+rather than returning a number nobody measured. The boot log says which. On a
+virtual machine there is usually no battery at all, and nothing to read.
 
 **Exit status:** 0.
 
@@ -1356,6 +1367,65 @@ Anything not bound goes to the focused window untouched, which is what `$mod`
 is for: it marks a keystroke as being for the compositor, so every other key
 belongs to the program.
 
+### The mouse
+
+There is a cursor, drawn by the compositor over everything else.
+
+| Mouse | What happens |
+|---|---|
+| click a window | focus it |
+| click a workspace on the bar | go to that workspace |
+| anything else | goes to the window under the pointer |
+
+Clicking focuses on the press rather than the release, because the click that
+focuses a window and the click the window acts on are the same click — the
+window has to have the keyboard before it hears about the button.
+
+Coordinates reach a client **surface-local**: measured from the client's own
+first pixel, not from the frame. sway draws the title bar and the border and
+never tells the client they exist, so a coordinate measured from the frame
+would be wrong by both — the kind of error that puts a text cursor a line out
+and stays invisible until something is clicked precisely.
+
+**The cursor is the compositor's own shape.** `wl_pointer.set_cursor` is
+accepted and ignored. A client's cursor is a surface that has to be blended at
+its hotspot on every frame, and nothing here blends — so the choice was one
+arrow that is always right, or a client's arrow drawn opaquely over a square of
+its own background. A client that asks is not refused, because a refusal would
+leave it believing it had drawn something.
+
+The seat advertises a pointer **only when the kernel found one**. Telling a
+client there is a mouse when there is not leaves it waiting for motion that
+never comes, which is worse than the silence a machine without one gets.
+
+### The bar
+
+Across the top, which is where `bar { position top }` puts it and where it now
+starts. `position bottom` moves it back, and `mode invisible` turns it off;
+both work from the configuration file and from `swaymsg`, because the block's
+lines and swaymsg's commands are the same commands.
+
+```
+ 1  2      wlterm                              BAT 50%   2026-08-10  18:22
+```
+
+Workspace numbers on the left — one per workspace that has something on it,
+plus the one you are on even when it is empty — then the focused window's
+title, then the battery and the clock.
+
+The battery is `BAT` while discharging, `CHG` while charging, and `AC` when it
+is full or on mains. A word rather than an arrow, because the arrows a real bar
+uses are not in the 8x16 font and the ASCII stand-ins do not survive being put
+in front of a number: `-50%` reads as minus fifty.
+
+A machine with **no battery** shows the clock alone rather than 0%. A battery
+whose charge will not read shows `BAT ?` — that is a laptop whose firmware this
+kernel could not run, and a number there would be invented. See
+[`battery`](#battery) for where the figure comes from.
+
+The bar is drawn by the compositor rather than by swaybar; see
+[what it has not got](#what-it-has-not-got).
+
 ### The layout
 
 Windows never overlap. A workspace holds a tree of containers, each dividing
@@ -1410,8 +1480,11 @@ read /home/root/.config/sway/config
 Each of these is missing because something underneath it is, rather than
 because it was not got to:
 
-- **Floating windows.** There is no mouse driver, so there is no pointer to
-  drag a window with. `floating_modifier` is accepted and does nothing.
+- **Floating windows.** Every window tiles. There is a pointer now, so the
+  reason is no longer that nothing could drag one — it is that a floating
+  window needs a stacking order, and the layout here is a tree in which every
+  leaf has a rectangle and no two overlap. `floating_modifier` is accepted and
+  does nothing.
 - **swaybar as a separate process.** The bar is drawn by the compositor. A bar
   as a client would need the layer-shell protocol — a surface that is not a
   window and does not tile — and without it a bar would be a window taking up a
@@ -1502,12 +1575,26 @@ icon theme to load them from.
 | F5 | reread the directory |
 | `q`, Escape | leave |
 
-**It is driven from the keyboard, because this machine has no mouse.** There
-is no pointer device in the kernel and sway's seat advertises a keyboard and
-nothing else, so there is no clicking, no drag and drop and no context menu.
-The pane the arrows will move is the one drawn with a blue selection; the
-other one's selection is grey, so which is which can be seen rather than
-remembered.
+| Mouse | Effect |
+|---|---|
+| click a file | select it |
+| double click a file | open it |
+| click a place | go there — one click, not two |
+| wheel | move through the list |
+
+**Every key still works.** A file manager that needs a mouse is worse than one
+that does not, and this one has both. The pane the arrows will move is drawn
+with a blue selection and the other one's is grey, so which is which can be
+seen rather than remembered — clicking in a pane is also what focuses it.
+
+The sidebar takes a single click where a file takes two. A place is a shortcut,
+and a shortcut that needed two clicks would not be one; Thunar itself draws the
+same distinction, and it is the only asymmetry between the two panes worth
+having.
+
+There is still no drag and drop and no context menu. Both need things this
+system has not got — a drag needs `wl_data_device`, and a menu needs a popup
+surface that can escape the window it belongs to.
 
 **Opening a file hands it to another program.** There is no MIME database and
 no desktop files to register a handler in, so the rule is the one this system

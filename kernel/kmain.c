@@ -16,6 +16,7 @@
 #include "pic.h"
 #include "pit.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "pmm.h"
 #include "kheap.h"
 #include "paging.h"
@@ -27,6 +28,7 @@
 #include "net.h"
 #include "rtc.h"
 #include "acpi.h"
+#include "aml.h"
 #include "cpu.h"
 #include "battery.h"
 #include "user.h"
@@ -197,6 +199,11 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
             kputs("acpi   : no soft-off found; the machine can only halt\n");
     }
 
+    /* The rest of what the firmware has to say, which is a bytecode and needs
+     * interpreting rather than reading.  After acpi_init(), which found the
+     * tables; before the battery, which asks it questions. */
+    aml_init();
+
     /* After ACPI, which is where the processor list comes from, and after the
      * timer, which is what a clock gets measured against. */
     cpu_init();
@@ -238,6 +245,10 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     } else {
         kputs("video  : no framebuffer; staying in VGA text mode\n");
     }
+
+    /* After the display, because the pointer is clamped to the screen and the
+     * driver has to know how big it is before the first movement. */
+    mouse_init();
 
     if (ata_init()) {
         uint32_t sectors = ata_sector_count();

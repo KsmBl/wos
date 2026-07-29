@@ -275,10 +275,10 @@ An object outlives its makers: it goes when the last descriptor closes *and*
 the last mapping is dropped. A client may draw a buffer, hand it over and exit,
 leaving the compositor holding pixels that are still good.
 
-## The screen and the keyboard
+## The screen, the keyboard and the mouse
 
-Both are single devices that the console has until something takes them, and
-both are lent to one process at a time — which is what a compositor needs and
+All three are single devices that the console has until something takes them,
+and the first two are lent to one process at a time — which is what a compositor needs and
 the reason either mechanism exists.
 
 `kernel/drivers/display.c` holds the whole of the screen's ownership model in
@@ -299,9 +299,53 @@ from, so no translation table is needed — and the modifier mask in XKB's bit
 positions. Those are the numbers `wl_keyboard.key` and `wl_keyboard.modifiers`
 carry, unchanged.
 
-Taking either affects every process on the machine, so both need root. Both
-come back when the holder exits, however it exits: a compositor that faults
-must not take the machine's only screen with it.
+The mouse goes into that same stream rather than a stream of its own. A
+compositor wants the two devices interleaved in the order they happened: a
+click that arrived before the motion that led to it would land on whatever used
+to be under the pointer, and two rings could only promise that by being merged
+on timestamps at the far end. `winput_t` carries a position and a delta
+alongside the key fields, and the event type says which of them mean anything.
+
+The pointer's absolute position is kept by the kernel, because only the kernel
+knows how big the screen is — and a pointer that can leave the screen is one
+nobody can bring back. `kernel/drivers/mouse.c` clamps it and reports both the
+new position and the movement that caused it, so the compositor can draw a
+cursor without tracking anything and a client can be told a distance without
+knowing where the screen ends.
+
+Taking the screen or the keyboard affects every process on the machine, so
+both need root or a seat granted by root — see
+[`docs/users.md`](users.md). Both come back when the holder exits, however it
+exits: a compositor that faults must not take the machine's only screen with
+it.
+
+## The firmware's bytecode
+
+Some of what the firmware knows is data and some of it is a program. The S5
+sleep type is data — a package of constants in a fixed shape, which is why
+`acpi.c` reads it with a byte scan. A battery's charge is not: it comes back
+from `_BST`, a method that reads the embedded controller, does arithmetic on
+what it finds, and returns a package. There is no way to that number except to
+run it.
+
+`kernel/acpi/` is an AML interpreter for exactly that. A load pass builds a
+namespace out of the DSDT and every SSDT; an evaluator runs methods against it,
+with integers, buffers, strings and packages, the arithmetic and the logic,
+`If`, `While` and `Return`, and fields cut out of operation regions at bit
+granularity.
+
+The embedded controller is what makes it worth having. Its command interface is
+architectural — port `0x62` for data, `0x66` for command, `0x80` to read, on
+every machine ever built — while the offset the charge lives at is
+firmware-specific and comes out of the DSDT. The standard describes the
+transport and the firmware describes the layout, and between them nothing is
+left to guess.
+
+A method body is located at load time and not read, so nothing touches hardware
+while the machine is still being described. An unimplemented construct is
+stepped over and counted rather than failing the table: a table abandoned at
+the first one loses every name after it, including — on a laptop whose battery
+is declared late — the battery.
 
 ## The display server
 

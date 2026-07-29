@@ -104,6 +104,11 @@ int winputopen(void)
     return (int)wsyscall0(WSYS_INPUTOPEN);
 }
 
+int wpointer(wpointer_t *out)
+{
+    return (int)wsyscall1(WSYS_POINTER, (long)out);
+}
+
 int wseatgrant(void)
 {
     return (int)wsyscall0(WSYS_SEATGRANT);

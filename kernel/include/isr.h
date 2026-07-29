@@ -28,6 +28,7 @@ typedef void (*interrupt_handler_t)(regs_t *regs);
 #define IRQ_BASE      32
 #define IRQ_TIMER     (IRQ_BASE + 0)
 #define IRQ_KEYBOARD  (IRQ_BASE + 1)
+#define IRQ_MOUSE     (IRQ_BASE + 12)
 #define INT_SYSCALL   0x80
 
 void idt_init(void);

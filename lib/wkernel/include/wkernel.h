@@ -535,6 +535,23 @@ int wdisplayblit(const wblit_t *b);
 int winputopen(void);
 
 /**
+ * Where the pointer is, and whether the machine has one.
+ *
+ * A compositor asks this before it advertises a seat: telling clients there is
+ * a pointer when there is none leaves them waiting for motion that will never
+ * come, and a cursor drawn on a machine with no mouse is a cursor nobody can
+ * move. It is also where the first cursor position comes from, so the arrow
+ * starts wherever the kernel has been keeping it rather than in a corner.
+ *
+ * The position is clamped to the screen by the kernel, which is the only place
+ * that knows how big the screen is.
+ *
+ * @param out Filled in; zeroed first, so every field is defined.
+ * @return 0, or `-W_EFAULT`.
+ */
+int wpointer(wpointer_t *out);
+
+/**
  * Arm a seat grant: let the next process this one spawns take the screen and
  * the keyboard, whoever it runs as.
  *
