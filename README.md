@@ -89,9 +89,16 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   `mkdir`, `rm`, `clear` and `shutdown` each live in `/app`, behaving as they
   do on Linux. Both shells run the same ones.
 - **The hardware, honestly**: `cpufreq` reads the processor's clock and holds
-  it at a speed; `battery` says what the firmware knows about the pack. Both
-  report what the machine will not tell them as unknown, rather than as a
-  number nobody measured.
+  it at a speed; `battery` says what the firmware knows about the pack,
+  charge included. Both report what the machine will not tell them as unknown,
+  rather than as a number nobody measured.
+- **An AML interpreter**: the firmware describes the machine in a bytecode, and
+  some of that description is a program rather than data. The kernel builds a
+  namespace from the DSDT and the SSDTs and *runs* methods against it —
+  arithmetic, control flow, and fields cut out of operation regions in memory,
+  in I/O space and in the embedded controller. That is what the battery's
+  charge comes back from: `_BST`, called rather than guessed at. See
+  [`docs/architecture.md`](docs/architecture.md).
 - **Services**: programs the machine runs rather than a person does, described
   by unit files in `/services` and managed with `systemctl` — list, start,
   stop, enable, disable.
@@ -105,7 +112,11 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   as a terminal emulator in it, `thunar` as a file manager and `swaymsg` to
   drive it. Logging in starts it, and
   Super+Return opens a window; Super+Shift+E gives the console back with
-  everything printed behind it still there. Windows tile in i3's tree,
+  everything printed behind it still there. There is a **mouse**: a PS/2
+  driver in the kernel, a cursor drawn by the compositor, click to focus,
+  clickable workspaces on the bar, and `wl_pointer` delivered to clients —
+  thunar selects on a click and opens on a double one. Windows tile in i3's
+  tree, the bar sits at the top with the battery and the clock on it,
   configuration is read from `~/.config/sway/config` in sway's own language,
   and the IPC socket is i3's, so anything that speaks it speaks to this.
 - **Wayland, for real**: a libwayland-shaped protocol library in both halves,

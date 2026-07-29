@@ -123,7 +123,8 @@ bar {
 # Each of these is read and ignored, and says so in /ramdisk/sway.log:
 #
 #   font              one 8x16 font is built in and cannot be changed
-#   floating_modifier nothing floats -- there is no pointer to drag it with
+#   floating_modifier nothing floats -- every window tiles, and a floating one
+#                     would need a stacking order the layout tree has not got
 #   input / seat      the keyboard is whatever the kernel found
 #   status_command    the bar's right-hand side is the clock and the battery,
 #                     read by the compositor rather than by running a program
