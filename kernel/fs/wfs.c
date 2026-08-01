@@ -679,6 +679,115 @@ int wfs_unlink(const char *path)
     return 0;
 }
 
+/* Give something a different name, or a different place, without moving what
+ * is in it.
+ *
+ * A directory entry is a name and an inode number, so this moves the number
+ * and leaves the blocks where they are -- which is what makes rename the way
+ * to replace a file safely: the new contents are written under a temporary
+ * name and then take the real one in a single step, and a machine that loses
+ * power in the middle has either the old file or the new one and never half of
+ * either.
+ *
+ * The order matters and is the opposite of the obvious one: the new entry goes
+ * in *before* the old one comes out, so the inode is never nameless.  Removing
+ * first and failing to add would lose the file. */
+int wfs_rename(const char *from, const char *to)
+{
+    if (!mounted)
+        return -W_EIO;
+
+    uint32_t from_parent, to_parent;
+    char     from_name[WFS_NAME_MAX + 1], to_name[WFS_NAME_MAX + 1];
+
+    int r = resolve_parent(from, &from_parent, from_name, sizeof(from_name));
+    if (r < 0)
+        return r;
+
+    r = resolve_parent(to, &to_parent, to_name, sizeof(to_name));
+    if (r < 0)
+        return r;
+
+    if (strcmp(from_name, ".") == 0 || strcmp(from_name, "..") == 0 ||
+        strcmp(to_name, ".") == 0   || strcmp(to_name, "..") == 0)
+        return -W_EINVAL;
+
+    uint32_t ino;
+    r = dir_find(from_parent, from_name, &ino);
+    if (r < 0)
+        return r;
+
+    struct wfs_inode in;
+    r = wfs_read_inode(ino, &in);
+    if (r < 0)
+        return r;
+
+    if (from_parent == to_parent && strcmp(from_name, to_name) == 0)
+        return 0;                       /* already where it is being put */
+
+    /* A directory cannot be moved inside itself.  The walk up from the
+     * destination is what catches it: a tree that reached its own child would
+     * be a loop with no way back to the root, and everything that walks a path
+     * would follow it forever. */
+    if (in.type == WFS_TYPE_DIR) {
+        uint32_t at = to_parent;
+
+        for (int steps = 0; steps < 256; steps++) {
+            if (at == ino)
+                return -W_EINVAL;
+            if (at == WFS_ROOT_INO)
+                break;
+
+            uint32_t up;
+            if (dir_find(at, "..", &up) < 0 || up == at)
+                break;
+            at = up;
+        }
+    }
+
+    /* Something already called that is replaced, which is what makes this an
+     * atomic swap rather than a two-step one.  A directory is not, because
+     * replacing one would silently discard whatever is inside it. */
+    uint32_t existing;
+    if (dir_find(to_parent, to_name, &existing) == 0) {
+        if (existing == ino)
+            return 0;
+
+        struct wfs_inode victim;
+        r = wfs_read_inode(existing, &victim);
+        if (r < 0)
+            return r;
+        if (victim.type == WFS_TYPE_DIR)
+            return -W_EISDIR;
+
+        r = dir_remove(to_parent, to_name);
+        if (r < 0)
+            return r;
+
+        wfs_truncate(existing);
+        inode_free(existing);
+    }
+
+    r = dir_add(to_parent, to_name, ino);
+    if (r < 0)
+        return r;
+
+    r = dir_remove(from_parent, from_name);
+    if (r < 0) {
+        dir_remove(to_parent, to_name);         /* put it back as it was */
+        return r;
+    }
+
+    /* ".." is a real entry here, so a directory that changed parents has to be
+     * told: it is what `cd ..` reads. */
+    if (in.type == WFS_TYPE_DIR && from_parent != to_parent) {
+        dir_remove(ino, "..");
+        dir_add(ino, "..", to_parent);
+    }
+
+    return 0;
+}
+
 /* ------------------------------------------------------------------ *
  *  Mount and statistics
  * ------------------------------------------------------------------ */

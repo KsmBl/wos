@@ -157,6 +157,11 @@ static int fs_unlink(const char *abs)
     return ramfs_owns(abs) ? ramfs_unlink(abs) : wfs_unlink(abs);
 }
 
+static int fs_rename(const char *from, const char *to)
+{
+    return ramfs_owns(from) ? ramfs_rename(from, to) : wfs_rename(from, to);
+}
+
 static int fs_read_inode(bool ram, uint32_t ino, struct wfs_inode *out)
 {
     return ram ? ramfs_read_inode(ino, out) : wfs_read_inode(ino, out);
@@ -977,6 +982,31 @@ int vfs_unlink(struct process *p, const char *path)
         return -W_EISDIR;
 
     return fs_unlink(abs);
+}
+
+/* Both ends have to be writable by the caller, because a rename writes at
+ * both: it takes a name away from one directory and puts one in another. */
+int vfs_rename(struct process *p, const char *from, const char *to)
+{
+    char from_abs[W_PATH_MAX + 1];
+    char to_abs[W_PATH_MAX + 1];
+
+    int r = resolve_for_write(p, from, from_abs, sizeof(from_abs));
+    if (r < 0)
+        return r;
+
+    r = resolve_for_write(p, to, to_abs, sizeof(to_abs));
+    if (r < 0)
+        return r;
+
+    /* One filesystem at a time.  Moving between the disk and the ramdisk would
+     * be a copy and a delete, and a rename that silently copied a gigabyte
+     * would not be the thing anybody meant by rename -- least of all the
+     * programs that use it precisely because it is one step. */
+    if (ramfs_owns(from_abs) != ramfs_owns(to_abs))
+        return -W_EXDEV;
+
+    return fs_rename(from_abs, to_abs);
 }
 
 int vfs_mkdir(struct process *p, const char *path)

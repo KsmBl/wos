@@ -86,8 +86,8 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   tiny: only `cd`, `exit` and `help` are builtins, because only those change
   state belonging to the shell process.
 - **Commands as programs**: `ls`, `pwd`, `cat`, `free`, `df`, `ps`, `touch`,
-  `mkdir`, `rm`, `clear` and `shutdown` each live in `/app`, behaving as they
-  do on Linux. Both shells run the same ones.
+  `mkdir`, `mv`, `rm`, `clear` and `shutdown` each live in `/app`, behaving as
+  they do on Linux. Both shells run the same ones.
 - **The hardware, honestly**: `cpufreq` reads the processor's clock and holds
   it at a speed; `battery` says what the firmware knows about the pack,
   charge included. Both report what the machine will not tell them as unknown,

@@ -151,6 +151,33 @@ int wstat(const char *path, wstat_t *out);
  */
 int wunlink(const char *path);
 
+/**
+ * Give a file a different name, or a different directory, in one step.
+ *
+ * The one step is the point. A program that has to replace a file safely
+ * writes the new contents under a temporary name and renames it over the old
+ * one; the swap is a single change to a directory, so a machine that stops in
+ * the middle has either the whole old file or the whole new one. Writing over
+ * the original instead has a moment where it is neither, and a configuration
+ * file lost that way is lost for good.
+ *
+ * Nothing is copied: a directory entry is a name and an inode number, and only
+ * the entry moves. An existing @p to is replaced if it is a file, which is
+ * what makes the swap atomic; if it is a directory the call fails rather than
+ * discarding what is inside it.
+ *
+ * Both ends must be on the same filesystem — moving between the disk and
+ * `/ramdisk` would be a copy and a delete rather than one step, and a rename
+ * that silently copied a gigabyte would not be what anybody meant by rename.
+ *
+ * @param from Existing path.
+ * @param to   What it should be called.
+ * @return 0, `-W_ENOENT` if @p from does not exist, `-W_EXDEV` across two
+ *         filesystems, `-W_EISDIR` if @p to is a directory, `-W_EINVAL` for a
+ *         directory moved inside itself, or `-W_EACCES`.
+ */
+int wrename(const char *from, const char *to);
+
 /* ==================================================================== *
  *  Directories
  * ==================================================================== */

@@ -168,6 +168,29 @@ static int64_t sys_rmdir(uint64_t path)   { return sys_path_only(path, vfs_rmdir
 static int64_t sys_chdir(uint64_t path)   { return sys_path_only(path, vfs_chdir); }
 static int64_t sys_opendir(uint64_t path) { return sys_path_only(path, vfs_opendir); }
 
+/* Give a file a different name, in one step.
+ *
+ * The step is the point: a program that has to replace a file safely writes
+ * the new one under a temporary name and renames it over the old, and either
+ * the whole new file is there or the whole old one still is.  Writing over the
+ * original has a moment in the middle where it is neither. */
+static int64_t sys_rename(uint64_t from, uint64_t to)
+{
+    char from_buf[W_PATH_MAX + 1];
+    char to_buf[W_PATH_MAX + 1];
+
+    int r = copy_string_from_user((const char *)from, from_buf,
+                                  sizeof(from_buf));
+    if (r < 0)
+        return r;
+
+    r = copy_string_from_user((const char *)to, to_buf, sizeof(to_buf));
+    if (r < 0)
+        return r;
+
+    return vfs_rename(proc_current(), from_buf, to_buf);
+}
+
 static int64_t sys_readdir(uint64_t fd, uint64_t out)
 {
     if (!user_range_ok((void *)out, sizeof(wdirent_t), true))
@@ -1263,6 +1286,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_SEATGRANT: r = sys_seat_grant(); break;
     case WSYS_POINTER:   r = sys_pointer(regs->rdi); break;
     case WSYS_PTRSPEED:  r = sys_pointer_speed(regs->rdi); break;
+    case WSYS_RENAME:    r = sys_rename(regs->rdi, regs->rsi); break;
     case WSYS_REAP:      r = sys_reap(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;

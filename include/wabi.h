@@ -37,6 +37,7 @@
 #define W_EFAULT        14   /* bad address passed from user space */
 #define W_EBUSY         16   /* resource busy                      */
 #define W_EEXIST        17   /* already exists                     */
+#define W_EXDEV         18   /* rename across two filesystems      */
 #define W_ENOTDIR       20   /* a path component is not a directory */
 #define W_EISDIR        21   /* is a directory                     */
 #define W_EINVAL        22   /* invalid argument                   */
@@ -659,6 +660,7 @@ typedef struct {
 #define WSYS_SEATGRANT  74
 #define WSYS_POINTER    75
 #define WSYS_PTRSPEED   76
+#define WSYS_RENAME     77
 #define WSYS_MAX        78
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */

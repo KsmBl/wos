@@ -65,6 +65,7 @@ and `wyield()`. Everything else returns promptly.
 | `W_EFAULT` | 14 | bad address passed to the kernel |
 | `W_EBUSY` | 16 | resource busy |
 | `W_EEXIST` | 17 | already exists |
+| `W_EXDEV` | 18 | rename across two filesystems |
 | `W_ENOTDIR` | 20 | a path component is not a directory |
 | `W_EISDIR` | 21 | is a directory |
 | `W_EINVAL` | 22 | invalid argument |
@@ -174,6 +175,42 @@ typedef struct {
 ## `int wunlink(const char *path)`
 
 Delete a file. **Returns** 0, or `-W_ENOENT`, `-W_EISDIR` (use `wrmdir()`).
+
+## `int wrename(const char *from, const char *to)`
+
+Give a file a different name, or a different directory, **in one step**.
+
+The one step is the point. A program replacing a file safely writes the new
+contents under a temporary name and renames it over the old one:
+
+```c
+int fd = wopen("/home/root/.config/sway/config.new", W_O_WRONLY | W_O_CREAT);
+/* ... write the whole file ... */
+wclose(fd);
+wrename("/home/root/.config/sway/config.new",
+        "/home/root/.config/sway/config");
+```
+
+The swap is a single change to a directory, so a machine that stops in the
+middle — out of disk, powered off — has either the whole old file or the whole
+new one. Writing over the original instead has a moment where it is neither,
+and a configuration lost that way is lost for good. `swaysettings` saves this
+way.
+
+**Nothing is copied**: a directory entry is a name and an inode number, and
+only the entry moves, so renaming a large file costs the same as renaming an
+empty one. An existing destination is replaced when it is a file — that is what makes
+the swap atomic — and refused when it is a directory, rather than discarding
+whatever is inside it. A directory cannot be moved inside itself.
+
+Both ends must be on **one filesystem**. Moving between the disk and
+`/ramdisk` would be a copy and a delete rather than one step, and a rename that
+silently copied a gigabyte would not be what anybody meant by rename;
+[`mv`](apps.md#mv) says so rather than doing it.
+
+**Returns** 0, `-W_ENOENT`, `-W_EXDEV` across two filesystems, `-W_EISDIR` if
+the destination is a directory, `-W_EINVAL` for a directory moved inside
+itself, or `-W_EACCES`.
 
 ---
 

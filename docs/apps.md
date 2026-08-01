@@ -23,6 +23,7 @@ which is the price of having no shared libraries.
 | [`ps`](#ps) | show processes and their memory |
 | [`touch`](#touch) | create files |
 | [`mkdir`](#mkdir) | create directories |
+| [`mv`](#mv) | move or rename files |
 | [`rm`](#rm) | remove files and directories |
 | [`clear`](#clear) | clear the screen |
 | [`time`](#time) | show or set the clock |
@@ -210,6 +211,44 @@ Creates each directory. The parent must already exist, so making a nested path
 takes one `mkdir` per level.
 
 **Exit status:** 0, or 1 if any directory could not be created.
+
+## mv
+
+```
+mv <from> <to>
+mv <file> ... <directory>
+```
+
+Rename something, or move it somewhere else:
+
+```
+wos:/ramdisk$ mv notes.txt kept.txt
+wos:/ramdisk$ mv kept.txt draft.txt /ramdisk/old
+```
+
+Two arguments are a rename, unless the second names a directory — then the file
+keeps its name and goes inside. More than two need the last to be a directory.
+
+**Nothing is copied.** [`wrename()`](wkernel-api.md#int-wrenameconst-char-from-const-char-to)
+moves a directory entry, which is a name and an inode number, so moving a large
+file costs the same as moving an empty one. An existing destination file is
+replaced — that is what makes rename the safe way to write a file, and why
+`swaysettings` saves by writing beside the real file and renaming over it.
+
+**It cannot move between the disk and `/ramdisk`.** Those are two filesystems,
+and an entry in one means nothing in the other, so what looks like a move would
+have to be a copy and a delete. It says so instead of quietly doing it:
+
+```
+wos:/ramdisk$ mv third.txt /home/root/moved.txt
+mv: third.txt and /home/root/moved.txt are on different filesystems; a move
+between them would be a copy
+```
+
+A directory is never silently replaced, because whatever is inside it would go
+with it.
+
+**Exit status:** 0, or 1 if anything could not be moved.
 
 ## rm
 

@@ -38,6 +38,11 @@ int wunlink(const char *path)
     return wsyscall1(WSYS_UNLINK, (long)path);
 }
 
+int wrename(const char *from, const char *to)
+{
+    return wsyscall2(WSYS_RENAME, (long)from, (long)to);
+}
+
 int wopendir(const char *path)
 {
     return wsyscall1(WSYS_OPENDIR, (long)path);
