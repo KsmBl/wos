@@ -1750,9 +1750,14 @@ int main(int argc, char **argv)
 
     app.display = wl_display_connect(NULL);
     if (!app.display) {
-        wfprintf(W_STDERR, "thunar: no display server to connect to\n");
-        wfprintf(W_STDERR, "thunar: this is a Wayland client -- start sway "
-                           "first, or use `fm` on the console\n");
+        int why = wl_display_connect_error();
+
+        wfprintf(W_STDERR, "thunar: no display server to connect to: %s\n",
+                 wstrerror(-why));
+        wfprintf(W_STDERR, -why == W_EPERM
+                 ? "thunar: that session belongs to another user\n"
+                 : "thunar: this is a Wayland client -- start sway first, "
+                   "or use `fm` on the console\n");
         return 1;
     }
 

@@ -452,6 +452,9 @@ address, and it is gone when the returned descriptor closes. Answering to a
 name counts as writing where it lives, so this needs write permission on the
 directory, which for an ordinary user means somewhere under their own home.
 
+The socket **belongs to the user who listened on it**, which is what decides
+who may connect: see `wconnect()`.
+
 **Returns** a descriptor to accept connections on, `-W_EEXIST` if the name is
 taken, `-W_EACCES`, `-W_ENFILE` or `-W_EMFILE`.
 
@@ -461,8 +464,16 @@ Connect to whoever is listening on `path`. Returns as soon as the connection is
 queued rather than waiting to be accepted, so a client may start sending
 immediately.
 
+**A socket belongs to whoever is listening on it, and another user cannot
+connect.** Talking to a socket is talking to the process behind it, and what
+that process does with what it hears is its business: a compositor's socket
+takes commands and runs programs as the user whose session it is. So the check
+is here, where every connection goes past, rather than in each program that
+listens. Root is not stopped, because root can already become anybody.
+
 **Returns** a connected descriptor, `-W_ENOENT` if nothing is listening,
-`-W_EBUSY` if the backlog is full, or `-W_EMFILE`.
+`-W_EPERM` if the socket belongs to another user, `-W_EBUSY` if the backlog is
+full, or `-W_EMFILE`.
 
 ## `int waccept(int fd)`
 

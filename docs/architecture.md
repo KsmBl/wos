@@ -228,9 +228,25 @@ hand over a descriptor for a buffer of pixels rather than a copy of them. So:
 Unix domain sockets, in the shape WOS needs them.
 
 The address is a path but not a file. Nothing is created on the disk; the path
-is the name a listener answers to and it disappears when the listener closes,
-which is also why it needs no permission model of its own — binding one
-requires write permission where it lives, and that rule already exists.
+is the name a listener answers to, and it disappears when the listener closes.
+Binding one needs write permission where it lives, which is a rule that already
+existed: answering to a name in a directory is a kind of writing there.
+
+**A socket has an owner**, and another user cannot connect to it. That rule was
+missing at first, on the reasoning that the write permission needed to bind one
+was permission enough. It was not, and the difference is what a socket *is*: a
+file is bytes, and a socket is a way into the process behind it. Sockets on
+this machine live in `/ramdisk`, which everybody can write, and the compositor
+listens on one that takes commands — so any user's program could have told
+another user's sway to run a program, and it would have run it as them. The
+Wayland socket beside it is worse: a client that binds `wl_seat` is told every
+keystroke.
+
+So `socket_connect()` compares the caller's uid with the uid that listened and
+refuses anyone else with `-W_EPERM`; root is not stopped, because root can
+already become anybody. The check is in the one place every connection goes
+past rather than in each program that listens, because a program that forgot it
+would be a hole in the machine rather than a bug in itself.
 
 **Descriptor passing** is the part worth being careful about. A `file_t` is a
 reference to something — a pipe end, an open file, a socket endpoint — so

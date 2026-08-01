@@ -661,9 +661,13 @@ int main(int argc, char **argv)
 
     app.display = wl_display_connect(NULL);
     if (!app.display) {
-        wfprintf(W_STDERR, "wlterm: no display server to connect to\n");
-        wfprintf(W_STDERR, "wlterm: is sway running? "
-                           "`systemctl status sway`\n");
+        int why = wl_display_connect_error();
+
+        wfprintf(W_STDERR, "wlterm: no display server to connect to: %s\n",
+                 wstrerror(-why));
+        wfprintf(W_STDERR, -why == W_EPERM
+                 ? "wlterm: that session belongs to another user\n"
+                 : "wlterm: is sway running? `systemctl status sway`\n");
         return 1;
     }
 

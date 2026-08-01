@@ -66,6 +66,13 @@ struct xdg_toplevel;
  */
 struct wl_display *wl_display_connect(const char *name);
 
+/* Why the last wl_display_connect() returned NULL, as a negative W_E* code:
+ * `-W_ENOENT` when nothing is listening on that name, `-W_EPERM` when the
+ * display belongs to another user.  Upstream this is errno, which is not a
+ * thing here.  Worth printing -- "start a display server" is the wrong advice
+ * when one is running and it is somebody else's. */
+int wl_display_connect_error(void);
+
 void wl_display_disconnect(struct wl_display *display);
 
 /** The socket, for a program that waits on it alongside its own descriptors. */

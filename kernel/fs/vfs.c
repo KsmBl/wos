@@ -315,7 +315,7 @@ int vfs_listen(struct process *p, const char *path)
         return -W_EACCES;
 
     int err = 0;
-    socket_t *s = socket_listen(abs, &err);
+    socket_t *s = socket_listen(abs, p->uid, &err);
     if (!s)
         return err;
 
@@ -330,7 +330,7 @@ int vfs_connect(struct process *p, const char *path)
         return r;
 
     int err = 0;
-    socket_t *s = socket_connect(abs, &err);
+    socket_t *s = socket_connect(abs, p->uid, &err);
     if (!s)
         return err;
 

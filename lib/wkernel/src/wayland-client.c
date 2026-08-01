@@ -428,6 +428,22 @@ int wl_display_roundtrip(struct wl_display *d)
  *  Connecting
  * ------------------------------------------------------------------ */
 
+/* Why the last wl_display_connect() failed.
+ *
+ * Upstream this is errno, which WOS has not got: a syscall here returns the
+ * reason and the caller reads it.  wl_display_connect() returns a pointer and
+ * has nowhere to put one, so it is left here -- and it matters now that a
+ * connection can be refused for a reason other than nobody listening.  A
+ * client that told somebody to start a display server when the truth is that
+ * the one running belongs to another user would be sending them the wrong
+ * way. */
+static int connect_error;
+
+int wl_display_connect_error(void)
+{
+    return connect_error;
+}
+
 struct wl_display *wl_display_connect(const char *name)
 {
     char path[W_PATH_MAX + 1];
@@ -443,8 +459,12 @@ struct wl_display *wl_display_connect(const char *name)
         wsnprintf(path, sizeof(path), "%s/%s", WL_RUNTIME_DIR, name);
 
     int fd = wconnect(path);
-    if (fd < 0)
+    if (fd < 0) {
+        connect_error = fd;
         return NULL;
+    }
+
+    connect_error = 0;
 
     struct wl_display *d = malloc(sizeof(*d));
     if (!d) {

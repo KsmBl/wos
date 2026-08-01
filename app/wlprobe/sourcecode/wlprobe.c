@@ -88,10 +88,17 @@ int main(int argc, char **argv)
 
     struct wl_display *display = wl_display_connect(name);
     if (!display) {
-        wfprintf(W_STDERR, "wlprobe: cannot reach %s\n",
-                 name ? name : "wayland-0");
-        wfprintf(W_STDERR, "wlprobe: is a display server running? "
-                           "`systemctl status sway`\n");
+        int why = wl_display_connect_error();
+
+        wfprintf(W_STDERR, "wlprobe: cannot reach %s: %s\n",
+                 name ? name : "wayland-0", wstrerror(-why));
+
+        if (-why == W_EPERM)
+            wfprintf(W_STDERR, "wlprobe: that display belongs to another "
+                               "user; start your own with `waylandd`\n");
+        else
+            wfprintf(W_STDERR, "wlprobe: is a display server running? "
+                               "`systemctl status sway`\n");
         return 1;
     }
 
