@@ -20,25 +20,33 @@
  */
 
 #include "sway.h"
+#include <wipc.h>
 
 #define IPC_MAX_CLIENTS 4
 #define IPC_BUFFER      8192
 
-#define IPC_MAGIC "i3-ipc"
-#define IPC_MAGIC_LEN 6
+/* The reply is built in one buffer, and one reply is much larger than the
+ * rest: get_config hands back the whole configuration file. */
+#define IPC_OUT         32768
 
-/* The message numbers, from i3's protocol. */
-#define IPC_RUN_COMMAND       0
-#define IPC_GET_WORKSPACES    1
-#define IPC_SUBSCRIBE         2
-#define IPC_GET_OUTPUTS       3
-#define IPC_GET_TREE          4
-#define IPC_GET_MARKS         5
-#define IPC_GET_BAR_CONFIG    6
-#define IPC_GET_VERSION       7
-#define IPC_GET_BINDING_MODES 8
-#define IPC_GET_CONFIG        9
-#define IPC_SEND_TICK        10
+/* The magic string and the message numbers are the protocol's, and the
+ * protocol is in the library: the same numbers are read by everything that
+ * talks to this socket, and two copies of them is one more than can be kept
+ * right. */
+#define IPC_MAGIC     WIPC_MAGIC
+#define IPC_MAGIC_LEN WIPC_MAGIC_LEN
+
+#define IPC_RUN_COMMAND       WIPC_RUN_COMMAND
+#define IPC_GET_WORKSPACES    WIPC_GET_WORKSPACES
+#define IPC_SUBSCRIBE         WIPC_SUBSCRIBE
+#define IPC_GET_OUTPUTS       WIPC_GET_OUTPUTS
+#define IPC_GET_TREE          WIPC_GET_TREE
+#define IPC_GET_MARKS         WIPC_GET_MARKS
+#define IPC_GET_BAR_CONFIG    WIPC_GET_BAR_CONFIG
+#define IPC_GET_VERSION       WIPC_GET_VERSION
+#define IPC_GET_BINDING_MODES WIPC_GET_BINDING_MODES
+#define IPC_GET_CONFIG        WIPC_GET_CONFIG
+#define IPC_SEND_TICK         WIPC_SEND_TICK
 
 struct ipc_client {
     int      fd;

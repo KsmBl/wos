@@ -14,81 +14,35 @@
  */
 
 #include "sway.h"
+#include <wdraw.h>
+
+/* Everything is composed into one back buffer, so the canvas is made once and
+ * used by every helper below.  The primitives themselves are the library's --
+ * see wdraw.h -- because a compositor's fill and a client's fill are the same
+ * arithmetic, and they were both here until they disagreed. */
+static wcanvas_t canvas;
 
 static void fill(int x, int y, int w, int h, uint32_t colour)
 {
-    int sw = (int)sway.screen.width;
-    int sh = (int)sway.screen.height;
-
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > sw) w = sw - x;
-    if (y + h > sh) h = sh - y;
-    if (w <= 0 || h <= 0)
-        return;
-
-    for (int row = 0; row < h; row++) {
-        uint32_t *at = sway.back + (uint64_t)(y + row) * sw + x;
-        for (int col = 0; col < w; col++)
-            at[col] = colour;
-    }
+    wdraw_fill(&canvas, x, y, w, h, colour);
 }
 
 /* An outline `width` thick just inside the rectangle. */
 static void frame_rect(int x, int y, int w, int h, int width, uint32_t colour)
 {
-    if (width <= 0)
-        return;
-
-    fill(x, y, w, width, colour);                       /* top    */
-    fill(x, y + h - width, w, width, colour);            /* bottom */
-    fill(x, y, width, h, colour);                        /* left   */
-    fill(x + w - width, y, width, h, colour);            /* right  */
-}
-
-static void draw_char(int x, int y, char c, uint32_t fg)
-{
-    const unsigned char *glyph = wglyph8x16((unsigned char)c);
-    int sw = (int)sway.screen.width;
-    int sh = (int)sway.screen.height;
-
-    for (int row = 0; row < 16; row++) {
-        int py = y + row;
-        if (py < 0 || py >= sh)
-            continue;
-
-        unsigned char bits = glyph[row];
-        uint32_t     *at   = sway.back + (uint64_t)py * sw;
-
-        for (int col = 0; col < 8; col++) {
-            int px = x + col;
-            if (px < 0 || px >= sw)
-                continue;
-            if (bits & (0x80 >> col))
-                at[px] = fg;
-        }
-    }
+    wdraw_frame(&canvas, x, y, w, h, width, colour);
 }
 
 /* Text, stopping at `max_width` pixels rather than running over whatever comes
  * next.  Returns where it got to. */
 static int draw_text(int x, int y, const char *text, uint32_t fg, int max_width)
 {
-    int at = x;
-
-    for (const char *s = text; *s; s++) {
-        if (at + 8 > x + max_width)
-            break;
-        draw_char(at, y, *s, fg);
-        at += 8;
-    }
-
-    return at;
+    return wdraw_text_max(&canvas, x, y, text, fg, max_width);
 }
 
 static int text_width(const char *s)
 {
-    return (int)strlen(s) * 8;
+    return wdraw_text_width(s);
 }
 
 /* The same, for the pointer code: a click on the bar has to be matched against
@@ -340,6 +294,9 @@ void render_frame(void)
 
     if (!sway.back)
         return;
+
+    canvas = wcanvas(sway.back, (int)sway.screen.width,
+                     (int)sway.screen.height);
 
     fill(0, 0, (int)sway.screen.width, (int)sway.screen.height,
          sway.config.background);
