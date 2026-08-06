@@ -50,6 +50,31 @@ output * bg #101820 solid_color
 #     }
 input * pointer_accel 0
 
+### Cursor
+
+# The pointer's size and colour.  Neither is a sway setting: there the cursor
+# comes from an X cursor theme, which is a directory of images and a loader for
+# them.  Here it is a shape the compositor draws, so it is a whole-number scale
+# (1 to 4) and the colour the inside of the arrow is filled with.  The outline
+# stays black at every size, which is what makes a white arrow visible on a
+# white window.
+#
+# `seat * xcursor_theme <theme> <size>` from a real sway configuration is read
+# too: the theme is dropped and the size is kept, rounded to the nearest scale.
+cursor size 1
+cursor color #ffffff
+
+### The desktop
+
+# What is written across the background -- which is what an empty workspace
+# shows.  ${CPU} and ${MEM} are replaced with the live figures as they change,
+# `\n` starts another line, and empty means the key hints a fresh machine has:
+#
+#     background_text "WOS\ncpu ${CPU}   mem ${MEM}"
+#
+# swaysettings has a field for this, and writes it back here.
+background_text ""
+
 ### Key bindings
 
 # Programs
@@ -126,13 +151,31 @@ client.unfocused #333333 #222222 #888888 #292d2e #222222
 gaps inner 0
 gaps outer 0
 
+### The bar
+
+# Across the top, drawn by the compositor.  `mode hide` takes its twenty pixels
+# back and shows it over the windows while $mod is held; `status_text` is the
+# right-hand side, with the same ${...} names the background text takes.
+bar {
+    position top
+    mode dock
+    status_text ""
+}
+
 ### Things this compositor has not got
 #
 # Each of these is read and ignored, and says so in /ramdisk/sway.log:
 #
 #   font              one 8x16 font is built in and cannot be changed
-#   floating_modifier nothing floats -- there is no pointer to drag it with
-#   input / seat      the keyboard is whatever the kernel found
-#   bar { ... }       the bar is drawn by the compositor, not by swaybar:
-#                     a bar as a client would need layer-shell, and a window
-#                     that tiles is not a bar
+#   floating_modifier nothing floats -- every window tiles, and a floating one
+#                     would need a stacking order the layout tree has not got
+#   accel_profile     the pointer is flat by nature: speed is a multiplier,
+#                     and a curve would need timing a PS/2 mouse cannot give
+#   input <anything>  other than pointer_accel: the keyboard is the one the
+#                     kernel found, with no settings to change
+#   seat              there is one seat, and it is the compositor's
+#   status_command    no program is run for the bar: `bar status_text "..."`
+#                     takes ${CPU}, ${MEM}, ${TIME}, ${DATE} and ${BATTERY}
+#   swaybar           the bar is drawn by the compositor rather than by a
+#                     client: a bar as a client would need layer-shell, and a
+#                     window that tiles is not a bar

@@ -62,7 +62,7 @@ static struct ipc_client clients[IPC_MAX_CLIENTS];
  *  Writing JSON
  * ------------------------------------------------------------------ */
 
-static char     out[IPC_BUFFER];
+static char     out[IPC_OUT];
 static wsize_t  out_len;
 
 static void put(const char *s)
@@ -105,6 +105,12 @@ static void put_string(const char *key, const char *value)
 
         if (*s == '"' || *s == '\\')
             wsnprintf(c, sizeof(c), "\\%c", *s);
+        else if (*s == '\n')
+            wsnprintf(c, sizeof(c), "\\n");
+        else if (*s == '\t')
+            wsnprintf(c, sizeof(c), "\\t");
+        else if (*s == '\r')
+            wsnprintf(c, sizeof(c), "\\r");
         else if ((unsigned char)*s < 0x20)
             wsnprintf(c, sizeof(c), "\\u%04x", (unsigned char)*s);
         else
@@ -275,6 +281,41 @@ static void get_outputs(void)
     close_with("}]");
 }
 
+/* The configuration file itself, which is what i3 and sway both answer with.
+ *
+ * The path was what this used to return, and the path is not the question:
+ * `swaymsg -t get_config` is how a program reads the configuration of a
+ * compositor it is talking to, and a program on the other end of a socket
+ * cannot open a file by name and be sure it is reading the same one -- it may
+ * not even be able to see it.  The text is the answer. */
+static void get_config(void)
+{
+    static char text[IPC_OUT / 2];
+
+    out_len = 0;
+    out[0]  = '\0';
+
+    int n  = 0;
+    int fd = wopen(sway.config_path, W_O_RDONLY);
+
+    if (fd >= 0) {
+        n = wread(fd, text, sizeof(text) - 1);
+        wclose(fd);
+    }
+
+    if (n < 0)
+        n = 0;
+    text[n] = '\0';
+
+    put("{");
+    put_string("config", text);
+
+    /* Which file it came from, as well: sway looks in two places and a client
+     * that wants to edit what it just read has to know which one answered. */
+    put_string("loaded_config_file_name", sway.config_path);
+    close_with("}");
+}
+
 static void get_version(void)
 {
     out_len = 0;
@@ -376,11 +417,7 @@ static void handle_message(struct ipc_client *c, uint32_t type,
         return;
 
     case IPC_GET_CONFIG:
-        out_len = 0;
-        out[0]  = '\0';
-        put("{");
-        put_string("config", sway.config_path);
-        close_with("}");
+        get_config();
         reply(c->fd, type, out);
         return;
 

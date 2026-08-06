@@ -1480,6 +1480,27 @@ machine-wide setting that outlives the process, which is why sway puts the
 default back when it starts rather than assuming it. See
 [`wpointerspeed()`](wkernel-api.md#int-wpointerspeedint-percent).
 
+**How big it is and what colour** are two settings of the compositor's own:
+
+```
+cursor size 3            the shape at three times its size, 1 to 4
+cursor color #ff4444     what the inside of the arrow is filled with
+```
+
+Neither is a sway directive, because in sway both come from an X cursor theme —
+a directory of images, a loader for them and a hotspot per shape, none of which
+exist here. The cursor is a shape this compositor draws, so its size is a whole
+number and its colour is a colour. Scaling is by whole multiples: a bitmap
+scaled by anything else has to decide what half a pixel of edge looks like, and
+there is nothing here to blend it with. The point of the arrow stays where the
+pointer is at every size, and **the outline stays black** whatever the colour —
+which is what makes a white arrow visible on a white window and a black one
+visible on the background behind it.
+
+`seat * xcursor_theme <theme> <size>` from a real sway configuration is read
+too: the theme is dropped, and the size is kept as the nearest scale (the sizes
+a cursor theme ships are multiples of 24, and that is what it divides by).
+
 ### The bar
 
 Across the top, which is where `bar { position top }` puts it and where it now
@@ -1505,8 +1526,71 @@ whose charge will not read shows `BAT ?` — that is a laptop whose firmware thi
 kernel could not run, and a number there would be invented. See
 [`battery`](#battery) for where the figure comes from.
 
+`bar mode` takes sway's three: `dock` is the bar as it is, `invisible` turns it
+off, and **`hide`** takes its twenty pixels back and puts the bar over the
+windows while `$mod` is held. That is the one place this compositor reads the
+modifier without a binding having matched.
+
+**What the right-hand side says** is `bar status_text`, a line with the
+machine's figures in it:
+
+```
+bar status_text "${BATTERY}   ${DATE}  ${TIME}"
+bar status_text "cpu ${CPU}  mem ${MEM}  ${TIME}"
+```
+
+Empty — the default — is the battery, the date and the clock, which is the
+first of those written out. The names are the same ones the background text
+takes; see [the background](#the-background-and-what-is-written-on-it).
+
+This is not sway's `status_command`, which runs a program and reads its output:
+there is no shell pipeline here to run one through, and a bar that started a
+process to print a clock would be a strange thing on a machine this size. A
+configuration that has one is told so in the log.
+
 The bar is drawn by the compositor rather than by swaybar; see
 [what it has not got](#what-it-has-not-got).
+
+### The background, and what is written on it
+
+An empty workspace shows three key hints on a plain colour. `background_text`
+replaces them with whatever you would rather have there:
+
+```
+background_text "WOS\ncpu ${CPU}   mem ${MEM}"
+```
+
+| In the text | What it becomes |
+|---|---|
+| `${CPU}` | how much of the processors is busy, as a percentage |
+| `${MEM}` | how much of the memory is in use, as a percentage |
+| `${TIME}` | the clock, `HH:MM` |
+| `${DATE}` | the date, `YYYY-MM-DD` |
+| `${BATTERY}` | `BAT 50%`, `CHG 90%`, `AC`, or nothing without a battery |
+| `\n` | a line break; the lines are centred together |
+
+The same names work in [`bar status_text`](#the-bar), because they come from
+one place — `wstatus_expand()` in the library — rather than from whichever
+program drew a line first.
+
+The two figures are **live** — read once a second and redrawn only when they
+change, so a compositor sitting on an idle machine is not redrawing the screen
+every second to write the same number. `${CPU}` is a rate and therefore a
+difference between two readings, which is why the text is kept as it was
+written and expanded as it is drawn: a template expanded once when it was set
+would show the load at the moment somebody typed it and never move again.
+
+Anything else in `${...}` is left alone rather than blanked, so a name this
+compositor does not know looks like the mistake it is.
+
+The text is drawn in a colour worked out from the background — dark on a light
+one, light on a dark one — because the background is the one colour here that
+somebody may set to anything at all, and text in a fixed grey disappears
+against half of the range. The key hints follow the same rule.
+
+It is only visible where the background is: **windows cover it**, so this is
+what an empty workspace says rather than a layer under the tiles.
+[`swaysettings`](#swaysettings) has a field for it.
 
 ### The layout
 
@@ -1747,6 +1831,19 @@ The protocol is i3's, unchanged — a magic string, a length, a type and a JSON
 payload — so the interesting property is not that this program works but that
 it is not the only thing that can. Anything that speaks i3's IPC speaks to this
 compositor.
+
+`get_config` hands back the configuration **file**, the way i3 and sway do,
+with the path beside it:
+
+```
+root@wos:/home/root# swaymsg -t get_config -r
+{"config":"### Variables\n\nset $mod Mod4\n...",
+ "loaded_config_file_name":"/home/root/.config/sway/config"}
+```
+
+The path alone was what this used to answer, and the path is not the question:
+a program on the other end of a socket cannot open a file by name and be sure
+it is reading the same one — it may not be able to see it at all.
 
 `subscribe` is accepted and no events are ever sent, because this compositor
 raises none.

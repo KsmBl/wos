@@ -161,7 +161,7 @@ static void draw_tree(struct node *n)
 
 static void draw_bar(void)
 {
-    if (!sway.config.bar)
+    if (!sway_bar_showing())
         return;
 
     int h = BAR_HEIGHT;
@@ -213,6 +213,60 @@ static void draw_bar(void)
 /* What the screen says when nothing is running on it.  A blank screen and a
  * broken compositor look identical, and the first thing anybody needs to know
  * is which key opens a window. */
+/* Something that can be read on the background, whatever colour it is.
+ *
+ * The background is the one colour here that somebody may set to anything at
+ * all, and text drawn in a fixed grey disappears against half of the range.
+ * The test is the usual weighted one: green carries most of what the eye calls
+ * brightness, blue almost none. */
+static uint32_t on_background(int dim)
+{
+    uint32_t bg = sway.config.background;
+
+    unsigned r = (bg >> 16) & 0xFF, g = (bg >> 8) & 0xFF, b = bg & 0xFF;
+    unsigned luma = (r * 30 + g * 59 + b * 11) / 100;
+
+    if (luma > 128)
+        return dim ? 0x555555 : 0x000000;      /* a light background */
+
+    return dim ? 0x888888 : 0xDDDDDD;
+}
+
+/* The text somebody put on the background, in the middle of what is left of
+ * the screen.  `\n` in it starts another line, so a desktop that wants a
+ * heading and a reading under it can have one. */
+static void draw_background_text(void)
+{
+    const char *at    = sway.background_line;
+    int         lines = 1;
+
+    for (const char *p = at; *p; p++)
+        if (*p == '\n')
+            lines++;
+
+    int cx = (int)sway.screen.width / 2;
+    int cy = sway.usable_y + sway.usable_h / 2 - (lines - 1) * 12;
+
+    for (int i = 0; i < lines; i++) {
+        char        line[BACKGROUND_LINE_MAX];
+        const char *end = strchr(at, '\n');
+        wsize_t     len = end ? (wsize_t)(end - at) : strlen(at);
+
+        if (len >= sizeof(line))
+            len = sizeof(line) - 1;
+
+        memcpy(line, at, len);
+        line[len] = '\0';
+
+        draw_text(cx - text_width(line) / 2, cy + i * 24, line,
+                  on_background(0), (int)sway.screen.width);
+
+        if (!end)
+            break;
+        at = end + 1;
+    }
+}
+
 static void draw_empty_workspace(void)
 {
     char line[96];
@@ -222,17 +276,24 @@ static void draw_empty_workspace(void)
     int cx = (int)sway.screen.width / 2;
     int cy = sway.usable_y + sway.usable_h / 2;
 
+    /* Somebody who has written their own has said what this screen is for, and
+     * two sets of centred text over each other would be neither. */
+    if (sway.background_line[0]) {
+        draw_background_text();
+        return;
+    }
+
     wsnprintf(line, sizeof(line), "%s + Return   open %s", mod,
               sway.config.terminal);
-    draw_text(cx - text_width(line) / 2, cy - 24, line, 0x666666,
+    draw_text(cx - text_width(line) / 2, cy - 24, line, on_background(0),
               (int)sway.screen.width);
 
     wsnprintf(line, sizeof(line), "%s + Shift + Q   close the window", mod);
-    draw_text(cx - text_width(line) / 2, cy, line, 0x555555,
+    draw_text(cx - text_width(line) / 2, cy, line, on_background(1),
               (int)sway.screen.width);
 
     wsnprintf(line, sizeof(line), "%s + Shift + E   leave sway", mod);
-    draw_text(cx - text_width(line) / 2, cy + 24, line, 0x555555,
+    draw_text(cx - text_width(line) / 2, cy + 24, line, on_background(1),
               (int)sway.screen.width);
 }
 
@@ -245,47 +306,16 @@ static void draw_empty_workspace(void)
  * right, or a client's shape drawn opaquely over a square of its own
  * background, which looks worse than no cursor at all.
  *
- * The shape is the arrow every desktop has: an outline in black with a white
- * fill, so it stays visible over a dark window and a light one alike.  Eleven
- * rows is enough to read at 640x400 and small enough not to cover what is
- * being pointed at.
+ * The shape and the scaling are wdraw_cursor()'s, so that the arrow the
+ * settings window previews is the arrow that ends up on the screen.
  */
-static const char *const cursor_shape[] = {
-    "X          ",
-    "XX         ",
-    "X.X        ",
-    "X..X       ",
-    "X...X      ",
-    "X....X     ",
-    "X.....X    ",
-    "X......X   ",
-    "X.......X  ",
-    "X....XXXXX ",
-    "X..X.X     ",
-    "X.X  X.X   ",
-    "XX   X.X   ",
-    "X     X.X  ",
-    "      XXX  ",
-};
-
 static void draw_cursor(void)
 {
     if (!sway.have_pointer)
         return;
 
-    int rows = (int)(sizeof(cursor_shape) / sizeof(cursor_shape[0]));
-
-    for (int row = 0; row < rows; row++) {
-        const char *line = cursor_shape[row];
-
-        for (int col = 0; line[col]; col++) {
-            if (line[col] == ' ')
-                continue;
-
-            fill(sway.cursor_x + col, sway.cursor_y + row, 1, 1,
-                 line[col] == 'X' ? 0x000000 : 0xFFFFFF);
-        }
-    }
+    wdraw_cursor(&canvas, sway.cursor_x, sway.cursor_y,
+                 sway.config.cursor_size, sway.config.cursor_colour);
 }
 
 void render_frame(void)

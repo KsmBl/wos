@@ -17,6 +17,7 @@
  */
 
 #include "sway.h"
+#include <wstatus.h>
 #include <stdarg.h>
 
 struct sway sway;
@@ -130,7 +131,16 @@ static struct binding *find_binding(uint32_t code, uint32_t mods)
 
 static void handle_key(const winput_t *ev)
 {
+    uint32_t was = sway.mods;
+
     sway.mods = ev->mods;
+
+    /* A bar that hides appears while the modifier is held, so the modifier
+     * going down or coming up is a reason to redraw even though no binding
+     * matched and no window was told anything. */
+    if (sway.config.bar == BAR_HIDE &&
+        ((was ^ ev->mods) & sway.config.mod))
+        sway.dirty = 1;
 
     if (ev->state) {
         struct binding *b = find_binding(ev->code, ev->mods);
@@ -202,7 +212,10 @@ static void surface_local(struct view *v, int x, int y, int *sx, int *sy)
  * click on the empty half of the bar must not also reach the window under it. */
 static int bar_click(int x, int y)
 {
-    if (!sway.config.bar)
+    /* Only where it can be seen.  A hidden bar is not a strip of screen that
+     * swallows clicks, and one that is showing because the modifier is held is
+     * as clickable as a docked one. */
+    if (!sway_bar_showing())
         return 0;
 
     int bar_y = sway.config.bar_top ? 0 : (int)sway.screen.height - BAR_HEIGHT;
@@ -318,87 +331,84 @@ static void read_input(void)
  * position top` rearranges rather than drawing over the window at the top. */
 void sway_update_usable(void)
 {
-    int bar_h = sway.config.bar ? BAR_HEIGHT : 0;
+    /* Only a docked bar takes room from the windows.  One that hides is drawn
+     * over them when it appears, which is what makes hiding worth having on a
+     * 640x400 screen: twenty pixels back. */
+    int bar_h = (sway.config.bar == BAR_DOCK) ? BAR_HEIGHT : 0;
 
     sway.usable_y = (bar_h && sway.config.bar_top) ? bar_h : 0;
     sway.usable_h = (int)sway.screen.height - bar_h;
 }
 
-/* The battery, written the way a bar writes it: a percentage, and a mark
- * saying which way it is going.
+/* ------------------------------------------------------------------ *
+ *  ${...}
  *
- * Everything here can be missing, and each absence means something different.
- * A machine with no battery says nothing at all rather than 0%.  A machine
- * with a battery whose charge cannot be read says so -- that is a laptop whose
- * firmware this kernel could not run, and printing a number there would be
- * inventing one.  Only on mains, with no pack, is the mark on its own enough.
- */
-static void battery_text(char *out, wsize_t size)
-{
-    wbattery_t b;
+ *  Two things show a line somebody wrote with figures in it: the background,
+ *  and the right-hand side of the bar.  Both go through wstatus_expand() --
+ *  see wstatus.h -- so that "what can I put in it?" has one answer, and so
+ *  that the settings window can show the same expansion of the same names
+ *  without a second copy of what they mean.
+ * ------------------------------------------------------------------ */
 
-    out[0] = '\0';
-
-    if (wbattery(&b) < 0 || (!b.present && b.ac_online < 0))
-        return;
-
-    if (!b.present) {
-        strlcpy(out, b.ac_online ? "AC" : "", size);
-        return;
-    }
-
-    /* A word rather than a symbol.  The arrows a real bar uses are not in the
-     * 8x16 font, and the obvious ASCII stand-ins do not survive being put in
-     * front of a number: "-50%" reads as minus fifty. */
-    const char *what = (b.state == W_BATTERY_CHARGING)    ? "CHG"
-                     : (b.state == W_BATTERY_DISCHARGING) ? "BAT"
-                                                          : "AC";
-
-    if (b.charge_percent < 0) {
-        strlcpy(out, "BAT ?", size);
-        return;
-    }
-
-    wsnprintf(out, size, "%s %d%%", what, b.charge_percent);
-}
-
+/* The right-hand side of the bar.
+ *
+ * Written out every time round the loop and compared with what is already
+ * there, because that is the honest test of whether the screen needs redoing:
+ * the clock answers the same thing for a minute at a time, and a compositor
+ * that redrew to write the same number would be a load of its own. */
 static void update_status(void)
 {
-    static uint32_t last_minute  = 0xFFFFFFFF;
-    static uint32_t last_battery = 0xFFFFFFFF;
-    wtime_t         now;
+    char next[sizeof(sway.status)];
 
-    if (wtime_get(&now) < 0)
+    if (sway.config.status_text[0]) {
+        wstatus_expand(sway.config.status_text, next, sizeof(next));
+    } else {
+        /* What a machine nobody has configured shows: the charge, when there
+         * is a battery to report one, and the date and time.  Written as a
+         * template like any other, so the default and a configured line are
+         * the same kind of thing. */
+        char battery[24];
+
+        wstatus_expand("${BATTERY}", battery, sizeof(battery));
+        wstatus_expand(battery[0] ? "${BATTERY}   ${DATE}  ${TIME}"
+                                  : "${DATE}  ${TIME}", next, sizeof(next));
+    }
+
+    if (strcmp(next, sway.status) == 0)
         return;
 
-    char battery[24];
-    battery_text(battery, sizeof(battery));
-
-    /* Redrawn when either half changes.  The clock moves once a minute and the
-     * charge moves whenever it likes, so watching only the clock would leave a
-     * percentage up to a minute stale -- which on a machine being unplugged is
-     * exactly when somebody is looking at it. */
-    uint32_t minute = (uint32_t)(now.hour * 60 + now.minute);
-    uint32_t stamp  = 0;
-
-    for (const char *p = battery; *p; p++)
-        stamp = stamp * 31 + (uint8_t)*p;
-
-    if (minute == last_minute && stamp == last_battery)
-        return;
-
-    last_minute  = minute;
-    last_battery = stamp;
-
-    if (battery[0])
-        wsnprintf(sway.status, sizeof(sway.status),
-                  "%s   %04d-%02d-%02d  %02d:%02d", battery,
-                  now.year, now.month, now.day, now.hour, now.minute);
-    else
-        wsnprintf(sway.status, sizeof(sway.status), "%04d-%02d-%02d  %02d:%02d",
-                  now.year, now.month, now.day, now.hour, now.minute);
-
+    strlcpy(sway.status, next, sizeof(sway.status));
     sway.dirty = 1;
+}
+
+/* The text across the background, expanded the same way.  Called every time
+ * round the loop, so a template that has just arrived over the IPC socket is
+ * on the screen by the next frame rather than by the next second. */
+void sway_update_background_text(void)
+{
+    char next[BACKGROUND_LINE_MAX];
+
+    wstatus_expand(sway.config.background_text, next, sizeof(next));
+
+    if (strcmp(next, sway.background_line) == 0)
+        return;
+
+    strlcpy(sway.background_line, next, sizeof(sway.background_line));
+    sway.dirty = 1;
+}
+
+/* Whether the bar is on the screen at this moment: always while it is docked,
+ * never while it is invisible, and while the modifier is held when it hides.
+ * The last is the only place this compositor reads the modifier without a
+ * binding having matched. */
+int sway_bar_showing(void)
+{
+    if (sway.config.bar == BAR_DOCK)
+        return 1;
+    if (sway.config.bar == BAR_HIDE)
+        return (sway.mods & sway.config.mod) != 0;
+
+    return 0;
 }
 
 /* ------------------------------------------------------------------ *
@@ -581,6 +591,7 @@ int main(int argc, char **argv)
 
         reap_children();
         update_status();
+        sway_update_background_text();
 
         if (sway.dirty)
             render_frame();

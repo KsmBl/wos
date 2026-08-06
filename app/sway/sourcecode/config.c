@@ -211,6 +211,17 @@ static void pointer_speed_apply(void)
 }
 
 /* ------------------------------------------------------------------ *
+ *  The cursor
+ * ------------------------------------------------------------------ */
+
+static int clamp_cursor_size(int size)
+{
+    if (size < CURSOR_SIZE_MIN) return CURSOR_SIZE_MIN;
+    if (size > CURSOR_SIZE_MAX) return CURSOR_SIZE_MAX;
+    return size;
+}
+
+/* ------------------------------------------------------------------ *
  *  Key combinations
  * ------------------------------------------------------------------ */
 
@@ -305,6 +316,33 @@ static void join(char *out, wsize_t size, char *words[], int from, int count)
     }
 }
 
+/* `\n` in a configuration file is two characters; a line break is one.  Only
+ * the two escapes worth having are handled -- a break, and a backslash for
+ * anybody who wanted one -- because a configuration file is not a C string and
+ * inventing the rest of that language here would be inventing it. */
+static void unescape(char *s)
+{
+    char *out = s;
+
+    for (const char *at = s; *at; at++) {
+        if (*at != '\\' || !at[1]) {
+            *out++ = *at;
+            continue;
+        }
+
+        at++;
+
+        if (*at == 'n')       *out++ = '\n';
+        else if (*at == '\\') *out++ = '\\';
+        else {
+            *out++ = '\\';
+            *out++ = *at;
+        }
+    }
+
+    *out = '\0';
+}
+
 static int direction_from_name(const char *name, enum direction *out)
 {
     if (strcmp(name, "left") == 0)  { *out = DIR_LEFT;  return 1; }
@@ -369,19 +407,39 @@ static void run(char *words[], int count)
                 return;
             }
         } else if (strcmp(what, "mode") == 0 && count > at + 1) {
-            /* dock is the bar as it is; invisible is the bar turned off.
-             * `hide` would need it to come back on the modifier, which needs
-             * the modifier to be watched while no binding matches. */
+            /* sway's three: there and taking room, there while the modifier is
+             * held, or not there at all. */
             const char *mode = config_expand(words[at + 1]);
 
             if (strcmp(mode, "dock") == 0)
-                sway.config.bar = 1;
+                sway.config.bar = BAR_DOCK;
+            else if (strcmp(mode, "hide") == 0)
+                sway.config.bar = BAR_HIDE;
             else if (strcmp(mode, "invisible") == 0)
-                sway.config.bar = 0;
+                sway.config.bar = BAR_INVISIBLE;
             else {
-                sway_log("bar mode %s: read but not acted on", mode);
+                sway_log("bar mode %s: dock, hide or invisible", mode);
                 return;
             }
+        } else if (strcmp(what, "status_text") == 0 && count > at + 1) {
+            /* Not sway's `status_command`, which runs a program and reads its
+             * output: there is no shell pipeline here to run one through, and
+             * a bar that started a process to print a clock would be a strange
+             * thing on a machine this size.  What it is instead is the same
+             * template the background takes -- the two figures a status line
+             * usually holds, and the clock, without a program in between. */
+            char text[BACKGROUND_TEXT_MAX];
+
+            join(text, sizeof(text), words, at + 1, count);
+            unescape(text);
+
+            strlcpy(sway.config.status_text, text,
+                    sizeof(sway.config.status_text));
+        } else if (strcmp(what, "status_command") == 0) {
+            sway_log("bar status_command: no program is run for the bar here; "
+                     "`bar status_text \"...\"` takes ${CPU}, ${MEM}, "
+                     "${TIME}, ${DATE} and ${BATTERY}");
+            return;
         } else {
             sway_log("bar %s: read but not acted on", what);
             return;
@@ -593,6 +651,54 @@ static void run(char *words[], int count)
         return;
     }
 
+    /* The cursor's size and colour.
+     *
+     * Not sway's, because sway has not got them: there they are an X cursor
+     * theme, which is a directory of images, a loader for them and a hotspot
+     * per shape.  Here the cursor is a shape this compositor draws, so how big
+     * and what colour are two numbers rather than a theme -- and being able to
+     * say so in the same file as everything else is worth more than the name
+     * matching a directive that could not be honoured anyway. */
+    if (strcmp(cmd, "cursor") == 0 && count > 2) {
+        const char *what = config_expand(words[1]);
+
+        if (strcmp(what, "size") == 0) {
+            int size = atoi(config_expand(words[2]));
+
+            sway.config.cursor_size = clamp_cursor_size(size);
+
+            if (size != sway.config.cursor_size)
+                sway_log("cursor size %d: kept to %d, the range this shape "
+                         "scales over", size, sway.config.cursor_size);
+        } else if (strcmp(what, "color") == 0 || strcmp(what, "colour") == 0) {
+            sway.config.cursor_colour = parse_colour(words[2], 0xFFFFFF);
+        } else {
+            sway_log("cursor %s: the cursor has a size and a colour", what);
+            return;
+        }
+
+        sway.dirty = 1;
+        return;
+    }
+
+    /* What is written across the background.  ${CPU} and ${MEM} in it are
+     * replaced as they change, which is why the text is kept as written and
+     * expanded elsewhere: a template that had been expanded once would be a
+     * reading from the moment it was set and never move again. */
+    if (strcmp(cmd, "background_text") == 0) {
+        char text[BACKGROUND_TEXT_MAX];
+
+        join(text, sizeof(text), words, 1, count);
+        unescape(text);
+
+        strlcpy(sway.config.background_text, text,
+                sizeof(sway.config.background_text));
+
+        sway_update_background_text();
+        sway.dirty = 1;
+        return;
+    }
+
     if (strcmp(cmd, "gaps") == 0 && count > 2) {
         const char *which = config_expand(words[1]);
         int         value = atoi(config_expand(words[count - 1]));
@@ -655,6 +761,33 @@ static void run(char *words[], int count)
                  "window with", cmd);
         return;
     }
+    /* `seat <id> xcursor_theme <theme> <size>` is how a real sway configuration
+     * asks for a bigger pointer, so the size is taken from it even though the
+     * theme cannot be: there is one shape here, drawn rather than loaded, and
+     * no image decoder to load another with.  The sizes an X cursor theme ships
+     * are multiples of 24, and that is the number this divides by. */
+    if (strcmp(cmd, "seat") == 0) {
+        /* Looked for by name rather than at a fixed word, because a seat may
+         * or may not be named: `seat * xcursor_theme ...` on a line and
+         * `xcursor_theme ...` inside a `seat { ... }` block arrive here with
+         * different numbers of words in front of the one that matters. */
+        for (int i = 1; i < count; i++) {
+            if (strcmp(config_expand(words[i]), "xcursor_theme") != 0)
+                continue;
+
+            if (i + 2 < count) {
+                int pixels = atoi(config_expand(words[i + 2]));
+
+                sway.config.cursor_size = clamp_cursor_size((pixels + 12) / 24);
+                sway.dirty = 1;
+            }
+
+            sway_log("xcursor_theme: the cursor here is one built-in shape, so "
+                     "the theme is read and only the size is kept");
+            return;
+        }
+    }
+
     if (strcmp(cmd, "seat") == 0) {
         sway_log("seat: there is one seat, and it is this compositor's");
         return;
@@ -714,10 +847,26 @@ void config_defaults(void)
     c->gaps_inner   = 0;
     c->gaps_outer   = 0;
     c->background   = 0x101820;
-    c->bar          = 1;
+    c->bar          = BAR_DOCK;
     c->bar_top      = 1;
     c->pointer_accel = 0;         /* one count to one pixel */
 
+    c->cursor_size   = 1;         /* the shape at the size it is drawn */
+    c->cursor_colour = 0xFFFFFF;
+    c->background_text[0] = '\0'; /* the key hints, until somebody says else */
+    c->status_text[0]     = '\0'; /* the battery and the clock */
+
+    c->focused.border       = 0x4C7899;
+    c->focused.background   = 0x285577;
+    c->focused.text         = 0xFFFFFF;
+    c->focused.indicator    = 0x2E9EF4;
+    c->focused.child_border = 0x285577;
+
+    c->unfocused.border       = 0x333333;
+    c->unfocused.background   = 0x222222;
+    c->unfocused.text         = 0x888888;
+    c->unfocused.indicator    = 0x292D2E;
+    c->unfocused.child_border = 0x222222;
 
     strlcpy(c->terminal, "wlterm", sizeof(c->terminal));
 
@@ -798,7 +947,8 @@ static void config_line(char *line)
         int   n = split(at, words, MAX_WORDS);
 
         if (n > 0 && (strcmp(words[0], "bar") == 0 ||
-                      strcmp(words[0], "input") == 0)) {
+                      strcmp(words[0], "input") == 0 ||
+                      strcmp(words[0], "seat") == 0)) {
             strlcpy(block_prefix, heading, sizeof(block_prefix));
             return;
         }
