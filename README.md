@@ -109,8 +109,10 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   F2 gives a text session instead. Root's password on a fresh image is `1234`;
   see [`docs/users.md`](docs/users.md).
 - **A graphical session**: `sway`, a tiling Wayland compositor, with `wlterm`
-  as a terminal emulator in it, `thunar` as a file manager and `swaymsg` to
-  drive it. Logging in starts it, and
+  as a terminal emulator in it, `thunar` as a file manager, `swaysettings` to
+  change the background and what is written on it, the bar, the mouse speed and
+  the cursor's size and colour with the values visible as they change, and
+  `swaymsg` to drive it. Logging in starts it, and
   Super+Return opens a window; Super+Shift+E gives the console back with
   everything printed behind it still there. There is a **mouse**: a PS/2
   driver in the kernel, a cursor drawn by the compositor, click to focus,

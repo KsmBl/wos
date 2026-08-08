@@ -83,6 +83,10 @@ bindsym $mod+Shift+q kill
 bindsym $mod+Shift+c reload
 bindsym $mod+Shift+e exit
 
+# The settings window: the background colour, the mouse speed and where the bar
+# sits, with the value visible while it changes.  Save writes them back here.
+bindsym $mod+Shift+s exec swaysettings
+
 # Moving the focus, in the vi directions and with the arrow keys
 bindsym $mod+$left  focus left
 bindsym $mod+$down  focus down

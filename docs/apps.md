@@ -52,6 +52,7 @@ The graphical session has its own set:
 | [`sway`](#sway) | the tiling Wayland compositor |
 | [`wlterm`](#wlterm) | a terminal emulator, as a Wayland client |
 | [`swaymsg`](#swaymsg) | ask sway something, or tell it to do something |
+| [`swaysettings`](#swaysettings) | the background, the desktop text, the bar and the mouse |
 | [`waylandd`](#waylandd) | a bare display server, for testing clients against |
 | [`wlprobe`](#wlprobe) | list what a display server advertises |
 
@@ -1242,6 +1243,7 @@ is not the usual one.
 | [`wlterm`](#wlterm) | a terminal emulator, as a Wayland client |
 | [`thunar`](#thunar) | a graphical file manager |
 | [`swaymsg`](#swaymsg) | ask sway something, or tell it to do something |
+| [`swaysettings`](#swaysettings) | the background, the desktop text, the bar and the mouse |
 | [`waylandd`](#waylandd) | a bare display server, for testing clients against |
 | [`wlprobe`](#wlprobe) | list what a display server advertises |
 
@@ -1392,6 +1394,7 @@ These come from `/etc/sway/config` and can all be changed. `$mod` is Super.
 | `$mod+Shift+Q` | close the focused window |
 | `$mod+Shift+C` | reread the configuration file |
 | `$mod+Shift+E` | leave sway |
+| `$mod+Shift+S` | open [`swaysettings`](#swaysettings) |
 | `$mod+H` `J` `K` `L` | move the focus left, down, up, right |
 | `$mod+Left` `Down` `Up` `Right` | the same, with the arrow keys |
 | `$mod+Shift+`*direction* | move the window itself |
@@ -1629,6 +1632,12 @@ Those are the same commands `swaymsg` sends at runtime, which is why one parser
 reads both and why `reload` works at all: rereading the file is running it
 again.
 
+Three of these settings — the background colour, the mouse speed and the bar's
+position — have a value worth seeing while it changes, and `$mod+Shift+S` opens
+[`swaysettings`](#swaysettings) to change them with sliders and write them back
+into this file. Everything else here is edited by hand, which is what a
+configuration written in a language rather than in a list of settings deserves.
+
 **A directive this compositor cannot honour is accepted and ignored, not
 refused** — a configuration written for the real sway should start this one.
 Each one that is ignored says so in `/ramdisk/sway.log`:
@@ -1849,6 +1858,138 @@ it is reading the same one — it may not be able to see it at all.
 raises none.
 
 **Exit status:** 0, or 1 if sway is not running or the command failed.
+
+## swaysettings
+
+```
+swaysettings
+```
+
+The settings worth a slider, in a window: the **background colour**, the text
+written **on** it, where the **bar** sits, the **mouse speed**, and the
+cursor's **size and colour**.
+
+```
+ swaysettings                     .../.config/sway/config
+ Background ────────────────────────────────────────────
+  ┌────────┐  R ▇▇▇░░░░░░░░░░░░░░░░░░  20
+  │        │  G ▇▇▇▇▇▇░░░░░░░░░░░░░░░  52
+  │        │  B ▇▇▇▇▇░░░░░░░░░░░░░░░░  43
+  └────────┘
+  #14342b     ■ ■ ■ ■ ■ ■ ■ ■
+
+ Desktop text ──────────────────────────────────────────
+  ┌───────────────────────────────────────────────────┐
+  │ cpu ${CPU}  mem ${MEM}                            │
+  └───────────────────────────────────────────────────┘
+  ${CPU} and ${MEM} become the live figures; \n breaks a line
+
+ Bar position ──────────────────────────────────────────
+  [   Top   ][  Bottom  ]
+
+ Mouse speed ───────────────────────────────────────────
+  ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇░░░░░░░░░░░░  0.50 (250%)
+  slower                    faster
+
+ Cursor ────────────────────────────────────────────────
+  [ 1x ][ 2x ][ 3x ][ 4x ]   ➘
+  ┌────────┐  R ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇  255
+  │        │  G ▇▇▇▇░░░░░░░░░░░░░░░░░   68
+  │        │  B ▇▇▇▇░░░░░░░░░░░░░░░░░   68
+  └────────┘
+  #ff4444     ■ ■ ■ ■ ■ ■ ■ ■
+
+                            [ Save ][ Reload ][ Close ]
+ saved to /home/root/.config/sway/config
+```
+
+It is **taller than a tiled window on a 640x400 screen**, so the middle of it
+scrolls — with the wheel, or by Tab moving the focus onto something that is not
+showing yet. The three buttons along the bottom never scroll away, because a
+settings window whose Save cannot be reached is a settings window that cannot
+be saved. A turn of the wheel keeps doing whatever it started doing until the
+hand stops: deciding afresh on every notch would read the control under the
+pointer, and the whole point of scrolling is that the controls are moving past
+it.
+
+**Every change happens as it is made.** Dragging the mouse slider changes the
+speed of the mouse doing the dragging; picking a colour repaints the screen
+behind the window. Nothing is written to disk until **Save**, and **Reload** is
+sway's own `reload` — it rereads the configuration file, which is also how to
+throw away a change that was tried and not liked. Until then the status line
+says `unsaved`.
+
+The settings are sent to sway over the IPC socket, as the commands they are:
+
+| The control | The command it sends |
+|---|---|
+| the background sliders and swatches | `output * bg #rrggbb solid_color` |
+| the text field | `background_text "..."` |
+| Top / Bottom | `bar position top` / `bar position bottom` |
+| the mouse speed | `input * pointer_accel <-1..1>` |
+| 1x … 4x | `cursor size <1..4>` |
+| the cursor sliders and swatches | `cursor color #rrggbb` |
+
+which is exactly what [`swaymsg`](#swaymsg) would send. The window has no
+privilege the compositor does not give every client; it is a settings program
+for sway rather than a part of it, and everything it can do can be typed.
+
+**The file is edited, not rewritten.** A configuration file is mostly comments
+and key bindings this window knows nothing about, so a line that already sets
+one of the three has its value replaced where it stands and everything around
+it is left alone. A setting the file never mentions is appended at the end
+under `### Written by swaysettings`. The block form is understood as well as
+the one-line form, so a file that says
+
+```
+input "type:pointer" {
+    pointer_accel 0.5
+}
+```
+
+has that line edited rather than a second, contradicting one added below it.
+The file it writes is the file sway says it loaded — it asks, with
+`get_version`, rather than guessing between the two places sway looks.
+
+**Where the sliders start** is what the file says, with sway's defaults where
+it says nothing — except the mouse, which is asked of the kernel that is
+actually moving it, so the slider starts where the pointer really is. See
+[`wpointerspeed()`](wkernel-api.md#int-wpointerspeedint-percent).
+
+The text field holds what is **in the file**, not what is on the screen:
+`${CPU}` stays `${CPU}` and `\n` stays two characters, because those are
+instructions to the compositor and a field showing a reading instead would no
+longer say what would be saved. The line under it — `shows: cpu 3% at 16:57` —
+is the other half of that answer, expanded from the same place the compositor
+expands it. A double quote cannot be typed into it — the
+line is written back inside quotes and a sway configuration file has no escape
+for one.
+
+| Key | What it does |
+|---|---|
+| Tab, Shift+Tab, ↑, ↓ | move between the controls, scrolling to what is off screen |
+| ←, → | move a slider, or pick the next of a row of buttons |
+| Home, End | a slider's ends |
+| Enter, Space | press the button the ring is on |
+| S, R | Save, Reload |
+| Q, Escape | close the window |
+
+In the text field the letters are letters: S does not save while something is
+being typed, and Escape leaves the field rather than the window. Everything
+else is unchanged.
+
+Every control is reachable from the keyboard, deliberately: the reason to open
+this window may be that the mouse is set too slow to cross the screen with. The
+colour swatches are the exception — they are a shortcut to a colour the three
+sliders can also reach, and sixteen more stops would make Tab the long way
+round.
+
+**What it cannot set** is everything else in the file. Bindings, gaps, borders,
+window colours and the rest stay in `~/.config/sway/config`, because a settings
+window for a compositor whose configuration is a *language* would either be a
+worse text editor or a window with fifty controls nobody opened it for.
+
+**Exit status:** 0, or 1 if there is no display server to connect to.
 
 ## waylandd
 
