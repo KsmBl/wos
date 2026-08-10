@@ -129,6 +129,99 @@ static uint32_t parse_colour(const char *s, uint32_t fallback)
 }
 
 /* ------------------------------------------------------------------ *
+ *  The pointer
+ * ------------------------------------------------------------------ */
+
+/* A number sway writes with a decimal point, in hundredths.
+ *
+ * `pointer_accel 0.5` is how the setting is written everywhere it is
+ * documented, and atoi() reads that as 0 -- the one value that means "leave it
+ * alone", so a file asking for half speed would silently get none of it.  Two
+ * digits after the point is as fine as the setting goes: the range is two units
+ * wide and the mouse underneath it counts in whole pixels.
+ */
+static int parse_hundredths(const char *s, int *out)
+{
+    int sign = 1, whole = 0, frac = 0, scale = 10, digits = 0;
+
+    if (!s)
+        return 0;
+
+    if (*s == '-' || *s == '+')
+        sign = (*s++ == '-') ? -1 : 1;
+
+    for (; *s >= '0' && *s <= '9'; s++, digits++)
+        whole = whole * 10 + (*s - '0');
+
+    if (*s == '.' || *s == ',') {
+        s++;
+        for (; *s >= '0' && *s <= '9'; s++, digits++) {
+            if (scale) {
+                frac += (*s - '0') * scale;
+                scale /= 10;
+            }
+        }
+    }
+
+    if (!digits || *s)
+        return 0;
+
+    *out = sign * (whole * 100 + frac);
+    return 1;
+}
+
+/* libinput's -1..1 as a speed the kernel can use.
+ *
+ * The two halves of the range are not the same size, because they are not the
+ * same question: below zero the pointer is being slowed down, and a quarter
+ * speed is as slow as a screen this size can be crossed at, while above zero it
+ * is being sped up and four times is a fair reach for a hand that would rather
+ * not move.  Real libinput's curve is not this, but real libinput has the
+ * timing to build one from; this is the honest straight line through the same
+ * three points -- slowest, unchanged, fastest.
+ */
+static int speed_from_accel(int accel)
+{
+    if (accel < -100) accel = -100;
+    if (accel >  100) accel =  100;
+
+    return accel <= 0 ? 100 + accel * 3 / 4    /* -1.0 -> 25%  */
+                      : 100 + accel * 3;       /*  1.0 -> 400% */
+}
+
+/* Hand the setting to the kernel and say what came of it.
+ *
+ * Called for every `pointer_accel`, and once from config_defaults(), because
+ * the speed outlives the compositor: it is the kernel's, so a sway that had
+ * been asked for a fast pointer and is started again without that line would
+ * otherwise inherit the speed from the session before it. */
+static void pointer_speed_apply(void)
+{
+    int percent = speed_from_accel(sway.config.pointer_accel);
+    int r       = wpointerspeed(percent);
+
+    if (r == -W_ENODEV)
+        sway_log("pointer_accel: no mouse on this machine, so nothing to slow "
+                 "down or speed up");
+    else if (r < 0)
+        sway_log("pointer_accel: the kernel would not set the speed: %s",
+                 wstrerror(-r));
+    else
+        sway_log("pointer_accel: the pointer moves at %d%% of the mouse", r);
+}
+
+/* ------------------------------------------------------------------ *
+ *  The cursor
+ * ------------------------------------------------------------------ */
+
+static int clamp_cursor_size(int size)
+{
+    if (size < CURSOR_SIZE_MIN) return CURSOR_SIZE_MIN;
+    if (size > CURSOR_SIZE_MAX) return CURSOR_SIZE_MAX;
+    return size;
+}
+
+/* ------------------------------------------------------------------ *
  *  Key combinations
  * ------------------------------------------------------------------ */
 
@@ -223,6 +316,33 @@ static void join(char *out, wsize_t size, char *words[], int from, int count)
     }
 }
 
+/* `\n` in a configuration file is two characters; a line break is one.  Only
+ * the two escapes worth having are handled -- a break, and a backslash for
+ * anybody who wanted one -- because a configuration file is not a C string and
+ * inventing the rest of that language here would be inventing it. */
+static void unescape(char *s)
+{
+    char *out = s;
+
+    for (const char *at = s; *at; at++) {
+        if (*at != '\\' || !at[1]) {
+            *out++ = *at;
+            continue;
+        }
+
+        at++;
+
+        if (*at == 'n')       *out++ = '\n';
+        else if (*at == '\\') *out++ = '\\';
+        else {
+            *out++ = '\\';
+            *out++ = *at;
+        }
+    }
+
+    *out = '\0';
+}
+
 static int direction_from_name(const char *name, enum direction *out)
 {
     if (strcmp(name, "left") == 0)  { *out = DIR_LEFT;  return 1; }
@@ -287,19 +407,39 @@ static void run(char *words[], int count)
                 return;
             }
         } else if (strcmp(what, "mode") == 0 && count > at + 1) {
-            /* dock is the bar as it is; invisible is the bar turned off.
-             * `hide` would need it to come back on the modifier, which needs
-             * the modifier to be watched while no binding matches. */
+            /* sway's three: there and taking room, there while the modifier is
+             * held, or not there at all. */
             const char *mode = config_expand(words[at + 1]);
 
             if (strcmp(mode, "dock") == 0)
-                sway.config.bar = 1;
+                sway.config.bar = BAR_DOCK;
+            else if (strcmp(mode, "hide") == 0)
+                sway.config.bar = BAR_HIDE;
             else if (strcmp(mode, "invisible") == 0)
-                sway.config.bar = 0;
+                sway.config.bar = BAR_INVISIBLE;
             else {
-                sway_log("bar mode %s: read but not acted on", mode);
+                sway_log("bar mode %s: dock, hide or invisible", mode);
                 return;
             }
+        } else if (strcmp(what, "status_text") == 0 && count > at + 1) {
+            /* Not sway's `status_command`, which runs a program and reads its
+             * output: there is no shell pipeline here to run one through, and
+             * a bar that started a process to print a clock would be a strange
+             * thing on a machine this size.  What it is instead is the same
+             * template the background takes -- the two figures a status line
+             * usually holds, and the clock, without a program in between. */
+            char text[BACKGROUND_TEXT_MAX];
+
+            join(text, sizeof(text), words, at + 1, count);
+            unescape(text);
+
+            strlcpy(sway.config.status_text, text,
+                    sizeof(sway.config.status_text));
+        } else if (strcmp(what, "status_command") == 0) {
+            sway_log("bar status_command: no program is run for the bar here; "
+                     "`bar status_text \"...\"` takes ${CPU}, ${MEM}, "
+                     "${TIME}, ${DATE} and ${BATTERY}");
+            return;
         } else {
             sway_log("bar %s: read but not acted on", what);
             return;
@@ -463,6 +603,102 @@ static void run(char *words[], int count)
         return;
     }
 
+    /* `input <identifier> <setting> <value>`, which is also what the lines of
+     * an `input <identifier> { ... }` block arrive as -- the block hands them
+     * here with its own first words put back on the front, the way a bar block
+     * does, so both spellings are one implementation.
+     *
+     * The identifier is read and dropped.  sway needs it because a machine can
+     * have several mice and a configuration file names the one it means; this
+     * machine has the pointer the kernel found, and there is nothing for a
+     * second name to select.  A file that sets the speed for a device this
+     * machine has not got therefore sets it for the one it has, which is the
+     * behaviour that makes a real configuration file work rather than the one
+     * that is strictly right. */
+    if (strcmp(cmd, "input") == 0 && count > 2) {
+        const char *setting = config_expand(words[2]);
+        const char *value   = count > 3 ? config_expand(words[3]) : NULL;
+
+        if (strcmp(setting, "pointer_accel") == 0 && value) {
+            int accel;
+
+            if (!parse_hundredths(value, &accel)) {
+                sway_log("pointer_accel %s: not a number between -1 and 1",
+                         value);
+                return;
+            }
+
+            if (accel < -100 || accel > 100)
+                sway_log("pointer_accel %s: outside -1 to 1, taking the end of "
+                         "the range", value);
+
+            sway.config.pointer_accel = accel;
+            pointer_speed_apply();
+            return;
+        }
+
+        if (strcmp(setting, "accel_profile") == 0 && value) {
+            /* flat is what this is: one multiplier, no curve.  A file asking
+             * for it is already getting it, and one asking for adaptive is
+             * asking for the timing a PS/2 mouse cannot give. */
+            if (strcmp(value, "flat") != 0)
+                sway_log("accel_profile %s: the pointer here is flat -- speed "
+                         "is a multiplier, not a curve", value);
+            return;
+        }
+
+        sway_log("input %s: read but not acted on", setting);
+        return;
+    }
+
+    /* The cursor's size and colour.
+     *
+     * Not sway's, because sway has not got them: there they are an X cursor
+     * theme, which is a directory of images, a loader for them and a hotspot
+     * per shape.  Here the cursor is a shape this compositor draws, so how big
+     * and what colour are two numbers rather than a theme -- and being able to
+     * say so in the same file as everything else is worth more than the name
+     * matching a directive that could not be honoured anyway. */
+    if (strcmp(cmd, "cursor") == 0 && count > 2) {
+        const char *what = config_expand(words[1]);
+
+        if (strcmp(what, "size") == 0) {
+            int size = atoi(config_expand(words[2]));
+
+            sway.config.cursor_size = clamp_cursor_size(size);
+
+            if (size != sway.config.cursor_size)
+                sway_log("cursor size %d: kept to %d, the range this shape "
+                         "scales over", size, sway.config.cursor_size);
+        } else if (strcmp(what, "color") == 0 || strcmp(what, "colour") == 0) {
+            sway.config.cursor_colour = parse_colour(words[2], 0xFFFFFF);
+        } else {
+            sway_log("cursor %s: the cursor has a size and a colour", what);
+            return;
+        }
+
+        sway.dirty = 1;
+        return;
+    }
+
+    /* What is written across the background.  ${CPU} and ${MEM} in it are
+     * replaced as they change, which is why the text is kept as written and
+     * expanded elsewhere: a template that had been expanded once would be a
+     * reading from the moment it was set and never move again. */
+    if (strcmp(cmd, "background_text") == 0) {
+        char text[BACKGROUND_TEXT_MAX];
+
+        join(text, sizeof(text), words, 1, count);
+        unescape(text);
+
+        strlcpy(sway.config.background_text, text,
+                sizeof(sway.config.background_text));
+
+        sway_update_background_text();
+        sway.dirty = 1;
+        return;
+    }
+
     if (strcmp(cmd, "gaps") == 0 && count > 2) {
         const char *which = config_expand(words[1]);
         int         value = atoi(config_expand(words[count - 1]));
@@ -525,9 +761,35 @@ static void run(char *words[], int count)
                  "window with", cmd);
         return;
     }
-    if (strcmp(cmd, "input") == 0 || strcmp(cmd, "seat") == 0) {
-        sway_log("%s: the keyboard is the one the kernel found, with no "
-                 "settings to change", cmd);
+    /* `seat <id> xcursor_theme <theme> <size>` is how a real sway configuration
+     * asks for a bigger pointer, so the size is taken from it even though the
+     * theme cannot be: there is one shape here, drawn rather than loaded, and
+     * no image decoder to load another with.  The sizes an X cursor theme ships
+     * are multiples of 24, and that is the number this divides by. */
+    if (strcmp(cmd, "seat") == 0) {
+        /* Looked for by name rather than at a fixed word, because a seat may
+         * or may not be named: `seat * xcursor_theme ...` on a line and
+         * `xcursor_theme ...` inside a `seat { ... }` block arrive here with
+         * different numbers of words in front of the one that matters. */
+        for (int i = 1; i < count; i++) {
+            if (strcmp(config_expand(words[i]), "xcursor_theme") != 0)
+                continue;
+
+            if (i + 2 < count) {
+                int pixels = atoi(config_expand(words[i + 2]));
+
+                sway.config.cursor_size = clamp_cursor_size((pixels + 12) / 24);
+                sway.dirty = 1;
+            }
+
+            sway_log("xcursor_theme: the cursor here is one built-in shape, so "
+                     "the theme is read and only the size is kept");
+            return;
+        }
+    }
+
+    if (strcmp(cmd, "seat") == 0) {
+        sway_log("seat: there is one seat, and it is this compositor's");
         return;
     }
     if (strcmp(cmd, "workspace_layout") == 0 ||
@@ -585,8 +847,14 @@ void config_defaults(void)
     c->gaps_inner   = 0;
     c->gaps_outer   = 0;
     c->background   = 0x101820;
-    c->bar          = 1;
+    c->bar          = BAR_DOCK;
     c->bar_top      = 1;
+    c->pointer_accel = 0;         /* one count to one pixel */
+
+    c->cursor_size   = 1;         /* the shape at the size it is drawn */
+    c->cursor_colour = 0xFFFFFF;
+    c->background_text[0] = '\0'; /* the key hints, until somebody says else */
+    c->status_text[0]     = '\0'; /* the battery and the clock */
 
     c->focused.border       = 0x4C7899;
     c->focused.background   = 0x285577;
@@ -601,16 +869,32 @@ void config_defaults(void)
     c->unfocused.child_border = 0x222222;
 
     strlcpy(c->terminal, "wlterm", sizeof(c->terminal));
+
+    /* The pointer speed is the kernel's and outlives this process, so the
+     * default has to be put back rather than assumed: a session that was asked
+     * for a fast pointer and a sway started after it with no such line should
+     * not inherit one.  Nothing is logged -- a machine with no mouse refuses
+     * this, and it has not been asked for anything to complain about. */
+    (void)wpointerspeed(W_POINTER_SPEED_DEFAULT);
 }
 
-/* Everything between a `{` and its `}` is skipped.
+/* A block is a heading and a set of lines that belong to it:
  *
- * `bar { ... }` and `input ... { ... }` describe things this compositor does
- * not have as separate objects.  Skipping the block rather than trying to read
- * it means a real sway configuration file goes through without every line
- * inside being reported as unknown. */
-static int block_depth;
-static int in_bar_block;        /* the block being skipped is a bar's */
+ *     input "type:pointer" {
+ *         pointer_accel 0.5
+ *     }
+ *
+ * which says exactly what `input "type:pointer" pointer_accel 0.5` says on one
+ * line.  So a block is not parsed as an object; its heading is remembered, and
+ * each line inside is run with the heading in front of it.  One command means
+ * one thing whether it was written in a block, written on a line, or sent by
+ * swaymsg -- which is the whole reason this parser reads all three.
+ *
+ * A heading nothing understands leaves the prefix empty and the lines inside
+ * are skipped, so a real sway configuration file goes through without every
+ * line of a block it has that this has not being reported as unknown. */
+static int  block_depth;
+static char block_prefix[COMMAND_MAX];
 
 static void config_line(char *line)
 {
@@ -631,32 +915,41 @@ static void config_line(char *line)
     if (block_depth > 0) {
         if (strchr(at, '}')) {
             if (--block_depth == 0)
-                in_bar_block = 0;
+                block_prefix[0] = '\0';
         } else if (strchr(at, '{')) {
             block_depth++;
-        } else if (in_bar_block && block_depth == 1) {
-            /* A line inside `bar { ... }`, handed to the ordinary command
-             * table with the word `bar` put back on the front.  So `position
-             * top` in the file and `bar position top` from swaymsg are one
-             * command with one implementation, which is the whole reason this
-             * parser reads both. */
-            char line_with_bar[COMMAND_MAX];
-            wsnprintf(line_with_bar, sizeof(line_with_bar), "bar %s", at);
-            config_run_command(line_with_bar);
+        } else if (block_prefix[0] && block_depth == 1) {
+            char line[COMMAND_MAX];
+            wsnprintf(line, sizeof(line), "%s %s", block_prefix, at);
+            config_run_command(line);
         }
         return;
     }
 
     char *brace = strchr(at, '{');
     if (brace) {
+        /* The heading, before split() takes the spaces out of it: it goes back
+         * in front of every line inside, quotes and all, so `input
+         * "type:pointer"` still reads as two words when it gets there. */
+        char heading[COMMAND_MAX];
+
         *brace = '\0';
         block_depth++;
+
+        strlcpy(heading, at, sizeof(heading));
+        for (int i = (int)strlen(heading); i > 0; i--) {
+            if (heading[i - 1] != ' ' && heading[i - 1] != '\t')
+                break;
+            heading[i - 1] = '\0';
+        }
 
         char *words[MAX_WORDS];
         int   n = split(at, words, MAX_WORDS);
 
-        if (n > 0 && strcmp(words[0], "bar") == 0) {
-            in_bar_block = 1;
+        if (n > 0 && (strcmp(words[0], "bar") == 0 ||
+                      strcmp(words[0], "input") == 0 ||
+                      strcmp(words[0], "seat") == 0)) {
+            strlcpy(block_prefix, heading, sizeof(block_prefix));
             return;
         }
 
@@ -682,10 +975,10 @@ int config_load(const char *path)
         free(b);
         b = next;
     }
-    sway.bindings  = NULL;
-    variable_count = 0;
-    block_depth    = 0;
-    in_bar_block   = 0;
+    sway.bindings   = NULL;
+    variable_count  = 0;
+    block_depth     = 0;
+    block_prefix[0] = '\0';
 
     char text[8192];
     int  n = wread(fd, text, sizeof(text) - 1);

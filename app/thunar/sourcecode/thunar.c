@@ -19,12 +19,14 @@
  * Two things are genuinely different from the Thunar people know, and both are
  * properties of this machine rather than of this program.
  *
- * It is driven from the keyboard.  WOS has no mouse -- there is no pointer
- * device in the kernel, and sway's seat advertises a keyboard and nothing else
- * -- so there is no clicking, no drag and drop and no context menu.  Every
- * command is a key, the focused pane is drawn with a visible ring so that
+ * It works entirely from the keyboard.  There is a mouse -- a click selects, a
+ * double click opens, the wheel scrolls -- but every one of those is also a
+ * key, because this program was written before the machine had a pointer and
+ * because a file manager that needs one is worse than a file manager that does
+ * not.  What is missing is what a pointer alone would buy: no drag and drop,
+ * and no context menu.  The focused pane is drawn with a visible ring so that
  * "which list do the arrows move?" is answerable by looking, and Tab moves
- * between the two.  A file manager that waited for a click would sit there.
+ * between the two.
  *
  * And opening a file hands it to another program rather than to a handler
  * registered by a desktop file.  There is no MIME database and no
@@ -36,6 +38,7 @@
 
 #include <wkernel.h>
 #include <wayland-client.h>
+#include <wdraw.h>
 #include <stdarg.h>
 
 /* ------------------------------------------------------------------ *
@@ -189,10 +192,9 @@ static char dialog_text[W_NAME_MAX + 1];
 static int  dialog_len;
 static void (*dialog_done)(void);   /* what Enter means, this time */
 
-/* Where the pixels for the frame being painted are.  Held in a global so the
- * drawing helpers do not each need it threaded through them; there is exactly
- * one paint in flight at a time. */
-static uint32_t *px;
+/* The frame being painted.  Held in a global so the drawing helpers do not
+ * each need it threaded through them; there is exactly one paint in flight at
+ * a time. */
 
 /* ------------------------------------------------------------------ *
  *  The status line
@@ -235,101 +237,38 @@ static void say_nothing(void)
 }
 
 /* ------------------------------------------------------------------ *
- *  Drawing primitives
+ *  Drawing
  *
- *  Every one of these clips.  A window can be told to be any size at all,
- *  including smaller than the thing being drawn into it, and a file manager
- *  that wrote outside its buffer when the layout did not fit would corrupt
- *  the pool rather than merely look wrong.
+ *  The primitives are the library's -- see wdraw.h -- through `canvas`, which
+ *  is the frame being painted.  What is left here is the icons, which are this
+ *  program's own.
  * ------------------------------------------------------------------ */
+
+static wcanvas_t canvas;
 
 static void fill(int x, int y, int w, int h, uint32_t colour)
 {
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > app.width)  w = app.width - x;
-    if (y + h > app.height) h = app.height - y;
-    if (w <= 0 || h <= 0)
-        return;
-
-    for (int row = 0; row < h; row++) {
-        uint32_t *at = px + (uint64_t)(y + row) * app.width + x;
-        for (int col = 0; col < w; col++)
-            at[col] = colour;
-    }
-}
-
-/* One glyph, with the background left alone.  wlterm paints a cell at a time
- * because a terminal has a background colour per character; here the text sits
- * on whatever is already there, which is what lets a label cross a selection
- * bar without carrying a rectangle of its own colour with it. */
-static void draw_char(int x, int y, char c, uint32_t fg)
-{
-    const unsigned char *glyph = wglyph8x16((unsigned char)c);
-
-    for (int row = 0; row < CELL_H; row++) {
-        unsigned char bits = glyph[row];
-        int           at_y = y + row;
-
-        if (!bits || at_y < 0 || at_y >= app.height)
-            continue;
-
-        uint32_t *at = px + (uint64_t)at_y * app.width;
-
-        for (int col = 0; col < CELL_W; col++) {
-            int at_x = x + col;
-
-            if ((bits & (0x80 >> col)) && at_x >= 0 && at_x < app.width)
-                at[at_x] = fg;
-        }
-    }
+    wdraw_fill(&canvas, x, y, w, h, colour);
 }
 
 static void draw_text(int x, int y, const char *s, uint32_t fg)
 {
-    for (; *s; s++, x += CELL_W)
-        draw_char(x, y, *s, fg);
+    wdraw_text(&canvas, x, y, s, fg);
 }
 
-/* Text that has to stay inside something.  A name too long for its column is
- * cut and ends in an ellipsis, so that a truncated name looks truncated rather
- * than looking like a shorter name that happens to exist. */
 static void draw_text_fit(int x, int y, const char *s, uint32_t fg, int max_px)
 {
-    int room = max_px / CELL_W;
-    int len  = (int)strlen(s);
-
-    if (room <= 0)
-        return;
-
-    if (len <= room) {
-        draw_text(x, y, s, fg);
-        return;
-    }
-
-    if (room <= 3) {
-        for (int i = 0; i < room; i++)
-            draw_char(x + i * CELL_W, y, '.', fg);
-        return;
-    }
-
-    for (int i = 0; i < room - 3; i++)
-        draw_char(x + i * CELL_W, y, s[i], fg);
-    for (int i = room - 3; i < room; i++)
-        draw_char(x + i * CELL_W, y, '.', fg);
+    wdraw_text_fit(&canvas, x, y, s, fg, max_px);
 }
 
 static int text_width(const char *s)
 {
-    return (int)strlen(s) * CELL_W;
+    return wdraw_text_width(s);
 }
 
 static void draw_border(int x, int y, int w, int h, uint32_t colour)
 {
-    fill(x, y, w, 1, colour);
-    fill(x, y + h - 1, w, 1, colour);
-    fill(x, y, 1, h, colour);
-    fill(x + w - 1, y, 1, h, colour);
+    wdraw_border(&canvas, x, y, w, h, colour);
 }
 
 /* ------------------------------------------------------------------ *
@@ -859,7 +798,7 @@ static void draw_dialog(void)
 
 static void draw(struct frame *f)
 {
-    px = f->pixels;
+    canvas = wcanvas(f->pixels, app.width, app.height);
 
     /* The pane that is gone cannot be the focused one. */
     if (!sidebar_w())
@@ -1750,9 +1689,14 @@ int main(int argc, char **argv)
 
     app.display = wl_display_connect(NULL);
     if (!app.display) {
-        wfprintf(W_STDERR, "thunar: no display server to connect to\n");
-        wfprintf(W_STDERR, "thunar: this is a Wayland client -- start sway "
-                           "first, or use `fm` on the console\n");
+        int why = wl_display_connect_error();
+
+        wfprintf(W_STDERR, "thunar: no display server to connect to: %s\n",
+                 wstrerror(-why));
+        wfprintf(W_STDERR, -why == W_EPERM
+                 ? "thunar: that session belongs to another user\n"
+                 : "thunar: this is a Wayland client -- start sway first, "
+                   "or use `fm` on the console\n");
         return 1;
     }
 

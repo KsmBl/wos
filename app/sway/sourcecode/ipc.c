@@ -20,25 +20,33 @@
  */
 
 #include "sway.h"
+#include <wipc.h>
 
 #define IPC_MAX_CLIENTS 4
 #define IPC_BUFFER      8192
 
-#define IPC_MAGIC "i3-ipc"
-#define IPC_MAGIC_LEN 6
+/* The reply is built in one buffer, and one reply is much larger than the
+ * rest: get_config hands back the whole configuration file. */
+#define IPC_OUT         32768
 
-/* The message numbers, from i3's protocol. */
-#define IPC_RUN_COMMAND       0
-#define IPC_GET_WORKSPACES    1
-#define IPC_SUBSCRIBE         2
-#define IPC_GET_OUTPUTS       3
-#define IPC_GET_TREE          4
-#define IPC_GET_MARKS         5
-#define IPC_GET_BAR_CONFIG    6
-#define IPC_GET_VERSION       7
-#define IPC_GET_BINDING_MODES 8
-#define IPC_GET_CONFIG        9
-#define IPC_SEND_TICK        10
+/* The magic string and the message numbers are the protocol's, and the
+ * protocol is in the library: the same numbers are read by everything that
+ * talks to this socket, and two copies of them is one more than can be kept
+ * right. */
+#define IPC_MAGIC     WIPC_MAGIC
+#define IPC_MAGIC_LEN WIPC_MAGIC_LEN
+
+#define IPC_RUN_COMMAND       WIPC_RUN_COMMAND
+#define IPC_GET_WORKSPACES    WIPC_GET_WORKSPACES
+#define IPC_SUBSCRIBE         WIPC_SUBSCRIBE
+#define IPC_GET_OUTPUTS       WIPC_GET_OUTPUTS
+#define IPC_GET_TREE          WIPC_GET_TREE
+#define IPC_GET_MARKS         WIPC_GET_MARKS
+#define IPC_GET_BAR_CONFIG    WIPC_GET_BAR_CONFIG
+#define IPC_GET_VERSION       WIPC_GET_VERSION
+#define IPC_GET_BINDING_MODES WIPC_GET_BINDING_MODES
+#define IPC_GET_CONFIG        WIPC_GET_CONFIG
+#define IPC_SEND_TICK         WIPC_SEND_TICK
 
 struct ipc_client {
     int      fd;
@@ -54,7 +62,7 @@ static struct ipc_client clients[IPC_MAX_CLIENTS];
  *  Writing JSON
  * ------------------------------------------------------------------ */
 
-static char     out[IPC_BUFFER];
+static char     out[IPC_OUT];
 static wsize_t  out_len;
 
 static void put(const char *s)
@@ -97,6 +105,12 @@ static void put_string(const char *key, const char *value)
 
         if (*s == '"' || *s == '\\')
             wsnprintf(c, sizeof(c), "\\%c", *s);
+        else if (*s == '\n')
+            wsnprintf(c, sizeof(c), "\\n");
+        else if (*s == '\t')
+            wsnprintf(c, sizeof(c), "\\t");
+        else if (*s == '\r')
+            wsnprintf(c, sizeof(c), "\\r");
         else if ((unsigned char)*s < 0x20)
             wsnprintf(c, sizeof(c), "\\u%04x", (unsigned char)*s);
         else
@@ -267,6 +281,41 @@ static void get_outputs(void)
     close_with("}]");
 }
 
+/* The configuration file itself, which is what i3 and sway both answer with.
+ *
+ * The path was what this used to return, and the path is not the question:
+ * `swaymsg -t get_config` is how a program reads the configuration of a
+ * compositor it is talking to, and a program on the other end of a socket
+ * cannot open a file by name and be sure it is reading the same one -- it may
+ * not even be able to see it.  The text is the answer. */
+static void get_config(void)
+{
+    static char text[IPC_OUT / 2];
+
+    out_len = 0;
+    out[0]  = '\0';
+
+    int n  = 0;
+    int fd = wopen(sway.config_path, W_O_RDONLY);
+
+    if (fd >= 0) {
+        n = wread(fd, text, sizeof(text) - 1);
+        wclose(fd);
+    }
+
+    if (n < 0)
+        n = 0;
+    text[n] = '\0';
+
+    put("{");
+    put_string("config", text);
+
+    /* Which file it came from, as well: sway looks in two places and a client
+     * that wants to edit what it just read has to know which one answered. */
+    put_string("loaded_config_file_name", sway.config_path);
+    close_with("}");
+}
+
 static void get_version(void)
 {
     out_len = 0;
@@ -368,11 +417,7 @@ static void handle_message(struct ipc_client *c, uint32_t type,
         return;
 
     case IPC_GET_CONFIG:
-        out_len = 0;
-        out[0]  = '\0';
-        put("{");
-        put_string("config", sway.config_path);
-        close_with("}");
+        get_config();
         reply(c->fd, type, out);
         return;
 

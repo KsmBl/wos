@@ -378,6 +378,28 @@ int ramfs_create(const char *path, uint16_t type, uint32_t *ino_out)
     return 0;
 }
 
+/* Take a node out of its parent's list of children, without destroying it --
+ * which is half of unlinking and half of renaming. */
+static void detach(ramfs_node_t *parent, ramfs_node_t *n)
+{
+    ramfs_node_t **link = &parent->children;
+
+    while (*link && *link != n)
+        link = &(*link)->next;
+
+    if (*link)
+        *link = n->next;
+
+    n->next = NULL;
+}
+
+static void destroy(ramfs_node_t *n)
+{
+    blocks_release(n, 0);
+    nodes[n->ino] = NULL;
+    kfree(n);
+}
+
 int ramfs_unlink(const char *path)
 {
     ramfs_node_t *parent;
@@ -391,16 +413,58 @@ int ramfs_unlink(const char *path)
     if (n->type == WFS_TYPE_DIR && n->children)
         return -W_ENOTEMPTY;
 
-    /* Unhook it from the parent's list. */
-    ramfs_node_t **link = &parent->children;
-    while (*link && *link != n)
-        link = &(*link)->next;
-    if (*link)
-        *link = n->next;
+    detach(parent, n);
+    destroy(n);
+    return 0;
+}
 
-    blocks_release(n, 0);
-    nodes[n->ino] = NULL;
-    kfree(n);
+/* The same move wfs_rename() makes, on a tree of pointers rather than on
+ * directory blocks: nothing is copied, an entry changes its name and its
+ * parent.  See wfs_rename() for why replacing a file this way is the safe way
+ * to write one. */
+int ramfs_rename(const char *from, const char *to)
+{
+    ramfs_node_t *from_parent, *to_parent;
+    const char *from_leaf, *to_leaf;
+    uint32_t from_len, to_len;
+
+    ramfs_node_t *n        = walk(from, &from_parent, &from_leaf, &from_len);
+    ramfs_node_t *existing = walk(to, &to_parent, &to_leaf, &to_len);
+
+    if (!n || !from_parent)
+        return -W_ENOENT;
+    if (!to_parent)
+        return -W_ENOENT;
+    if (to_parent->type != WFS_TYPE_DIR)
+        return -W_ENOTDIR;
+    if (to_len > W_NAME_MAX)
+        return -W_EINVAL;
+    if (existing == n)
+        return 0;
+
+    /* Not inside itself: a directory that became its own descendant would be
+     * a loop nothing walking the tree could get out of. */
+    for (ramfs_node_t *at = to_parent; at; at = at->parent)
+        if (at == n)
+            return -W_EINVAL;
+
+    if (existing) {
+        if (existing->type == WFS_TYPE_DIR)
+            return -W_EISDIR;
+
+        detach(to_parent, existing);
+        destroy(existing);
+    }
+
+    detach(from_parent, n);
+
+    memcpy(n->name, to_leaf, to_len);
+    n->name[to_len] = '\0';
+
+    n->parent          = to_parent;
+    n->next            = to_parent->children;
+    to_parent->children = n;
+
     return 0;
 }
 

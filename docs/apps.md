@@ -23,6 +23,7 @@ which is the price of having no shared libraries.
 | [`ps`](#ps) | show processes and their memory |
 | [`touch`](#touch) | create files |
 | [`mkdir`](#mkdir) | create directories |
+| [`mv`](#mv) | move or rename files |
 | [`rm`](#rm) | remove files and directories |
 | [`clear`](#clear) | clear the screen |
 | [`time`](#time) | show or set the clock |
@@ -51,6 +52,7 @@ The graphical session has its own set:
 | [`sway`](#sway) | the tiling Wayland compositor |
 | [`wlterm`](#wlterm) | a terminal emulator, as a Wayland client |
 | [`swaymsg`](#swaymsg) | ask sway something, or tell it to do something |
+| [`swaysettings`](#swaysettings) | the background, the desktop text, the bar and the mouse |
 | [`waylandd`](#waylandd) | a bare display server, for testing clients against |
 | [`wlprobe`](#wlprobe) | list what a display server advertises |
 
@@ -210,6 +212,44 @@ Creates each directory. The parent must already exist, so making a nested path
 takes one `mkdir` per level.
 
 **Exit status:** 0, or 1 if any directory could not be created.
+
+## mv
+
+```
+mv <from> <to>
+mv <file> ... <directory>
+```
+
+Rename something, or move it somewhere else:
+
+```
+wos:/ramdisk$ mv notes.txt kept.txt
+wos:/ramdisk$ mv kept.txt draft.txt /ramdisk/old
+```
+
+Two arguments are a rename, unless the second names a directory — then the file
+keeps its name and goes inside. More than two need the last to be a directory.
+
+**Nothing is copied.** [`wrename()`](wkernel-api.md#int-wrenameconst-char-from-const-char-to)
+moves a directory entry, which is a name and an inode number, so moving a large
+file costs the same as moving an empty one. An existing destination file is
+replaced — that is what makes rename the safe way to write a file, and why
+`swaysettings` saves by writing beside the real file and renaming over it.
+
+**It cannot move between the disk and `/ramdisk`.** Those are two filesystems,
+and an entry in one means nothing in the other, so what looks like a move would
+have to be a copy and a delete. It says so instead of quietly doing it:
+
+```
+wos:/ramdisk$ mv third.txt /home/root/moved.txt
+mv: third.txt and /home/root/moved.txt are on different filesystems; a move
+between them would be a copy
+```
+
+A directory is never silently replaced, because whatever is inside it would go
+with it.
+
+**Exit status:** 0, or 1 if anything could not be moved.
 
 ## rm
 
@@ -1203,6 +1243,7 @@ is not the usual one.
 | [`wlterm`](#wlterm) | a terminal emulator, as a Wayland client |
 | [`thunar`](#thunar) | a graphical file manager |
 | [`swaymsg`](#swaymsg) | ask sway something, or tell it to do something |
+| [`swaysettings`](#swaysettings) | the background, the desktop text, the bar and the mouse |
 | [`waylandd`](#waylandd) | a bare display server, for testing clients against |
 | [`wlprobe`](#wlprobe) | list what a display server advertises |
 
@@ -1353,6 +1394,7 @@ These come from `/etc/sway/config` and can all be changed. `$mod` is Super.
 | `$mod+Shift+Q` | close the focused window |
 | `$mod+Shift+C` | reread the configuration file |
 | `$mod+Shift+E` | leave sway |
+| `$mod+Shift+S` | open [`swaysettings`](#swaysettings) |
 | `$mod+H` `J` `K` `L` | move the focus left, down, up, right |
 | `$mod+Left` `Down` `Up` `Right` | the same, with the arrow keys |
 | `$mod+Shift+`*direction* | move the window itself |
@@ -1398,6 +1440,70 @@ The seat advertises a pointer **only when the kernel found one**. Telling a
 client there is a mouse when there is not leaves it waiting for motion that
 never comes, which is worse than the silence a machine without one gets.
 
+**How fast it moves** is `pointer_accel`, written the way sway writes it:
+
+```
+input * pointer_accel 0.5
+```
+
+−1 is as slow as it goes, 0 leaves the mouse's own counts alone at one to one,
+and 1 is four times them. It takes effect as it is read, from the file or from
+`swaymsg`, so the number can be found by trying it:
+
+```
+root@wos:/home/root# swaymsg 'input * pointer_accel -0.4'
+root@wos:/home/root# swaymsg 'input * pointer_accel 0.8'
+```
+
+The block form works too and means the same thing, because a block's lines are
+run with its heading in front of them:
+
+```
+input "type:pointer" {
+    pointer_accel 0.5
+}
+```
+
+The identifier is **read and dropped**. sway needs one because a machine can
+have several mice and a file has to name the one it means; there is one pointer
+here, the one the kernel found, and nothing for a second name to select — so a
+file that sets the speed for a device this machine has not got sets it for the
+one it has.
+
+It is a plain multiplier and not a curve. `accel_profile flat` is what this
+already is; `adaptive` — further for a quick movement than for a slow one of
+the same length — needs the interval between packets to mean something, and on
+a PS/2 mouse sampled at whatever rate the firmware left it that interval is not
+a speed.
+
+**The kernel applies it**, not the compositor: the kernel is what turns the
+mouse's counts into a position, and a compositor that scaled the movement
+itself would draw its cursor somewhere the kernel's pointer was not. It is a
+machine-wide setting that outlives the process, which is why sway puts the
+default back when it starts rather than assuming it. See
+[`wpointerspeed()`](wkernel-api.md#int-wpointerspeedint-percent).
+
+**How big it is and what colour** are two settings of the compositor's own:
+
+```
+cursor size 3            the shape at three times its size, 1 to 4
+cursor color #ff4444     what the inside of the arrow is filled with
+```
+
+Neither is a sway directive, because in sway both come from an X cursor theme —
+a directory of images, a loader for them and a hotspot per shape, none of which
+exist here. The cursor is a shape this compositor draws, so its size is a whole
+number and its colour is a colour. Scaling is by whole multiples: a bitmap
+scaled by anything else has to decide what half a pixel of edge looks like, and
+there is nothing here to blend it with. The point of the arrow stays where the
+pointer is at every size, and **the outline stays black** whatever the colour —
+which is what makes a white arrow visible on a white window and a black one
+visible on the background behind it.
+
+`seat * xcursor_theme <theme> <size>` from a real sway configuration is read
+too: the theme is dropped, and the size is kept as the nearest scale (the sizes
+a cursor theme ships are multiples of 24, and that is what it divides by).
+
 ### The bar
 
 Across the top, which is where `bar { position top }` puts it and where it now
@@ -1423,8 +1529,71 @@ whose charge will not read shows `BAT ?` — that is a laptop whose firmware thi
 kernel could not run, and a number there would be invented. See
 [`battery`](#battery) for where the figure comes from.
 
+`bar mode` takes sway's three: `dock` is the bar as it is, `invisible` turns it
+off, and **`hide`** takes its twenty pixels back and puts the bar over the
+windows while `$mod` is held. That is the one place this compositor reads the
+modifier without a binding having matched.
+
+**What the right-hand side says** is `bar status_text`, a line with the
+machine's figures in it:
+
+```
+bar status_text "${BATTERY}   ${DATE}  ${TIME}"
+bar status_text "cpu ${CPU}  mem ${MEM}  ${TIME}"
+```
+
+Empty — the default — is the battery, the date and the clock, which is the
+first of those written out. The names are the same ones the background text
+takes; see [the background](#the-background-and-what-is-written-on-it).
+
+This is not sway's `status_command`, which runs a program and reads its output:
+there is no shell pipeline here to run one through, and a bar that started a
+process to print a clock would be a strange thing on a machine this size. A
+configuration that has one is told so in the log.
+
 The bar is drawn by the compositor rather than by swaybar; see
 [what it has not got](#what-it-has-not-got).
+
+### The background, and what is written on it
+
+An empty workspace shows three key hints on a plain colour. `background_text`
+replaces them with whatever you would rather have there:
+
+```
+background_text "WOS\ncpu ${CPU}   mem ${MEM}"
+```
+
+| In the text | What it becomes |
+|---|---|
+| `${CPU}` | how much of the processors is busy, as a percentage |
+| `${MEM}` | how much of the memory is in use, as a percentage |
+| `${TIME}` | the clock, `HH:MM` |
+| `${DATE}` | the date, `YYYY-MM-DD` |
+| `${BATTERY}` | `BAT 50%`, `CHG 90%`, `AC`, or nothing without a battery |
+| `\n` | a line break; the lines are centred together |
+
+The same names work in [`bar status_text`](#the-bar), because they come from
+one place — `wstatus_expand()` in the library — rather than from whichever
+program drew a line first.
+
+The two figures are **live** — read once a second and redrawn only when they
+change, so a compositor sitting on an idle machine is not redrawing the screen
+every second to write the same number. `${CPU}` is a rate and therefore a
+difference between two readings, which is why the text is kept as it was
+written and expanded as it is drawn: a template expanded once when it was set
+would show the load at the moment somebody typed it and never move again.
+
+Anything else in `${...}` is left alone rather than blanked, so a name this
+compositor does not know looks like the mistake it is.
+
+The text is drawn in a colour worked out from the background — dark on a light
+one, light on a dark one — because the background is the one colour here that
+somebody may set to anything at all, and text in a fixed grey disappears
+against half of the range. The key hints follow the same rule.
+
+It is only visible where the background is: **windows cover it**, so this is
+what an empty workspace says rather than a layer under the tiles.
+[`swaysettings`](#swaysettings) has a field for it.
 
 ### The layout
 
@@ -1448,6 +1617,7 @@ set $mod Mod4
 set $term wlterm
 
 output * bg #101820 solid_color
+input * pointer_accel 0
 
 bindsym $mod+Return exec $term
 bindsym $mod+Shift+q kill
@@ -1462,6 +1632,12 @@ Those are the same commands `swaymsg` sends at runtime, which is why one parser
 reads both and why `reload` works at all: rereading the file is running it
 again.
 
+Three of these settings — the background colour, the mouse speed and the bar's
+position — have a value worth seeing while it changes, and `$mod+Shift+S` opens
+[`swaysettings`](#swaysettings) to change them with sliders and write them back
+into this file. Everything else here is edited by hand, which is what a
+configuration written in a language rather than in a list of settings deserves.
+
 **A directive this compositor cannot honour is accepted and ignored, not
 refused** — a configuration written for the real sway should start this one.
 Each one that is ignored says so in `/ramdisk/sway.log`:
@@ -1471,7 +1647,8 @@ root@wos:/home/root# cat /ramdisk/sway.log
 sway on a 640x400 screen
 ipc: listening on /ramdisk/sway-ipc.sock
 font: this compositor draws one 8x16 font and cannot change it
-bar { ... }: read but not acted on
+pointer_accel: the pointer moves at 100% of the mouse
+input tap: read but not acted on
 read /home/root/.config/sway/config
 ```
 
@@ -1664,10 +1841,155 @@ payload — so the interesting property is not that this program works but that
 it is not the only thing that can. Anything that speaks i3's IPC speaks to this
 compositor.
 
+`get_config` hands back the configuration **file**, the way i3 and sway do,
+with the path beside it:
+
+```
+root@wos:/home/root# swaymsg -t get_config -r
+{"config":"### Variables\n\nset $mod Mod4\n...",
+ "loaded_config_file_name":"/home/root/.config/sway/config"}
+```
+
+The path alone was what this used to answer, and the path is not the question:
+a program on the other end of a socket cannot open a file by name and be sure
+it is reading the same one — it may not be able to see it at all.
+
 `subscribe` is accepted and no events are ever sent, because this compositor
 raises none.
 
 **Exit status:** 0, or 1 if sway is not running or the command failed.
+
+## swaysettings
+
+```
+swaysettings
+```
+
+The settings worth a slider, in a window: the **background colour**, the text
+written **on** it, where the **bar** sits, the **mouse speed**, and the
+cursor's **size and colour**.
+
+```
+ swaysettings                     .../.config/sway/config
+ Background ────────────────────────────────────────────
+  ┌────────┐  R ▇▇▇░░░░░░░░░░░░░░░░░░  20
+  │        │  G ▇▇▇▇▇▇░░░░░░░░░░░░░░░  52
+  │        │  B ▇▇▇▇▇░░░░░░░░░░░░░░░░  43
+  └────────┘
+  #14342b     ■ ■ ■ ■ ■ ■ ■ ■
+
+ Desktop text ──────────────────────────────────────────
+  ┌───────────────────────────────────────────────────┐
+  │ cpu ${CPU}  mem ${MEM}                            │
+  └───────────────────────────────────────────────────┘
+  ${CPU} and ${MEM} become the live figures; \n breaks a line
+
+ Bar position ──────────────────────────────────────────
+  [   Top   ][  Bottom  ]
+
+ Mouse speed ───────────────────────────────────────────
+  ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇░░░░░░░░░░░░  0.50 (250%)
+  slower                    faster
+
+ Cursor ────────────────────────────────────────────────
+  [ 1x ][ 2x ][ 3x ][ 4x ]   ➘
+  ┌────────┐  R ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇  255
+  │        │  G ▇▇▇▇░░░░░░░░░░░░░░░░░   68
+  │        │  B ▇▇▇▇░░░░░░░░░░░░░░░░░   68
+  └────────┘
+  #ff4444     ■ ■ ■ ■ ■ ■ ■ ■
+
+                            [ Save ][ Reload ][ Close ]
+ saved to /home/root/.config/sway/config
+```
+
+It is **taller than a tiled window on a 640x400 screen**, so the middle of it
+scrolls — with the wheel, or by Tab moving the focus onto something that is not
+showing yet. The three buttons along the bottom never scroll away, because a
+settings window whose Save cannot be reached is a settings window that cannot
+be saved. A turn of the wheel keeps doing whatever it started doing until the
+hand stops: deciding afresh on every notch would read the control under the
+pointer, and the whole point of scrolling is that the controls are moving past
+it.
+
+**Every change happens as it is made.** Dragging the mouse slider changes the
+speed of the mouse doing the dragging; picking a colour repaints the screen
+behind the window. Nothing is written to disk until **Save**, and **Reload** is
+sway's own `reload` — it rereads the configuration file, which is also how to
+throw away a change that was tried and not liked. Until then the status line
+says `unsaved`.
+
+The settings are sent to sway over the IPC socket, as the commands they are:
+
+| The control | The command it sends |
+|---|---|
+| the background sliders and swatches | `output * bg #rrggbb solid_color` |
+| the text field | `background_text "..."` |
+| Top / Bottom | `bar position top` / `bar position bottom` |
+| the mouse speed | `input * pointer_accel <-1..1>` |
+| 1x … 4x | `cursor size <1..4>` |
+| the cursor sliders and swatches | `cursor color #rrggbb` |
+
+which is exactly what [`swaymsg`](#swaymsg) would send. The window has no
+privilege the compositor does not give every client; it is a settings program
+for sway rather than a part of it, and everything it can do can be typed.
+
+**The file is edited, not rewritten.** A configuration file is mostly comments
+and key bindings this window knows nothing about, so a line that already sets
+one of the three has its value replaced where it stands and everything around
+it is left alone. A setting the file never mentions is appended at the end
+under `### Written by swaysettings`. The block form is understood as well as
+the one-line form, so a file that says
+
+```
+input "type:pointer" {
+    pointer_accel 0.5
+}
+```
+
+has that line edited rather than a second, contradicting one added below it.
+The file it writes is the file sway says it loaded — it asks, with
+`get_version`, rather than guessing between the two places sway looks.
+
+**Where the sliders start** is what the file says, with sway's defaults where
+it says nothing — except the mouse, which is asked of the kernel that is
+actually moving it, so the slider starts where the pointer really is. See
+[`wpointerspeed()`](wkernel-api.md#int-wpointerspeedint-percent).
+
+The text field holds what is **in the file**, not what is on the screen:
+`${CPU}` stays `${CPU}` and `\n` stays two characters, because those are
+instructions to the compositor and a field showing a reading instead would no
+longer say what would be saved. The line under it — `shows: cpu 3% at 16:57` —
+is the other half of that answer, expanded from the same place the compositor
+expands it. A double quote cannot be typed into it — the
+line is written back inside quotes and a sway configuration file has no escape
+for one.
+
+| Key | What it does |
+|---|---|
+| Tab, Shift+Tab, ↑, ↓ | move between the controls, scrolling to what is off screen |
+| ←, → | move a slider, or pick the next of a row of buttons |
+| Home, End | a slider's ends |
+| Enter, Space | press the button the ring is on |
+| S, R | Save, Reload |
+| Q, Escape | close the window |
+
+In the text field the letters are letters: S does not save while something is
+being typed, and Escape leaves the field rather than the window. Everything
+else is unchanged.
+
+Every control is reachable from the keyboard, deliberately: the reason to open
+this window may be that the mouse is set too slow to cross the screen with. The
+colour swatches are the exception — they are a shortcut to a colour the three
+sliders can also reach, and sixteen more stops would make Tab the long way
+round.
+
+**What it cannot set** is everything else in the file. Bindings, gaps, borders,
+window colours and the rest stay in `~/.config/sway/config`, because a settings
+window for a compositor whose configuration is a *language* would either be a
+worse text editor or a window with fifty controls nobody opened it for.
+
+**Exit status:** 0, or 1 if there is no display server to connect to.
 
 ## waylandd
 

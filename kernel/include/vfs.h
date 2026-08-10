@@ -126,6 +126,7 @@ int vfs_poll(struct process *p, wpollfd_t *fds, int count, int timeout_ms);
  * were written.  Needs no process: what is mounted is the same for everyone. */
 int vfs_disklist(wdisk_t *out, int max);
 int vfs_unlink(struct process *p, const char *path);
+int vfs_rename(struct process *p, const char *from, const char *to);
 int vfs_mkdir(struct process *p, const char *path);
 int vfs_rmdir(struct process *p, const char *path);
 int vfs_opendir(struct process *p, const char *path);

@@ -34,6 +34,7 @@ int  ramfs_read(uint32_t ino, uint32_t offset, void *buf, uint32_t len);
 int  ramfs_write(uint32_t ino, uint32_t offset, const void *buf, uint32_t len);
 int  ramfs_create(const char *path, uint16_t type, uint32_t *ino_out);
 int  ramfs_unlink(const char *path);
+int  ramfs_rename(const char *from, const char *to);
 int  ramfs_truncate(uint32_t ino);
 int  ramfs_readdir(uint32_t ino, uint32_t index, wdirent_t *out);
 

@@ -56,11 +56,21 @@ static bool has_wheel;
 static int  screen_w = 640, screen_h = 400;
 
 /* Where the pointer is.  Kept in whole pixels; the mouse reports in its own
- * counts and one count is taken as one pixel, which at the default resolution
- * of these packets is about right and is what a machine with no acceleration
- * setting can honestly do. */
+ * counts, and how many pixels a count is worth is the speed setting -- 100 for
+ * one to one, which is what these packets are scaled for and what a machine
+ * nobody has configured gets. */
 static int32_t pointer_x, pointer_y;
 static uint32_t buttons_held;
+static int      speed = W_POINTER_SPEED_DEFAULT;
+
+/* What the scaling could not spend yet.
+ *
+ * At half speed a one-count movement is half a pixel, and a driver that
+ * rounded each packet on its own would throw both halves away: the pointer
+ * would not move at all until the mouse moved two counts at once.  Keeping the
+ * remainder and adding it to the next packet spends it on the following
+ * movement instead, so slow is slow rather than sticky. */
+static int32_t leftover_x, leftover_y;
 
 bool mouse_present(void) { return present; }
 
@@ -68,6 +78,37 @@ void mouse_position(int32_t *x, int32_t *y)
 {
     *x = pointer_x;
     *y = pointer_y;
+}
+
+int mouse_speed(void) { return speed; }
+
+int mouse_set_speed(int percent)
+{
+    if (percent < W_POINTER_SPEED_MIN)
+        percent = W_POINTER_SPEED_MIN;
+    if (percent > W_POINTER_SPEED_MAX)
+        percent = W_POINTER_SPEED_MAX;
+
+    speed = percent;
+
+    /* The remainder belonged to the old speed; carrying it into the new one
+     * would spend a fraction of a fast pixel on a slow movement. */
+    leftover_x = leftover_y = 0;
+
+    return speed;
+}
+
+/* One axis of a packet, in counts, turned into pixels at the speed in force. */
+static int32_t scale(int32_t counts, int32_t *leftover)
+{
+    int32_t total  = counts * speed + *leftover;
+    int32_t pixels = total / 100;
+
+    /* Truncation is toward zero on both signs, so the remainder keeps the
+     * direction it came from and the pointer does not creep. */
+    *leftover = total - pixels * 100;
+
+    return pixels;
 }
 
 /* ------------------------------------------------------------------ *
@@ -227,6 +268,13 @@ static void handle_packet(void)
     /* The mouse's Y counts up as it moves away from the user; the screen's
      * counts down.  One of the two has to be flipped and it is this one. */
     dy = -dy;
+
+    /* Counts into pixels, which is where the speed setting lives.  Everything
+     * below this line -- the clamping, and the dx/dy the event carries -- is in
+     * pixels, so a client is told how far the pointer went and never how far
+     * the hand did. */
+    dx = scale(dx, &leftover_x);
+    dy = scale(dy, &leftover_y);
 
     if (dx || dy) {
         pointer_x += dx;

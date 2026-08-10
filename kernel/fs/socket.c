@@ -110,7 +110,7 @@ static socket_t *find_listener(const char *path)
     return NULL;
 }
 
-socket_t *socket_listen(const char *path, int *err)
+socket_t *socket_listen(const char *path, uint32_t owner, int *err)
 {
     if (find_listener(path)) {
         *err = -W_EEXIST;
@@ -135,6 +135,7 @@ socket_t *socket_listen(const char *path, int *err)
     }
 
     s->listening = true;
+    s->owner     = owner;
     strlcpy(s->path, path, sizeof(s->path));
     listeners[slot] = s;
 
@@ -142,13 +143,22 @@ socket_t *socket_listen(const char *path, int *err)
     return s;
 }
 
-socket_t *socket_connect(const char *path, int *err)
+socket_t *socket_connect(const char *path, uint32_t uid, int *err)
 {
     socket_t *l = find_listener(path);
     if (!l) {
         *err = -W_ENOENT;
         return NULL;
     }
+
+    /* Whose socket it is decides who may speak into it.  Root is not stopped,
+     * because root can already become anybody; everyone else talks to their
+     * own session and not to somebody else's. */
+    if (uid != l->owner && uid != W_ROOT_UID) {
+        *err = -W_EPERM;
+        return NULL;
+    }
+
     if (l->backlog_count >= SOCK_BACKLOG) {
         *err = -W_EBUSY;
         return NULL;

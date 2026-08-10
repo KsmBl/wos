@@ -151,6 +151,33 @@ int wstat(const char *path, wstat_t *out);
  */
 int wunlink(const char *path);
 
+/**
+ * Give a file a different name, or a different directory, in one step.
+ *
+ * The one step is the point. A program that has to replace a file safely
+ * writes the new contents under a temporary name and renames it over the old
+ * one; the swap is a single change to a directory, so a machine that stops in
+ * the middle has either the whole old file or the whole new one. Writing over
+ * the original instead has a moment where it is neither, and a configuration
+ * file lost that way is lost for good.
+ *
+ * Nothing is copied: a directory entry is a name and an inode number, and only
+ * the entry moves. An existing @p to is replaced if it is a file, which is
+ * what makes the swap atomic; if it is a directory the call fails rather than
+ * discarding what is inside it.
+ *
+ * Both ends must be on the same filesystem — moving between the disk and
+ * `/ramdisk` would be a copy and a delete rather than one step, and a rename
+ * that silently copied a gigabyte would not be what anybody meant by rename.
+ *
+ * @param from Existing path.
+ * @param to   What it should be called.
+ * @return 0, `-W_ENOENT` if @p from does not exist, `-W_EXDEV` across two
+ *         filesystems, `-W_EISDIR` if @p to is a directory, `-W_EINVAL` for a
+ *         directory moved inside itself, or `-W_EACCES`.
+ */
+int wrename(const char *from, const char *to);
+
 /* ==================================================================== *
  *  Directories
  * ==================================================================== */
@@ -550,6 +577,26 @@ int winputopen(void);
  * @return 0, or `-W_EFAULT`.
  */
 int wpointer(wpointer_t *out);
+
+/**
+ * How far the pointer moves for how far the mouse does, as a percentage.
+ *
+ * 100 is one count from the mouse to one pixel on the screen, 50 is half as
+ * fast and 200 twice; `W_POINTER_SPEED_MIN` to `W_POINTER_SPEED_MAX`, and a
+ * value outside that is clamped rather than refused. It is a plain multiplier:
+ * the same movement always moves the pointer the same distance, however
+ * quickly the hand made it.
+ *
+ * The kernel applies it, because the kernel is what turns the mouse's counts
+ * into a position on the screen. A compositor that scaled the movement itself
+ * would draw its cursor somewhere the kernel's pointer is not.
+ *
+ * @param percent The speed to set, or a negative number to read the one in
+ *                force without changing it.
+ * @return The speed now in force, `-W_EPERM` without root or the seat, or
+ *         `-W_ENODEV` on a machine with no pointing device.
+ */
+int wpointerspeed(int percent);
 
 /**
  * Arm a seat grant: let the next process this one spawns take the screen and

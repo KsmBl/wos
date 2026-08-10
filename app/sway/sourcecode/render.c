@@ -14,81 +14,35 @@
  */
 
 #include "sway.h"
+#include <wdraw.h>
+
+/* Everything is composed into one back buffer, so the canvas is made once and
+ * used by every helper below.  The primitives themselves are the library's --
+ * see wdraw.h -- because a compositor's fill and a client's fill are the same
+ * arithmetic, and they were both here until they disagreed. */
+static wcanvas_t canvas;
 
 static void fill(int x, int y, int w, int h, uint32_t colour)
 {
-    int sw = (int)sway.screen.width;
-    int sh = (int)sway.screen.height;
-
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > sw) w = sw - x;
-    if (y + h > sh) h = sh - y;
-    if (w <= 0 || h <= 0)
-        return;
-
-    for (int row = 0; row < h; row++) {
-        uint32_t *at = sway.back + (uint64_t)(y + row) * sw + x;
-        for (int col = 0; col < w; col++)
-            at[col] = colour;
-    }
+    wdraw_fill(&canvas, x, y, w, h, colour);
 }
 
 /* An outline `width` thick just inside the rectangle. */
 static void frame_rect(int x, int y, int w, int h, int width, uint32_t colour)
 {
-    if (width <= 0)
-        return;
-
-    fill(x, y, w, width, colour);                       /* top    */
-    fill(x, y + h - width, w, width, colour);            /* bottom */
-    fill(x, y, width, h, colour);                        /* left   */
-    fill(x + w - width, y, width, h, colour);            /* right  */
-}
-
-static void draw_char(int x, int y, char c, uint32_t fg)
-{
-    const unsigned char *glyph = wglyph8x16((unsigned char)c);
-    int sw = (int)sway.screen.width;
-    int sh = (int)sway.screen.height;
-
-    for (int row = 0; row < 16; row++) {
-        int py = y + row;
-        if (py < 0 || py >= sh)
-            continue;
-
-        unsigned char bits = glyph[row];
-        uint32_t     *at   = sway.back + (uint64_t)py * sw;
-
-        for (int col = 0; col < 8; col++) {
-            int px = x + col;
-            if (px < 0 || px >= sw)
-                continue;
-            if (bits & (0x80 >> col))
-                at[px] = fg;
-        }
-    }
+    wdraw_frame(&canvas, x, y, w, h, width, colour);
 }
 
 /* Text, stopping at `max_width` pixels rather than running over whatever comes
  * next.  Returns where it got to. */
 static int draw_text(int x, int y, const char *text, uint32_t fg, int max_width)
 {
-    int at = x;
-
-    for (const char *s = text; *s; s++) {
-        if (at + 8 > x + max_width)
-            break;
-        draw_char(at, y, *s, fg);
-        at += 8;
-    }
-
-    return at;
+    return wdraw_text_max(&canvas, x, y, text, fg, max_width);
 }
 
 static int text_width(const char *s)
 {
-    return (int)strlen(s) * 8;
+    return wdraw_text_width(s);
 }
 
 /* The same, for the pointer code: a click on the bar has to be matched against
@@ -207,7 +161,7 @@ static void draw_tree(struct node *n)
 
 static void draw_bar(void)
 {
-    if (!sway.config.bar)
+    if (!sway_bar_showing())
         return;
 
     int h = BAR_HEIGHT;
@@ -259,6 +213,60 @@ static void draw_bar(void)
 /* What the screen says when nothing is running on it.  A blank screen and a
  * broken compositor look identical, and the first thing anybody needs to know
  * is which key opens a window. */
+/* Something that can be read on the background, whatever colour it is.
+ *
+ * The background is the one colour here that somebody may set to anything at
+ * all, and text drawn in a fixed grey disappears against half of the range.
+ * The test is the usual weighted one: green carries most of what the eye calls
+ * brightness, blue almost none. */
+static uint32_t on_background(int dim)
+{
+    uint32_t bg = sway.config.background;
+
+    unsigned r = (bg >> 16) & 0xFF, g = (bg >> 8) & 0xFF, b = bg & 0xFF;
+    unsigned luma = (r * 30 + g * 59 + b * 11) / 100;
+
+    if (luma > 128)
+        return dim ? 0x555555 : 0x000000;      /* a light background */
+
+    return dim ? 0x888888 : 0xDDDDDD;
+}
+
+/* The text somebody put on the background, in the middle of what is left of
+ * the screen.  `\n` in it starts another line, so a desktop that wants a
+ * heading and a reading under it can have one. */
+static void draw_background_text(void)
+{
+    const char *at    = sway.background_line;
+    int         lines = 1;
+
+    for (const char *p = at; *p; p++)
+        if (*p == '\n')
+            lines++;
+
+    int cx = (int)sway.screen.width / 2;
+    int cy = sway.usable_y + sway.usable_h / 2 - (lines - 1) * 12;
+
+    for (int i = 0; i < lines; i++) {
+        char        line[BACKGROUND_LINE_MAX];
+        const char *end = strchr(at, '\n');
+        wsize_t     len = end ? (wsize_t)(end - at) : strlen(at);
+
+        if (len >= sizeof(line))
+            len = sizeof(line) - 1;
+
+        memcpy(line, at, len);
+        line[len] = '\0';
+
+        draw_text(cx - text_width(line) / 2, cy + i * 24, line,
+                  on_background(0), (int)sway.screen.width);
+
+        if (!end)
+            break;
+        at = end + 1;
+    }
+}
+
 static void draw_empty_workspace(void)
 {
     char line[96];
@@ -268,17 +276,24 @@ static void draw_empty_workspace(void)
     int cx = (int)sway.screen.width / 2;
     int cy = sway.usable_y + sway.usable_h / 2;
 
+    /* Somebody who has written their own has said what this screen is for, and
+     * two sets of centred text over each other would be neither. */
+    if (sway.background_line[0]) {
+        draw_background_text();
+        return;
+    }
+
     wsnprintf(line, sizeof(line), "%s + Return   open %s", mod,
               sway.config.terminal);
-    draw_text(cx - text_width(line) / 2, cy - 24, line, 0x666666,
+    draw_text(cx - text_width(line) / 2, cy - 24, line, on_background(0),
               (int)sway.screen.width);
 
     wsnprintf(line, sizeof(line), "%s + Shift + Q   close the window", mod);
-    draw_text(cx - text_width(line) / 2, cy, line, 0x555555,
+    draw_text(cx - text_width(line) / 2, cy, line, on_background(1),
               (int)sway.screen.width);
 
     wsnprintf(line, sizeof(line), "%s + Shift + E   leave sway", mod);
-    draw_text(cx - text_width(line) / 2, cy + 24, line, 0x555555,
+    draw_text(cx - text_width(line) / 2, cy + 24, line, on_background(1),
               (int)sway.screen.width);
 }
 
@@ -291,47 +306,16 @@ static void draw_empty_workspace(void)
  * right, or a client's shape drawn opaquely over a square of its own
  * background, which looks worse than no cursor at all.
  *
- * The shape is the arrow every desktop has: an outline in black with a white
- * fill, so it stays visible over a dark window and a light one alike.  Eleven
- * rows is enough to read at 640x400 and small enough not to cover what is
- * being pointed at.
+ * The shape and the scaling are wdraw_cursor()'s, so that the arrow the
+ * settings window previews is the arrow that ends up on the screen.
  */
-static const char *const cursor_shape[] = {
-    "X          ",
-    "XX         ",
-    "X.X        ",
-    "X..X       ",
-    "X...X      ",
-    "X....X     ",
-    "X.....X    ",
-    "X......X   ",
-    "X.......X  ",
-    "X....XXXXX ",
-    "X..X.X     ",
-    "X.X  X.X   ",
-    "XX   X.X   ",
-    "X     X.X  ",
-    "      XXX  ",
-};
-
 static void draw_cursor(void)
 {
     if (!sway.have_pointer)
         return;
 
-    int rows = (int)(sizeof(cursor_shape) / sizeof(cursor_shape[0]));
-
-    for (int row = 0; row < rows; row++) {
-        const char *line = cursor_shape[row];
-
-        for (int col = 0; line[col]; col++) {
-            if (line[col] == ' ')
-                continue;
-
-            fill(sway.cursor_x + col, sway.cursor_y + row, 1, 1,
-                 line[col] == 'X' ? 0x000000 : 0xFFFFFF);
-        }
-    }
+    wdraw_cursor(&canvas, sway.cursor_x, sway.cursor_y,
+                 sway.config.cursor_size, sway.config.cursor_colour);
 }
 
 void render_frame(void)
@@ -340,6 +324,9 @@ void render_frame(void)
 
     if (!sway.back)
         return;
+
+    canvas = wcanvas(sway.back, (int)sway.screen.width,
+                     (int)sway.screen.height);
 
     fill(0, 0, (int)sway.screen.width, (int)sway.screen.height,
          sway.config.background);

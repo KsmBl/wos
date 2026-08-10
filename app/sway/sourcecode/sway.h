@@ -31,6 +31,20 @@
 #define TITLE_MAX      64
 #define COMMAND_MAX    192
 
+/* The background text as it is written, and as it reads once ${CPU} and ${MEM}
+ * have been replaced.  The second is the larger of the two because expanding
+ * makes it longer, and a template that filled the buffer would otherwise be
+ * cut off at exactly the moment a figure went from one digit to two. */
+#define BACKGROUND_TEXT_MAX 128
+#define BACKGROUND_LINE_MAX 224
+
+/* The smallest and largest the cursor goes.  Whole multiples, because the
+ * shape is a bitmap and half a pixel of arrow is not a thing that can be
+ * drawn; four is as large as a 640x400 screen can carry without the pointer
+ * covering what it is pointing at. */
+#define CURSOR_SIZE_MIN 1
+#define CURSOR_SIZE_MAX 4
+
 /* How a container divides itself between its children.  i3 and sway call these
  * splith and splitv, and so does the configuration file. */
 enum layout {
@@ -39,6 +53,13 @@ enum layout {
 };
 
 enum direction { DIR_LEFT, DIR_RIGHT, DIR_UP, DIR_DOWN };
+
+/* `bar mode dock|hide|invisible`, which is sway's own set. */
+enum bar_mode {
+    BAR_INVISIBLE = 0,     /* not drawn at all                            */
+    BAR_DOCK      = 1,     /* always there, with the screen made smaller  */
+    BAR_HIDE      = 2,     /* over the windows, while the modifier is held */
+};
 
 /* ------------------------------------------------------------------ *
  *  Client objects
@@ -153,8 +174,36 @@ struct config {
     struct colours focused;
     struct colours unfocused;
 
-    int      bar;                /* draw the status bar */
+    /* What the bar is doing.  `hide` is sway's third mode: the bar is not
+     * there and takes no room, and appears over the windows while the
+     * modifier is held -- which is the one thing here that reads the modifier
+     * without a binding matching. */
+    enum bar_mode bar;
     int      bar_top;            /* at the top rather than the bottom */
+
+    /* What the right-hand side of the bar says, with the same ${...} names the
+     * background text uses.  Empty is the battery and the clock, which is what
+     * a machine nobody has configured shows. */
+    char     status_text[BACKGROUND_TEXT_MAX];
+
+    /* `input <id> pointer_accel <-1..1>`, kept in hundredths because there is
+     * no floating point here: -100 is sway's -1.0 and 100 is its 1.0.  What it
+     * means for the mouse is worked out when it is set and handed to the
+     * kernel, which is what turns counts into pixels. */
+    int      pointer_accel;
+
+    /* The cursor.  There is one shape and it is drawn here, so how big it is
+     * and what colour it is are the compositor's to decide -- an X cursor
+     * theme would answer both and there is no theme, no image decoder and
+     * nothing to scale an image with. */
+    int      cursor_size;        /* whole-pixel scale of the shape, 1 to 4 */
+    uint32_t cursor_colour;      /* what the inside of the arrow is filled
+                                  * with; the outline stays black so that it
+                                  * is visible whatever it is over */
+
+    /* What is written across the background, with ${CPU} and ${MEM} replaced
+     * as they change.  Empty means the key hints a fresh machine shows. */
+    char     background_text[BACKGROUND_TEXT_MAX];
 };
 
 /* How tall the bar is.  One number, so the row it is drawn on and the rows
@@ -211,6 +260,11 @@ struct sway {
 
     char config_path[W_PATH_MAX + 1];
     char status[128];            /* the message the bar shows */
+
+    /* The background text with its figures filled in, kept apart from the
+     * template it came from: the template is the person's and changes when
+     * they say so, and this changes on its own. */
+    char background_line[BACKGROUND_LINE_MAX];
 };
 
 extern struct sway sway;
@@ -275,5 +329,11 @@ void ipc_shutdown(void);
 void sway_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void sway_spawn(const char *command);
 void sway_update_usable(void);
+void sway_update_background_text(void);
+
+/* Is the bar on the screen right now?  Always in `dock`, never in
+ * `invisible`, and while the modifier is held in `hide`. */
+int  sway_bar_showing(void);
+
 
 #endif /* SWAY_H */

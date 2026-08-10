@@ -65,6 +65,7 @@ and `wyield()`. Everything else returns promptly.
 | `W_EFAULT` | 14 | bad address passed to the kernel |
 | `W_EBUSY` | 16 | resource busy |
 | `W_EEXIST` | 17 | already exists |
+| `W_EXDEV` | 18 | rename across two filesystems |
 | `W_ENOTDIR` | 20 | a path component is not a directory |
 | `W_EISDIR` | 21 | is a directory |
 | `W_EINVAL` | 22 | invalid argument |
@@ -174,6 +175,42 @@ typedef struct {
 ## `int wunlink(const char *path)`
 
 Delete a file. **Returns** 0, or `-W_ENOENT`, `-W_EISDIR` (use `wrmdir()`).
+
+## `int wrename(const char *from, const char *to)`
+
+Give a file a different name, or a different directory, **in one step**.
+
+The one step is the point. A program replacing a file safely writes the new
+contents under a temporary name and renames it over the old one:
+
+```c
+int fd = wopen("/home/root/.config/sway/config.new", W_O_WRONLY | W_O_CREAT);
+/* ... write the whole file ... */
+wclose(fd);
+wrename("/home/root/.config/sway/config.new",
+        "/home/root/.config/sway/config");
+```
+
+The swap is a single change to a directory, so a machine that stops in the
+middle — out of disk, powered off — has either the whole old file or the whole
+new one. Writing over the original instead has a moment where it is neither,
+and a configuration lost that way is lost for good. `swaysettings` saves this
+way.
+
+**Nothing is copied**: a directory entry is a name and an inode number, and
+only the entry moves, so renaming a large file costs the same as renaming an
+empty one. An existing destination is replaced when it is a file — that is what makes
+the swap atomic — and refused when it is a directory, rather than discarding
+whatever is inside it. A directory cannot be moved inside itself.
+
+Both ends must be on **one filesystem**. Moving between the disk and
+`/ramdisk` would be a copy and a delete rather than one step, and a rename that
+silently copied a gigabyte would not be what anybody meant by rename;
+[`mv`](apps.md#mv) says so rather than doing it.
+
+**Returns** 0, `-W_ENOENT`, `-W_EXDEV` across two filesystems, `-W_EISDIR` if
+the destination is a directory, `-W_EINVAL` for a directory moved inside
+itself, or `-W_EACCES`.
 
 ---
 
@@ -452,6 +489,9 @@ address, and it is gone when the returned descriptor closes. Answering to a
 name counts as writing where it lives, so this needs write permission on the
 directory, which for an ordinary user means somewhere under their own home.
 
+The socket **belongs to the user who listened on it**, which is what decides
+who may connect: see `wconnect()`.
+
 **Returns** a descriptor to accept connections on, `-W_EEXIST` if the name is
 taken, `-W_EACCES`, `-W_ENFILE` or `-W_EMFILE`.
 
@@ -461,8 +501,16 @@ Connect to whoever is listening on `path`. Returns as soon as the connection is
 queued rather than waiting to be accepted, so a client may start sending
 immediately.
 
+**A socket belongs to whoever is listening on it, and another user cannot
+connect.** Talking to a socket is talking to the process behind it, and what
+that process does with what it hears is its business: a compositor's socket
+takes commands and runs programs as the user whose session it is. So the check
+is here, where every connection goes past, rather than in each program that
+listens. Root is not stopped, because root can already become anybody.
+
 **Returns** a connected descriptor, `-W_ENOENT` if nothing is listening,
-`-W_EBUSY` if the backlog is full, or `-W_EMFILE`.
+`-W_EPERM` if the socket belongs to another user, `-W_EBUSY` if the backlog is
+full, or `-W_EMFILE`.
 
 ## `int waccept(int fd)`
 
@@ -1328,6 +1376,40 @@ could bring back.
 
 **Returns** 0, or `-W_EFAULT`.
 
+## `int wpointerspeed(int percent)`
+
+How far the pointer moves for how far the mouse does, as a percentage.
+
+```c
+#define W_POINTER_SPEED_MIN     10
+#define W_POINTER_SPEED_DEFAULT 100
+#define W_POINTER_SPEED_MAX     800
+```
+
+100 is one count from the mouse to one pixel on the screen, 50 is half as fast
+and 200 twice. A value outside the range is clamped rather than refused, and a
+negative one reads the speed in force without changing it — a compositor that
+had to set the speed to find out what it was could not report the setting it
+found.
+
+It is a plain multiplier and nothing else: the same movement always moves the
+pointer the same distance, however quickly the hand made it. **Acceleration —
+further for a fast movement than for a slow one of the same length — needs the
+interval between packets to mean something**, and on a PS/2 mouse sampled at
+whatever rate the firmware left it that interval is not a speed.
+
+The kernel applies it, in the same place it turns counts into a position, and
+it keeps what the rounding left over so a slow setting is slow rather than
+sticky: at 50%, a one-count movement is half a pixel, and a driver that rounded
+each packet on its own would throw both halves away.
+
+The speed is the machine's, not the process's — it stays as it was set after
+the program that set it exits, which is why [`sway`](apps.md#sway) puts the
+default back when it starts.
+
+**Returns** the speed now in force, `-W_EPERM` without root or the seat, or
+`-W_ENODEV` on a machine with no pointing device.
+
 ## `int wseatgrant(void)`
 
 Arm a seat grant: let the next process this one spawns take the screen and the
@@ -1370,7 +1452,10 @@ typedef struct {
     uint32_t unicode;    /* the character it would make, or 0       */
     uint32_t time_ms;    /* milliseconds since boot                 */
     int32_t  x, y;       /* where the pointer is, in pixels         */
-    int32_t  dx, dy;     /* how far it moved; dy is wheel steps     */
+    int32_t  dx, dy;     /* how far it moved; dy is wheel notches,
+                          * counting down when the wheel is turned
+                          * away from the user -- the sign the mouse
+                          * reports and the one wl_pointer.axis wants */
 } winput_t;
 ```
 

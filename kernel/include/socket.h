@@ -86,6 +86,12 @@ typedef struct socket {
     /* A listener: an address, and connections waiting to be accepted. */
     bool listening;
     char path[W_PATH_MAX + 1];
+
+    /* Who is answering there.  A socket is a way into the process holding it
+     * -- a compositor's is a way to run commands as whoever it belongs to --
+     * so it has an owner for the same reason a file does. */
+    uint32_t owner;
+
     struct socket *backlog[SOCK_BACKLOG];
     int  backlog_count;
 
@@ -94,18 +100,26 @@ typedef struct socket {
     int          side;
 } socket_t;
 
-/* Answer to `path` from now on.  Returns the listening socket, or NULL with
- * `*err` set to -W_EEXIST if the name is taken, or -W_ENOMEM. */
-socket_t *socket_listen(const char *path, int *err);
+/* Answer to `path` from now on, on behalf of `owner`.  Returns the listening
+ * socket, or NULL with `*err` set to -W_EEXIST if the name is taken, or
+ * -W_ENOMEM. */
+socket_t *socket_listen(const char *path, uint32_t owner, int *err);
 
-/* Connect to whoever is listening on `path`.  Returns this end of a new
- * connection, or NULL with `*err` set: -W_ENOENT when nothing is listening,
- * -W_EBUSY when the listener's backlog is full, -W_ENOMEM otherwise.
+/* Connect to whoever is listening on `path`, as `uid`.  Returns this end of a
+ * new connection, or NULL with `*err` set: -W_ENOENT when nothing is
+ * listening, -W_EBUSY when the listener's backlog is full, -W_EPERM when the
+ * socket belongs to another user, -W_ENOMEM otherwise.
+ *
+ * The permission check is the point of `uid`.  Talking to a socket is talking
+ * to the process behind it, and what that process will do with what it hears
+ * is its business: a compositor's socket takes commands and runs programs as
+ * the user it belongs to.  So a connection from another user is refused here,
+ * where every socket goes past, rather than in each program that listens.
  *
  * Returns as soon as the connection is queued; it does not wait for the
  * listener to accept it, which is what lets a client start talking
  * immediately. */
-socket_t *socket_connect(const char *path, int *err);
+socket_t *socket_connect(const char *path, uint32_t uid, int *err);
 
 /* Take the next waiting connection, blocking until one arrives.  NULL with
  * `*err` if `s` is not a listener. */

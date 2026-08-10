@@ -54,6 +54,7 @@ int wfs_create(const char *path, uint16_t type, uint32_t *ino_out);
 
 /* Remove a file, or an empty directory. */
 int wfs_unlink(const char *path);
+int wfs_rename(const char *from, const char *to);
 
 /* Release every block of a file and set its size to zero. */
 int wfs_truncate(uint32_t ino);

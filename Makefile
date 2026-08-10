@@ -351,6 +351,16 @@ log: all
 debug: all
 	$(QEMU) $(QEMU_FLAGS) -serial stdio -display none -s -S
 
+# Check a built WOS by booting it: `make check`, or `make check ARGS=-l` to
+# see the scenarios, or `make check ARGS="boot mv"` for some of them.
+#
+# Nothing here can be checked by compiling.  Whether a directory entry moves
+# atomically, whether a socket refuses another user, how far the pointer goes
+# for a given movement of the mouse -- each is a property of the machine while
+# it runs, and each of them was wrong at least once.
+check: all
+	@python3 tools/check.py $(ARGS)
+
 clean:
 	rm -rf $(BUILD)
 

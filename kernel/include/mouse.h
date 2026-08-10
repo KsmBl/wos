@@ -27,4 +27,15 @@ void mouse_position(int32_t *x, int32_t *y);
  * bring back. */
 void mouse_screen_size(int width, int height);
 
+/* How far the pointer goes for how far the mouse moves, as a percentage --
+ * W_POINTER_SPEED_* in wabi.h.  Here rather than in the compositor for the
+ * same reason the position is: the counts are turned into pixels in one place,
+ * and a setting applied anywhere else would leave the kernel's pointer and the
+ * drawn cursor disagreeing about where the mouse is.
+ *
+ * A value outside the range is clamped rather than refused, and the value that
+ * ends up in force is returned, so a caller can say what it got. */
+int mouse_set_speed(int percent);
+int mouse_speed(void);
+
 #endif /* WOS_MOUSE_H */

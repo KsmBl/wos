@@ -228,9 +228,25 @@ hand over a descriptor for a buffer of pixels rather than a copy of them. So:
 Unix domain sockets, in the shape WOS needs them.
 
 The address is a path but not a file. Nothing is created on the disk; the path
-is the name a listener answers to and it disappears when the listener closes,
-which is also why it needs no permission model of its own — binding one
-requires write permission where it lives, and that rule already exists.
+is the name a listener answers to, and it disappears when the listener closes.
+Binding one needs write permission where it lives, which is a rule that already
+existed: answering to a name in a directory is a kind of writing there.
+
+**A socket has an owner**, and another user cannot connect to it. That rule was
+missing at first, on the reasoning that the write permission needed to bind one
+was permission enough. It was not, and the difference is what a socket *is*: a
+file is bytes, and a socket is a way into the process behind it. Sockets on
+this machine live in `/ramdisk`, which everybody can write, and the compositor
+listens on one that takes commands — so any user's program could have told
+another user's sway to run a program, and it would have run it as them. The
+Wayland socket beside it is worse: a client that binds `wl_seat` is told every
+keystroke.
+
+So `socket_connect()` compares the caller's uid with the uid that listened and
+refuses anyone else with `-W_EPERM`; root is not stopped, because root can
+already become anybody. The check is in the one place every connection goes
+past rather than in each program that listens, because a program that forgot it
+would be a hole in the machine rather than a bug in itself.
 
 **Descriptor passing** is the part worth being careful about. A `file_t` is a
 reference to something — a pipe end, an open file, a socket endpoint — so
@@ -312,6 +328,16 @@ nobody can bring back. `kernel/drivers/mouse.c` clamps it and reports both the
 new position and the movement that caused it, so the compositor can draw a
 cursor without tracking anything and a client can be told a distance without
 knowing where the screen ends.
+
+That is also why the pointer's *speed* is the kernel's — `wpointerspeed()`,
+which sway drives from `input * pointer_accel`. The counts a mouse reports
+become pixels in exactly one place, and a compositor that scaled them itself
+would draw its cursor where the kernel's pointer was not. The scaling keeps
+what its rounding left over, because half of a pixel dropped on every packet is
+a pointer that will not move at all below half speed. It is a multiplier and
+not a curve: acceleration would need the interval between packets to mean
+something, and on a mouse sampled at whatever rate the firmware left it that
+interval is not a speed.
 
 Taking the screen or the keyboard affects every process on the machine, so
 both need root or a seat granted by root — see

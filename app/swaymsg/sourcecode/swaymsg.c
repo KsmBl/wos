@@ -15,37 +15,22 @@
  */
 
 #include <wkernel.h>
-
-#define IPC_PATH  "/ramdisk/sway-ipc.sock"
-#define IPC_MAGIC "i3-ipc"
-#define MAGIC_LEN 6
-
-#define IPC_RUN_COMMAND       0
-#define IPC_GET_WORKSPACES    1
-#define IPC_SUBSCRIBE         2
-#define IPC_GET_OUTPUTS       3
-#define IPC_GET_TREE          4
-#define IPC_GET_MARKS         5
-#define IPC_GET_BAR_CONFIG    6
-#define IPC_GET_VERSION       7
-#define IPC_GET_BINDING_MODES 8
-#define IPC_GET_CONFIG        9
-#define IPC_SEND_TICK        10
+#include <wipc.h>
 
 static const struct {
     const char *name;
     uint32_t    type;
 } message_types[] = {
-    { "run_command",       IPC_RUN_COMMAND       },
-    { "get_workspaces",    IPC_GET_WORKSPACES    },
-    { "get_outputs",       IPC_GET_OUTPUTS       },
-    { "get_tree",          IPC_GET_TREE          },
-    { "get_marks",         IPC_GET_MARKS         },
-    { "get_version",       IPC_GET_VERSION       },
-    { "get_binding_modes", IPC_GET_BINDING_MODES },
-    { "get_config",        IPC_GET_CONFIG        },
-    { "send_tick",         IPC_SEND_TICK         },
-    { "subscribe",         IPC_SUBSCRIBE         },
+    { "run_command",       WIPC_RUN_COMMAND       },
+    { "get_workspaces",    WIPC_GET_WORKSPACES    },
+    { "get_outputs",       WIPC_GET_OUTPUTS       },
+    { "get_tree",          WIPC_GET_TREE          },
+    { "get_marks",         WIPC_GET_MARKS         },
+    { "get_version",       WIPC_GET_VERSION       },
+    { "get_binding_modes", WIPC_GET_BINDING_MODES },
+    { "get_config",        WIPC_GET_CONFIG        },
+    { "send_tick",         WIPC_SEND_TICK         },
+    { "subscribe",         WIPC_SUBSCRIBE         },
 };
 
 static void usage(void)
@@ -64,18 +49,6 @@ static void usage(void)
     wfprintf(W_STDERR, "\n");
 }
 
-static void put32(uint8_t *p, uint32_t v)
-{
-    for (int i = 0; i < 4; i++)
-        p[i] = (uint8_t)(v >> (i * 8));
-}
-
-static uint32_t get32(const uint8_t *p)
-{
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
 /* ------------------------------------------------------------------ *
  *  Reading a reply
  *
@@ -84,38 +57,13 @@ static uint32_t get32(const uint8_t *p)
  *  fields, and -r exists for anybody who wants the document itself.
  * ------------------------------------------------------------------ */
 
-/* The value of "key" starting at or after `from`, copied into `out`.
- * Returns where it ended, or NULL. */
+/* One field of a reply, through the library's reader.  Returns where the
+ * search started from, so the callers that walk a list of objects can carry
+ * on past the one they just read. */
 static const char *field(const char *json, const char *key, char *out,
                          wsize_t size)
 {
-    char pattern[64];
-    wsnprintf(pattern, sizeof(pattern), "\"%s\":", key);
-
-    const char *at = strstr(json, pattern);
-    if (!at)
-        return NULL;
-
-    at += strlen(pattern);
-    out[0] = '\0';
-
-    if (*at == '"') {
-        at++;
-        wsize_t n = 0;
-        while (*at && *at != '"' && n + 1 < size) {
-            if (*at == '\\' && at[1])
-                at++;
-            out[n++] = *at++;
-        }
-        out[n] = '\0';
-        return at;
-    }
-
-    wsize_t n = 0;
-    while (*at && *at != ',' && *at != '}' && *at != ']' && n + 1 < size)
-        out[n++] = *at++;
-    out[n] = '\0';
-    return at;
+    return wipc_field(json, key, out, size) ? json : NULL;
 }
 
 static void print_workspaces(const char *json)
@@ -228,7 +176,7 @@ static void print_tree(const char *json)
 
 int main(int argc, char **argv)
 {
-    uint32_t    type = IPC_RUN_COMMAND;
+    uint32_t    type = WIPC_RUN_COMMAND;
     const char *type_name = "run_command";
     int         raw = 0;
     int         at  = 1;
@@ -280,76 +228,29 @@ int main(int argc, char **argv)
                 sizeof(payload) - strlen(payload));
     }
 
-    if (type == IPC_RUN_COMMAND && !payload[0]) {
+    if (type == WIPC_RUN_COMMAND && !payload[0]) {
         usage();
         return 1;
     }
 
-    int fd = wconnect(IPC_PATH);
-    if (fd < 0) {
-        wfprintf(W_STDERR, "swaymsg: cannot reach sway: %s\n", wstrerror(-fd));
-        wfprintf(W_STDERR, "swaymsg: is it running? `systemctl status sway`\n");
+    static char json[16384];
+    int         r = wipc_message(WIPC_SWAY_SOCKET, type, payload, json,
+                                 sizeof(json));
+
+    if (r < 0) {
+        wfprintf(W_STDERR, "swaymsg: cannot reach sway: %s\n", wstrerror(-r));
+        wfprintf(W_STDERR, -r == W_EPERM
+                 ? "swaymsg: that compositor belongs to another user\n"
+                 : "swaymsg: is it running? `systemctl status sway`\n");
         return 1;
     }
-
-    uint8_t  header[MAGIC_LEN + 8];
-    uint32_t len = (uint32_t)strlen(payload);
-
-    memcpy(header, IPC_MAGIC, MAGIC_LEN);
-    put32(header + MAGIC_LEN, len);
-    put32(header + MAGIC_LEN + 4, type);
-
-    wmsg_t out = { header, sizeof(header), 0, 0 };
-    wsend(fd, &out);
-
-    if (len) {
-        wmsg_t body = { payload, len, 0, 0 };
-        wsend(fd, &body);
-    }
-
-    /* The reply, which may arrive in several pieces. */
-    static uint8_t reply[16384];
-    uint32_t       have = 0;
-
-    while (have < sizeof(reply) - 1) {
-        wpollfd_t ready = { fd, W_POLLIN, 0 };
-        if (wpoll(&ready, 1, 2000) <= 0)
-            break;
-
-        wmsg_t m = { reply + have, sizeof(reply) - 1 - have, 0, 0 };
-        int    n = wrecv(fd, &m);
-        if (n <= 0)
-            break;
-
-        have += (uint32_t)n;
-
-        if (have >= MAGIC_LEN + 8) {
-            uint32_t want = get32(reply + MAGIC_LEN);
-            if (have >= MAGIC_LEN + 8 + want)
-                break;
-        }
-    }
-
-    wclose(fd);
-
-    if (have < MAGIC_LEN + 8) {
-        wfprintf(W_STDERR, "swaymsg: sway said nothing back\n");
-        return 1;
-    }
-
-    uint32_t body_len = get32(reply + MAGIC_LEN);
-    if (body_len > have - MAGIC_LEN - 8)
-        body_len = have - MAGIC_LEN - 8;
-
-    char *json = (char *)reply + MAGIC_LEN + 8;
-    json[body_len] = '\0';
 
     if (raw) {
         wprintf("%s\n", json);
         return 0;
     }
 
-    if (type == IPC_RUN_COMMAND) {
+    if (type == WIPC_RUN_COMMAND) {
         /* Nothing worth printing when it worked, which is what the real
          * swaymsg does too. */
         if (strstr(json, "\"success\":true"))
@@ -358,10 +259,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (type == IPC_GET_WORKSPACES)  print_workspaces(json);
-    else if (type == IPC_GET_VERSION) print_version(json);
-    else if (type == IPC_GET_OUTPUTS) print_outputs(json);
-    else if (type == IPC_GET_TREE)    print_tree(json);
+    if (type == WIPC_GET_WORKSPACES)  print_workspaces(json);
+    else if (type == WIPC_GET_VERSION) print_version(json);
+    else if (type == WIPC_GET_OUTPUTS) print_outputs(json);
+    else if (type == WIPC_GET_TREE)    print_tree(json);
     else                              wprintf("%s\n", json);
 
     return 0;

@@ -37,6 +37,7 @@
 #define W_EFAULT        14   /* bad address passed from user space */
 #define W_EBUSY         16   /* resource busy                      */
 #define W_EEXIST        17   /* already exists                     */
+#define W_EXDEV         18   /* rename across two filesystems      */
 #define W_ENOTDIR       20   /* a path component is not a directory */
 #define W_EISDIR        21   /* is a directory                     */
 #define W_EINVAL        22   /* invalid argument                   */
@@ -420,7 +421,12 @@ typedef struct {
      * event carries the position too, unchanged, so a client that wants to
      * know where the pointer was when a key was pressed has it. */
     int32_t  x, y;
-    int32_t  dx, dy;     /* for a wheel event, dy is the number of steps  */
+
+    /* For a wheel event, dy is the number of notches, counting *down* when
+     * the wheel is turned away from the user -- the sign the mouse itself
+     * reports, and the same sign wl_pointer.axis carries, so a compositor
+     * passes it on rather than deciding which way up a wheel is. */
+    int32_t  dx, dy;
 } winput_t;
 
 /* Buttons, in the evdev numbering wl_pointer.button carries -- so, as with the
@@ -438,7 +444,26 @@ typedef struct {
     int32_t  x, y;       /* where it is, in pixels                    */
 } wpointer_t;
 
-/* Wheel axes, in wl_pointer.axis's numbering. */
+/* How far the pointer goes for how far the mouse moves, as a percentage: 100
+ * is one count from the mouse to one pixel on the screen, 50 is half as fast,
+ * 200 twice.  A percentage rather than a fraction because the kernel runs with
+ * the floating-point unit switched off, and a whole number of hundredths is
+ * finer than a hand can aim anyway.
+ *
+ * It is a plain multiplier and nothing more: the same movement always moves the
+ * pointer the same distance, however fast the hand made it.  Acceleration --
+ * further for a quick movement than for a slow one of the same length -- needs
+ * the interval between packets to mean something, and on a PS/2 mouse sampled
+ * at whatever rate the firmware left it that interval is not a speed. */
+#define W_POINTER_SPEED_MIN     10
+#define W_POINTER_SPEED_DEFAULT 100
+#define W_POINTER_SPEED_MAX     800
+
+/* Wheel axes, in wl_pointer.axis's numbering.
+ *
+ * Only the vertical one is ever delivered: a PS/2 mouse reports one wheel, and
+ * the horizontal axis is here because the number is part of the protocol a
+ * client reads, not because something on this machine can turn sideways. */
 #define W_AXIS_VERTICAL   0
 #define W_AXIS_HORIZONTAL 1
 
@@ -634,7 +659,9 @@ typedef struct {
 #define WSYS_REAP       73
 #define WSYS_SEATGRANT  74
 #define WSYS_POINTER    75
-#define WSYS_MAX        76
+#define WSYS_PTRSPEED   76
+#define WSYS_RENAME     77
+#define WSYS_MAX        78
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0
