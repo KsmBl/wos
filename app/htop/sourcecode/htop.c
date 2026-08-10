@@ -10,10 +10,14 @@
  */
 
 #include <wkernel.h>
+#include <stdarg.h>
 
 #define REFRESH_TICKS 100          /* 100 ticks at 100 Hz = one second */
 #define POLL_MS       30           /* how often to look for a keystroke */
 #define MAX_PROCS     32
+
+/* How long what F9 did stays on the footer before the keys come back. */
+#define MESSAGE_TICKS 300
 
 /* A meter narrower than this has no bar left once the label and the reading
  * are in it, so a console too thin for two columns gets one. */
@@ -65,6 +69,33 @@ static unsigned   load_tenths[W_CPU_MAX];
 
 static wdisk_t disks[W_DISK_MAX];
 static int     disk_count;
+
+/* What F9 asked about, held from the keystroke to the answer.
+ *
+ * The pid and the name are copied rather than the row remembered: the table is
+ * rebuilt on every refresh, and a process exiting above the selection moves
+ * everything below it up a line.  A confirmation that went back to
+ * procs[selected] could stop the neighbour of what it asked about. */
+static int  kill_pid;
+static char kill_name[sizeof(procs[0].name)];
+
+/* What just happened, and the tick it stops being worth saying.  It shares the
+ * footer with the keys, because on a 25-row console there is no line to spare
+ * and an answer that is only on screen while something is wrong is the one
+ * worth showing. */
+static char     message[80];
+static unsigned message_until;
+
+static void say(const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    wvsnprintf(message, sizeof(message), fmt, ap);
+    va_end(ap);
+
+    message_until = wticks() + MESSAGE_TICKS;
+}
 
 /* Express used/total out of `out_of`, in 32-bit arithmetic only.
  *
@@ -383,13 +414,61 @@ static void draw_process_table(int row, int max_rows)
     }
 }
 
+/* The question F9 asks, in place of the keys.
+ *
+ * A confirmation rather than a keystroke that acts: the process under the
+ * selection is whatever the last refresh put there, F9 is next to F10, and
+ * this is a list in which one's own shell and the compositor are ordinary
+ * rows. */
+static void draw_kill_prompt(void)
+{
+    wgotoxy(rows, 1);
+    wcolor(W_BLACK, W_RED);
+    wprintf(" Stop %d ", kill_pid);
+    wcolor(W_WHITE, W_BLACK);
+    wprintf(" %s?  ", kill_name[0] ? kill_name : "?");
+    wcolor(W_BLACK, W_CYAN);
+    wprintf(" y ");
+    wcolor(W_WHITE, W_BLACK);
+    wprintf(" Yes   ");
+    wcolor(W_BLACK, W_CYAN);
+    wprintf(" anything else ");
+    wcolor(W_WHITE, W_BLACK);
+    wprintf(" No ");
+    wcolor_reset();
+    wclear_line();
+}
+
 static void draw_footer(void)
 {
+    if (kill_pid) {
+        draw_kill_prompt();
+        return;
+    }
+
+    if (message[0]) {
+        /* Until it goes stale, and then never again: cleared here rather than
+         * on a timer, because nothing else runs between refreshes. */
+        if ((int)(wticks() - message_until) < 0) {
+            wgotoxy(rows, 1);
+            wcolor(W_BLACK, W_CYAN);
+            wprintf(" %s ", message);
+            wcolor_reset();
+            wclear_line();
+            return;
+        }
+        message[0] = '\0';
+    }
+
     wgotoxy(rows, 1);
     wcolor(W_BLACK, W_CYAN);
     wprintf(" up/dn ");
     wcolor(W_WHITE, W_BLACK);
     wprintf(" Select ");
+    wcolor(W_BLACK, W_CYAN);
+    wprintf(" F9 ");
+    wcolor(W_WHITE, W_BLACK);
+    wprintf(" Stop   ");
     wcolor(W_BLACK, W_CYAN);
     wprintf(" q ");
     wcolor(W_WHITE, W_BLACK);
@@ -400,6 +479,58 @@ static void draw_footer(void)
     wprintf(" Refresh now ");
     wcolor_reset();
     wclear_line();
+}
+
+/* ------------------------------------------------------------------ *
+ *  Stopping a process
+ * ------------------------------------------------------------------ */
+
+/* F9: put the question on the footer.  Nothing is done until it is answered. */
+static void ask_to_stop(void)
+{
+    if (proc_count <= 0)
+        return;
+
+    kill_pid = procs[selected].pid;
+    strlcpy(kill_name, procs[selected].name, sizeof(kill_name));
+}
+
+/* The answer.  `stop_self` is set when the answer was yes to htop's own row,
+ * which the caller turns into an ordinary exit rather than a kill: htop leaves
+ * the console in raw mode with the cursor hidden while it runs and puts both
+ * back on the way out, and a process stopped from outside never reaches that
+ * code -- so stopping this one that way would end with a console that does not
+ * echo what is typed at it.  It is the same request either way. */
+static void answer(int key, int *stop_self)
+{
+    int pid = kill_pid;
+
+    kill_pid = 0;
+
+    if (key != 'y' && key != 'Y') {
+        say("%d (%s) left alone", pid, kill_name);
+        return;
+    }
+
+    if (pid == wgetpid()) {
+        *stop_self = 1;
+        return;
+    }
+
+    int r = wkill(pid);
+
+    /* "Asked to stop", because that is what happened: there are no signals
+     * here, so the kernel marks the process and it leaves at the next point
+     * where it holds nothing.  The row goes when it does, and then only once
+     * whatever started it has noticed. */
+    if (r == 0)
+        say("asked %d (%s) to stop", pid, kill_name);
+    else if (r == -W_EPERM)
+        say("%d (%s) belongs to somebody else", pid, kill_name);
+    else if (r == -W_ESRCH)
+        say("%d (%s) had already gone", pid, kill_name);
+    else
+        say("%d (%s): %s", pid, kill_name, wstrerror(-r));
 }
 
 /* ------------------------------------------------------------------ *
@@ -552,7 +683,20 @@ int main(int argc, char **argv)
 
             int key = wgetkey();
 
-            if (key == 'q' || key == 'Q' || key == 0x03) {
+            /* A question on the footer takes the next key, whatever it would
+             * otherwise have meant. */
+            if (kill_pid) {
+                int stop_self = 0;
+
+                answer(key, &stop_self);
+                if (stop_self)
+                    running = 0;
+                break;
+            }
+
+            if (key == W_KEY_F9) {
+                ask_to_stop();
+            } else if (key == 'q' || key == 'Q' || key == 0x03) {
                 running = 0;
             } else if ((key == W_KEY_UP || key == 'k') && selected > 0) {
                 selected--;

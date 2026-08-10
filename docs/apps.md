@@ -522,7 +522,7 @@ redraws immediately when a key is pressed.
      6 whell           0.0    100.0K    20.0K     8.0K       0B    64.0K    1
      7 htop            0.4     88.0K     8.0K     8.0K       0B    64.0K    1
 
- up/dn  Select  q  Quit   r  Refresh now
+ up/dn  Select  F9  Stop   q  Quit   r  Refresh now
 ```
 
 Every logical processor the machine has gets a bar: how busy it was over the
@@ -549,6 +549,7 @@ for, and the process table takes whatever rows are left.
 |---|---|
 | Up / Down, or `k` / `j` | move the selection |
 | Home / End | first / last process |
+| F9 | stop the selected process, after asking |
 | `q`, or Ctrl+C | quit |
 | any other key | refresh immediately |
 
@@ -583,6 +584,55 @@ freeze the clock until someone pressed a key. Between polls it sleeps rather
 than spinning, so the machine really is idle while htop is on screen — a
 monitor that pinned the processor at 100% just by being open would be
 measuring itself.
+
+## Stopping a process
+
+F9 puts the question on the footer, and nothing happens until it is answered:
+
+```
+ Stop 1  waylandd?   y  Yes    anything else  No
+```
+
+A confirmation rather than a keystroke that acts, because the row under the
+selection is whatever the last refresh put there, F9 is next to F10, and this
+is a list in which one's own shell and the compositor are ordinary rows.
+
+`y` says so, and the footer reports what happened:
+
+```
+ asked 1 (waylandd) to stop
+```
+
+*Asked*, because that is what happened. There are no signals in WOS: the kernel
+marks the process and wakes it, and it leaves at the next point where it holds
+nothing — returning from a blocking wait, entering a syscall, or being
+interrupted while in user code. For anything that waits or computes that is the
+next moment or two, so the row is usually gone by the next refresh — it goes
+when whatever started the process collects what it left behind, which is the
+shell or the compositor that started it, or the kernel's own idle loop for a
+service. See [`wkill()`](wkernel-api.md#int-wkillint-pid).
+
+Root may stop anything. Anybody else may stop only what is running as them, and
+gets told so:
+
+```
+ 3 (whell) belongs to somebody else
+```
+
+Which is the point of the check: the process table lists every session on the
+machine, and without it one user could end another's.
+
+F9 on htop's own row quits htop instead of stopping it. It is the same request,
+and it matters which way it is carried out: htop runs with the console in raw
+mode and the cursor hidden, and puts both back on the way out — a process
+stopped from outside never reaches that code, and what would be left is a
+console that does not echo what is typed at it.
+
+There is no signal to send and so nothing to choose: `SIGKILL` has no meaning
+here, because what makes it different in Unix is that the kernel does not ask
+the process at all, and this kernel has no way to unwind another process's
+kernel stack from a distance. A process interrupted *inside* the kernel is left
+alone until it comes out, because it could be holding anything.
 
 **Exit status:** 0.
 

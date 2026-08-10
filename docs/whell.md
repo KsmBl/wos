@@ -46,6 +46,12 @@ exit status follows the usual shell convention: the program's own status, or
 `127` if the command was not found, or `126` if it was found but could not be
 started.
 
+There is no `&` and no `kill`: a shell that waits for each command has nothing
+to put in the background, and a system with no signals has nothing to send.
+Stopping a process that is already running is a job for
+[`htop`](apps.md#htop) — F9 on its row — or, for a service,
+`systemctl stop <name>`.
+
 ## Line editing
 
 whell puts the console into raw mode while reading a line, so it sees every
