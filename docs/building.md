@@ -36,6 +36,7 @@ make disk       # just build/wos.img
 make run        # boot in QEMU, with a VGA window and the serial log on stdio
 make run-nox    # boot headless, serial only
 make log        # boot headless for TIMEOUT seconds, capture the serial log
+make check      # boot it and check that it works
 make debug      # boot stopped, waiting for gdb on :1234
 make clean
 ```
@@ -52,6 +53,31 @@ output to buffering; it writes to `build/serial.log` and prints that instead.
 ```sh
 make log TIMEOUT=20
 ```
+
+## Checking it
+
+```sh
+make check                    # every scenario
+make check ARGS=-l            # list them
+make check ARGS="boot mv"     # only these
+```
+
+`make check` boots the built image and drives it: keys through QEMU's monitor,
+the console's output read back from the serial line, the screen read back from
+a screendump. It takes a couple of minutes and it is the only thing that can
+answer the questions this project is actually made of — whether a directory
+entry moves atomically, whether a socket refuses another user, how far the
+pointer goes for a given movement of the mouse, whether the bar comes back when
+the modifier is held. None of that is visible to a compiler, and every one of
+them has been wrong at least once.
+
+Writes go to a temporary overlay (`-snapshot`), so a scenario that saves a
+configuration file leaves the disk image exactly as it found it. A failing
+scenario keeps the machine's serial log and screenshots in `/tmp` and says
+where.
+
+The scenarios live in [`tools/check.py`](../tools/check.py); a new one is a
+function with a `@scenario` line above it.
 
 ## Build options
 
