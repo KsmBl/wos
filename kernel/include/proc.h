@@ -183,6 +183,21 @@ int32_t proc_wait(int32_t pid, int32_t *status);
  * includes having no children at all). */
 int32_t proc_reap(int32_t *status);
 
+/* Reap every exited child of the calling process except `keep`, discarding
+ * their exit statuses.  `keep` may be 0 for "none of them".
+ *
+ * This is what the kernel's own idle loop does with the processes it started:
+ * every service is spawned with the kernel as its parent, and nothing in the
+ * kernel waits for one.  Without this, a service that is stopped keeps its
+ * slot in the process table and its whole address space for as long as the
+ * machine is up -- it would still be listed by `ps`, having exited -- and
+ * enough starts and stops would fill the table.
+ *
+ * `keep` is for the one child the caller is watching itself: the login shell,
+ * whose exit the loop has to see on its own terms so that it can start
+ * another.  Returns how many were reaped. */
+int32_t proc_reap_orphans(int32_t keep);
+
 /* Ask a process to stop, from outside it.
  *
  * There is no signal mechanism here and no way to unwind another thread's

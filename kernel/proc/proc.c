@@ -440,6 +440,47 @@ bool proc_should_exit(void)
     return p && p->killed && !p->exited;
 }
 
+/* True when an exited process can be torn down.
+ *
+ * A process is marked exited several lines before proc_exit() switches away
+ * from it for the last time, and until that switch its thread is still
+ * standing on the kernel stack teardown() would free.  The zombie state is set
+ * as the last thing before it, so that is what says the thread has stopped for
+ * good. */
+static bool reapable(const process_t *c)
+{
+    return c->exited && (!c->thread || c->thread->state == THREAD_ZOMBIE);
+}
+
+/* Free what an exited process left behind: its thread, its kernel stack and
+ * its address space.
+ *
+ * Only safe once the process is genuinely off the processor -- the address
+ * space being freed is the one it was running on, which is why proc_exit()
+ * leaves this to whoever reaps it rather than doing it on the way out.
+ *
+ * Interrupts off for the removal, and not as a nicety: sched_remove() walks
+ * the run queue, and so does schedule() from the timer IRQ. */
+static void teardown(process_t *c)
+{
+    bool interrupts_were_on = interrupts_off();
+
+    if (c->thread) {
+        sched_remove(c->thread);
+        if (c->thread->kernel_stack)
+            kfree((void *)c->thread->kernel_stack);
+        c->thread->state = THREAD_UNUSED;
+        c->thread = NULL;
+    }
+    if (c->space) {
+        paging_free_addrspace(c->space);
+        c->space = NULL;
+    }
+    c->used = false;
+
+    interrupts_restore(interrupts_were_on);
+}
+
 /* The body both waits share.  Reaping is the same work either way; the only
  * difference is what happens when there is nothing to reap yet. */
 static int32_t reap_one(process_t *parent, int32_t pid, int32_t *status,
@@ -457,26 +498,16 @@ static int32_t reap_one(process_t *parent, int32_t pid, int32_t *status,
 
         *any_children = true;
 
-        if (!c->exited)
+        /* A child on its way out but not yet gone is one to wait for, not one
+         * to reap: proc_exit() wakes this wait again once it is. */
+        if (!reapable(c))
             continue;
 
         int32_t reaped = c->pid;
         if (status)
             *status = c->exit_status;
 
-        /* Now it is safe to tear down: the child is not running. */
-        if (c->thread) {
-            sched_remove(c->thread);
-            if (c->thread->kernel_stack)
-                kfree((void *)c->thread->kernel_stack);
-            c->thread->state = THREAD_UNUSED;
-            c->thread = NULL;
-        }
-        if (c->space) {
-            paging_free_addrspace(c->space);
-            c->space = NULL;
-        }
-        c->used = false;
+        teardown(c);
 
         return reaped;
     }
@@ -505,6 +536,26 @@ int32_t proc_wait(int32_t pid, int32_t *status)
 
         sched_block(WAIT_CHILD);
     }
+}
+
+int32_t proc_reap_orphans(int32_t keep)
+{
+    process_t *me = proc_current();
+    int32_t    n  = 0;
+
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        process_t *c = &processes[i];
+
+        if (!c->used || c->parent != me || !reapable(c))
+            continue;
+        if (keep > 0 && c->pid == keep)
+            continue;
+
+        teardown(c);
+        n++;
+    }
+
+    return n;
 }
 
 uint64_t proc_sbrk(int64_t increment)

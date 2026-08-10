@@ -422,6 +422,14 @@ static void run_shell(void)
                 panic("cannot restart %s (error %d)", program, -pid);
         }
 
+        /* Everything else the kernel started -- every service -- has nobody
+         * to wait for it, so it is reaped here.  This is the part of an init's
+         * job that has to be done even by a kernel that is its own init:
+         * without it a stopped service would keep its slot in the process
+         * table and its whole address space until the machine went down, and
+         * would go on being listed by `ps` after it had exited. */
+        proc_reap_orphans(pid);
+
         sti();
         hlt();
     }

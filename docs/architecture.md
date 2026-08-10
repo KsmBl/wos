@@ -215,6 +215,15 @@ Without that, `restart` would start the replacement while the original still
 held the socket — the first bug this arrangement produced, and the reason the
 wait is there.
 
+Something has to collect what a service leaves behind. Nothing in the kernel
+calls `proc_wait()` for one, and a process that has exited keeps its slot in
+the process table and its whole address space until somebody does — so a
+stopped service went on being listed by `ps`, holding its memory, until the
+machine went down, and thirty-two stops would have filled the table. The
+kernel's idle loop reaps them, which is the part of an init's job that has to
+be done even by a kernel that is its own init. The login shell is the one child
+it skips: that loop watches for its exit itself, to start another.
+
 ## Local sockets
 
 `kernel/fs/socket.c` adds a second kind of channel beside the pipe: named,
