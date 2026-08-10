@@ -997,6 +997,38 @@ int wgetpid(void);
 int wreap(int *status);
 
 /**
+ * Ask another process to stop.
+ *
+ * There are no signals in WOS, so there is one thing to ask for and no number
+ * to ask it with: this is the kill(pid, SIGTERM) of a system that has neither.
+ * Nor is it a way to stop a process dead -- the kernel cannot unwind another
+ * process's kernel stack from a distance. The process is marked and woken, and
+ * it leaves at the next point where it holds nothing: returning from a
+ * blocking wait, entering a syscall, or being interrupted while in user code.
+ * That is prompt for anything that waits and prompt for anything that
+ * computes, which between them is everything -- but the call returns before
+ * the process is gone, so a caller that needs it *gone* has to watch for that
+ * with wproclist().
+ *
+ * What it leaves behind is what an exit leaves behind: descriptors closed, the
+ * screen handed back if it had it, and a zombie until its parent reaps it.
+ * The exit status is -1.
+ *
+ * Root may stop anything. Anybody else may stop only processes running as
+ * them, so that the process table is not a way to end another user's session.
+ *
+ * @param pid The process to stop.
+ * @return 0, or `-W_ESRCH` if there is no such process (or it has already
+ *         exited), or `-W_EPERM` if it belongs to somebody else.
+ *
+ * @code
+ *     if (wkill(pid) == -W_EPERM)
+ *         wprintf("pid %d is not yours to stop\n", pid);
+ * @endcode
+ */
+int wkill(int pid);
+
+/**
  * Grow or shrink the process heap.
  *
  * This is the primitive malloc() is built on; most programs should use

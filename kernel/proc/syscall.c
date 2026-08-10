@@ -1193,6 +1193,29 @@ static int64_t sys_reap(uint64_t status)
     return proc_reap((int32_t *)status);
 }
 
+/* Ask a process to stop, from outside it.
+ *
+ * There are no signals here, so there is one thing to ask for and no number to
+ * ask it with: proc_kill() marks the process and wakes it, and it leaves
+ * through proc_exit() at its next safe moment.
+ *
+ * Root may stop anything; anybody else may stop only what is running as them.
+ * Without that, the process table would be a way for one user to end another's
+ * session -- a shell is a process like any other, and every service on the
+ * machine belongs to root. */
+static int64_t sys_kill(uint64_t pid)
+{
+    process_t *me     = proc_current();
+    process_t *target = proc_by_pid((int32_t)pid);
+
+    if (!target || target->exited)
+        return -W_ESRCH;
+    if (me->uid != W_ROOT_UID && target->uid != me->uid)
+        return -W_EPERM;
+
+    return proc_kill((int32_t)pid);
+}
+
 static int64_t sys_shutdown(void)
 {
     /* There is no user or permission model in WOS, so any process may do
@@ -1288,6 +1311,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_PTRSPEED:  r = sys_pointer_speed(regs->rdi); break;
     case WSYS_RENAME:    r = sys_rename(regs->rdi, regs->rsi); break;
     case WSYS_REAP:      r = sys_reap(regs->rdi); break;
+    case WSYS_KILL:      r = sys_kill(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
     default:             r = -W_ENOSYS; break;
     }

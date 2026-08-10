@@ -771,6 +771,37 @@ while (wreap(NULL) >= 0)
     ;                       /* collect whatever finished */
 ```
 
+## `int wkill(int pid)`
+
+Ask another process to stop. This is the `kill(pid, SIGTERM)` of a system that
+has neither signals nor a number to ask with: there is one thing to ask for.
+
+It does not stop anything dead. The kernel cannot unwind another process's
+kernel stack from a distance, so the process is marked and woken, and it leaves
+at the next point where it holds nothing — returning from a blocking wait,
+entering a syscall, or being interrupted while in user code. That is prompt for
+anything that waits and prompt for anything that computes, which between them
+is everything; but the call returns before the process is gone, so a caller
+that needs it *gone* watches for that with `wproclist()`.
+
+What it leaves behind is what an exit leaves behind: descriptors closed, shared
+memory unmapped, the screen handed back if it had it, and a zombie until its
+parent reaps it. The exit status is -1.
+
+Root may stop anything. Anybody else may stop only processes running as them,
+so that the process table is not a way to end another user's session — a shell
+is a process like any other, and every service on the machine belongs to root.
+
+**Returns** 0, or `-W_ESRCH` (no such process, or it has already exited), or
+`-W_EPERM` (it belongs to somebody else).
+
+```c
+if (wkill(pid) == -W_EPERM)
+    wprintf("pid %d is not yours to stop\n", pid);
+```
+
+[`htop`](apps.md#htop) is what this is for: F9 on a row asks, and yes stops it.
+
 ## `void wexit(int status)`
 
 End the calling process. Does not return. Descriptors are closed and all

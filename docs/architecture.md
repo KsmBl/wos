@@ -215,6 +215,11 @@ Without that, `restart` would start the replacement while the original still
 held the socket — the first bug this arrangement produced, and the reason the
 wait is there.
 
+The same mechanism is what [`wkill()`](wkernel-api.md#int-wkillint-pid) exposes
+to programs, and what F9 in [`htop`](apps.md#htop) uses — with a check the
+service manager does not need, because it has one of its own: root may stop
+anything, and anybody else only what is running as them.
+
 Something has to collect what a service leaves behind. Nothing in the kernel
 calls `proc_wait()` for one, and a process that has exited keeps its slot in
 the process table and its whole address space until somebody does — so a

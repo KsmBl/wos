@@ -99,6 +99,11 @@ int wreap(int *status)
     return (int)wsyscall1(WSYS_REAP, (long)status);
 }
 
+int wkill(int pid)
+{
+    return (int)wsyscall1(WSYS_KILL, pid);
+}
+
 int winputopen(void)
 {
     return (int)wsyscall0(WSYS_INPUTOPEN);
