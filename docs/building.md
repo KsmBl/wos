@@ -68,8 +68,9 @@ a screendump. It takes a couple of minutes and it is the only thing that can
 answer the questions this project is actually made of — whether a directory
 entry moves atomically, whether a socket refuses another user, how far the
 pointer goes for a given movement of the mouse, whether the bar comes back when
-the modifier is held. None of that is visible to a compiler, and every one of
-them has been wrong at least once.
+the modifier is held, whether F9 in htop stops a process it is allowed to stop
+and refuses one it is not. None of that is visible to a compiler, and every one
+of them has been wrong at least once.
 
 Writes go to a temporary overlay (`-snapshot`), so a scenario that saves a
 configuration file leaves the disk image exactly as it found it. A failing

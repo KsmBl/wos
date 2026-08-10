@@ -26,7 +26,7 @@ cannot leave the build tree different from how it found it -- and nothing has
 to copy two gigabytes to arrange that.
 """
 
-import argparse, json, os, shutil, socket, subprocess, sys, tempfile, time
+import argparse, json, os, re, shutil, socket, subprocess, sys, tempfile, time
 
 HERE  = os.path.dirname(os.path.abspath(__file__))
 ROOT  = os.path.dirname(HERE)
@@ -681,6 +681,111 @@ def check_bar(m):
     time.sleep(2)
     expect(bar_pixels("bar-again") > docked // 2,
            "`bar mode dock` did not bring it back")
+
+
+@scenario("kill", "F9 in htop stops a process, and only one that is yours")
+def check_kill(m):
+    # A full-screen program on the console is still writing to the serial
+    # port, so its screen is text this can read -- but it is drawn with cursor
+    # positioning rather than as lines, so the moves have to become the line
+    # breaks before anything can be found by row.
+    def htop_table():
+        """The process table as (pid, name), top row first."""
+        screen = m.log()
+        at     = screen.rfind("PID COMMAND")
+        expect(at >= 0, "htop never drew its process table")
+
+        text = re.sub(r"\x1b\[\d+;\d+H", "\n", screen[at:])
+        text = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", text)
+
+        rows = []
+        for line in text.split("\n")[1:]:
+            row = re.match(r"\s+(\d+) (\S+)", line)
+            if not row:
+                break                     # the first blank line ends the table
+            rows.append((int(row.group(1)), row.group(2)))
+
+        expect(rows, "htop drew a table with nothing in it")
+        return rows
+
+    def htop_stop(name):
+        """Start htop, put the selection on `name`, answer F9 with yes, and
+        return what the footer said afterwards."""
+        started = m.mark()
+
+        m.mon.type("htop\n")
+        time.sleep(2.5)
+
+        wanted = [i for i, (_, n) in enumerate(htop_table()) if n == name]
+        expect(wanted, "htop does not list %s" % name)
+
+        m.mon.cmd("sendkey home", wait=0.4)
+        for _ in range(wanted[0]):
+            m.mon.cmd("sendkey down", wait=0.3)
+
+        m.mon.cmd("sendkey f9", wait=1.0)
+        expect("Stop" in m.log()[started:], "F9 asked nothing")
+
+        answered = m.mark()
+        m.mon.type("y")
+        time.sleep(1.5)
+        said = m.log()[answered:]
+
+        m.mon.type("q")
+        time.sleep(1.5)
+        return said
+
+    m.login_console()
+
+    # waylandd is a service, so it is root's however it is reached.
+    out = m.run("wlprobe wayland-1", settle=2)
+    expect("connected" in out, "waylandd was not running to begin with: " + out)
+
+    m.run("adduser tester", settle=1.5)
+    m.mon.type("pw\n")
+    time.sleep(1)
+    m.mon.type("pw\n")
+    time.sleep(1.5)
+    m.run("su tester", settle=2)
+
+    said = htop_stop("waylandd")
+    expect("belongs to somebody else" in said,
+           "another user's process was not refused: " + said)
+
+    # Back to root, who can see whether the refusal actually protected it --
+    # tester cannot reach root's socket whether waylandd is running or not, so
+    # asking from there would answer nothing.
+    m.run("exit", settle=1.5)
+
+    out = m.run("wlprobe wayland-1", settle=2)
+    expect("connected" in out,
+           "waylandd stopped for a user who was refused: " + out)
+
+    # Root's own, which root may stop.
+    said = htop_stop("waylandd")
+    expect("asked" in said and "to stop" in said,
+           "root's kill did not go through: " + said)
+
+    # It leaves the way an exit leaves: the socket it was listening on is gone.
+    out = m.run("wlprobe wayland-1", settle=2)
+    expect("connected" not in out, "waylandd is still serving: " + out)
+
+    out = m.run("systemctl status wayland", settle=1.5)
+    expect("stopped" in out.lower() or "not running" in out.lower(),
+           "the service manager still calls it running: " + out)
+
+    # And the row goes with it.  A service is the kernel's own child and
+    # nothing in the kernel waits for one, so this is really asking whether the
+    # idle loop reaped it: without that it would sit in the table having
+    # exited, and F9 would look as though it had done nothing.
+    m.mon.type("htop\n")
+    time.sleep(2.5)
+    left = [n for _, n in htop_table()]
+    m.mon.type("q")
+    time.sleep(1.5)
+
+    expect("waylandd" not in left,
+           "the row stayed after the process went: %r" % (left,))
 
 
 # ------------------------------------------------------------------ #
