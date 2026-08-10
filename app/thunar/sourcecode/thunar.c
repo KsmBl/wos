@@ -19,12 +19,14 @@
  * Two things are genuinely different from the Thunar people know, and both are
  * properties of this machine rather than of this program.
  *
- * It is driven from the keyboard.  WOS has no mouse -- there is no pointer
- * device in the kernel, and sway's seat advertises a keyboard and nothing else
- * -- so there is no clicking, no drag and drop and no context menu.  Every
- * command is a key, the focused pane is drawn with a visible ring so that
+ * It works entirely from the keyboard.  There is a mouse -- a click selects, a
+ * double click opens, the wheel scrolls -- but every one of those is also a
+ * key, because this program was written before the machine had a pointer and
+ * because a file manager that needs one is worse than a file manager that does
+ * not.  What is missing is what a pointer alone would buy: no drag and drop,
+ * and no context menu.  The focused pane is drawn with a visible ring so that
  * "which list do the arrows move?" is answerable by looking, and Tab moves
- * between the two.  A file manager that waited for a click would sit there.
+ * between the two.
  *
  * And opening a file hands it to another program rather than to a handler
  * registered by a desktop file.  There is no MIME database and no
