@@ -7,6 +7,24 @@ preemptive multitasking, ring-3 processes, a persistent filesystem on a real
 disk, and a documented application API (`wkernel`). Its first application is a
 shell called **whell**.
 
+## Screenshots
+
+Every picture below is a QEMU screendump of the image `make` builds, taken by
+booting it and driving it from the outside — nothing here is a mock-up.
+
+|  |  |
+|:--|:--|
+| **The desktop** — `sway`, tiling, drawn straight onto the framebuffer | **A terminal and a file manager** — `wlterm` and `thunar`, tiled by sway |
+| ![The sway desktop](docs/screenshots/desktop.png) | ![thunar beside wlterm](docs/screenshots/thunar.png) |
+| **The settings window** — every value visible while it changes, written back to sway's own configuration file | **The login screen** — a box per account; Enter for a graphical session, F2 for a console |
+| ![swaysettings](docs/screenshots/swaysettings.png) | ![The login screen](docs/screenshots/login.png) |
+| **`htop`** — a meter per core and per filesystem, and F9 to stop a process | **`vim`** — modal editing, search and hlsearch, on its own source |
+| ![htop asking whether to stop a process](docs/screenshots/htop-stop.png) | ![vim editing hello.c](docs/screenshots/vim.png) |
+| **`fastfetch`** — what the machine says about itself | **The console** — `whell`, and the commands that are programs in `/app` |
+| ![fastfetch](docs/screenshots/fastfetch.png) | ![a whell session](docs/screenshots/console.png) |
+
+More in [`docs/screenshots/`](docs/screenshots).
+
 ## Quick start
 
 ```sh
@@ -180,6 +198,7 @@ through the monitor:
 
 ## Status
 
-Built in seven stages, each on its own branch and merged into `master` only
+Built in eighteen stages, each on its own branch and merged into `master` only
 once it booted and passed its checks. See `git log --graph` and the `stage*`
-tags.
+tags — `stage1-boot-console` is a kernel that prints one line, `stage18-settings`
+is the machine in the screenshots above.
