@@ -22,6 +22,8 @@ booting it and driving it from the outside — nothing here is a mock-up.
 | ![htop asking whether to stop a process](docs/screenshots/htop-stop.png) | ![vim editing hello.c](docs/screenshots/vim.png) |
 | **`fastfetch`** — what the machine says about itself | **The console** — `whell`, and the commands that are programs in `/app` |
 | ![fastfetch](docs/screenshots/fastfetch.png) | ![a whell session](docs/screenshots/console.png) |
+| **`wauncher`** — Super+Q, then type; `window` or `terminal` says how each one will start | **A terminal window** — `wlterm`, a Wayland client like any other |
+| ![the wauncher launcher](docs/screenshots/wauncher.png) | ![wlterm](docs/screenshots/wlterm.png) |
 
 More in [`docs/screenshots/`](docs/screenshots).
 
@@ -128,7 +130,8 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   F2 gives a text session instead. Root's password on a fresh image is `1234`;
   see [`docs/users.md`](docs/users.md).
 - **A graphical session**: `sway`, a tiling Wayland compositor, with `wlterm`
-  as a terminal emulator in it, `thunar` as a file manager, `swaysettings` to
+  as a terminal emulator in it, `thunar` as a file manager, `wauncher` on
+  Super+Q to start anything by typing part of its name, `swaysettings` to
   change the background and what is written on it, the bar, the mouse speed and
   the cursor's size and colour with the values visible as they change, and
   `swaymsg` to drive it. Logging in starts it, and

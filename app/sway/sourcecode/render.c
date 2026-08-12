@@ -283,18 +283,23 @@ static void draw_empty_workspace(void)
         return;
     }
 
-    wsnprintf(line, sizeof(line), "%s + Return   open %s", mod,
+    char hints[4][96];
+
+    wsnprintf(hints[0], sizeof(line), "%s + Return   open %s", mod,
               sway.config.terminal);
-    draw_text(cx - text_width(line) / 2, cy - 24, line, on_background(0),
-              (int)sway.screen.width);
+    wsnprintf(hints[1], sizeof(line), "%s + Q   everything else", mod);
+    wsnprintf(hints[2], sizeof(line), "%s + Shift + Q   close the window", mod);
+    wsnprintf(hints[3], sizeof(line), "%s + Shift + E   leave sway", mod);
 
-    wsnprintf(line, sizeof(line), "%s + Shift + Q   close the window", mod);
-    draw_text(cx - text_width(line) / 2, cy, line, on_background(1),
-              (int)sway.screen.width);
+    /* Centred on the middle of the workspace rather than started at it, so
+     * that a line added here moves them all up half a line instead of pushing
+     * the last one towards the bottom of the screen. */
+    for (int i = 0; i < 4; i++) {
+        int y = cy + (i * 2 - 3) * 24 / 2;
 
-    wsnprintf(line, sizeof(line), "%s + Shift + E   leave sway", mod);
-    draw_text(cx - text_width(line) / 2, cy + 24, line, on_background(1),
-              (int)sway.screen.width);
+        draw_text(cx - text_width(hints[i]) / 2, y, hints[i],
+                  on_background(i != 0), (int)sway.screen.width);
+    }
 }
 
 /* The cursor.

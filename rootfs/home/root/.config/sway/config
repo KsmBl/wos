@@ -87,6 +87,11 @@ bindsym $mod+Shift+e exit
 # sits, with the value visible while it changes.  Save writes them back here.
 bindsym $mod+Shift+s exec swaysettings
 
+# The launcher: every program in /app, by typing part of its name.  Enter runs
+# the one that is selected -- in a window if it draws one, in a terminal if it
+# prints -- and the window goes away as soon as it has.
+bindsym $mod+q exec wauncher
+
 # Moving the focus, in the vi directions and with the arrow keys
 bindsym $mod+$left  focus left
 bindsym $mod+$down  focus down

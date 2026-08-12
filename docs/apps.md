@@ -53,6 +53,7 @@ The graphical session has its own set:
 | [`wlterm`](#wlterm) | a terminal emulator, as a Wayland client |
 | [`swaymsg`](#swaymsg) | ask sway something, or tell it to do something |
 | [`swaysettings`](#swaysettings) | the background, the desktop text, the bar and the mouse |
+| [`wauncher`](#wauncher) | the application launcher, on Super+Q |
 | [`waylandd`](#waylandd) | a bare display server, for testing clients against |
 | [`wlprobe`](#wlprobe) | list what a display server advertises |
 
@@ -1294,6 +1295,7 @@ is not the usual one.
 | [`thunar`](#thunar) | a graphical file manager |
 | [`swaymsg`](#swaymsg) | ask sway something, or tell it to do something |
 | [`swaysettings`](#swaysettings) | the background, the desktop text, the bar and the mouse |
+| [`wauncher`](#wauncher) | the application launcher, on Super+Q |
 | [`waylandd`](#waylandd) | a bare display server, for testing clients against |
 | [`wlprobe`](#wlprobe) | list what a display server advertises |
 
@@ -1417,7 +1419,8 @@ root@wos:/home/root# sway
 ```
 
 The screen goes dark, a bar appears at the bottom, and the middle of the screen
-says which keys open a window. **Super+Return** opens a terminal.
+says which keys open a window. **Super+Return** opens a terminal, and
+**Super+Q** opens [`wauncher`](#wauncher) for everything else.
 
 Or start it as a service, which is the same thing without a shell holding on to
 it:
@@ -1445,6 +1448,7 @@ These come from `/etc/sway/config` and can all be changed. `$mod` is Super.
 | `$mod+Shift+C` | reread the configuration file |
 | `$mod+Shift+E` | leave sway |
 | `$mod+Shift+S` | open [`swaysettings`](#swaysettings) |
+| `$mod+Q` | open [`wauncher`](#wauncher), the launcher |
 | `$mod+H` `J` `K` `L` | move the focus left, down, up, right |
 | `$mod+Left` `Down` `Up` `Right` | the same, with the arrow keys |
 | `$mod+Shift+`*direction* | move the window itself |
@@ -1606,7 +1610,7 @@ The bar is drawn by the compositor rather than by swaybar; see
 
 ### The background, and what is written on it
 
-An empty workspace shows three key hints on a plain colour. `background_text`
+An empty workspace shows four key hints on a plain colour. `background_text`
 replaces them with whatever you would rather have there:
 
 ```
@@ -2038,6 +2042,77 @@ round.
 window colours and the rest stay in `~/.config/sway/config`, because a settings
 window for a compositor whose configuration is a *language* would either be a
 worse text editor or a window with fifty controls nobody opened it for.
+
+**Exit status:** 0, or 1 if there is no display server to connect to.
+
+## wauncher
+
+```
+wauncher
+```
+
+Every program on the machine, by typing part of its name. **Super+Q** opens it;
+Enter runs what is selected and the window goes away, which is a launcher's
+whole job.
+
+```
+ wauncher                                      50 programs
+ ┌──────────────────────────────────────────────────────┐
+ │ sw                                                   │
+ └──────────────────────────────────────────────────────┘
+  sway                                             window
+  swaymsg                                        terminal
+  swaysettings                                     window
+
+ Enter run   Esc close                          3 of 50
+```
+
+**The list is `/app`.** There are no `.desktop` files here and no menu to keep
+in step with anything: a program is installed as `/app/<name>/launch`, which is
+also what a bare name means to [`whell`](whell.md) and to sway's `exec`. So the
+launcher reads the directory, and a program that is installed is a program that
+is listed.
+
+**`window` or `terminal`** is what Enter will do with the row, and it is worked
+out from the program rather than guessed from its name. A Wayland client is a
+program that called `wl_display_connect()`, and that call carries the name of
+the socket into the executable with it — so a binary with `wayland-0` inside it
+opens its own window, and one without it is a program that prints and is given
+a [`wlterm`](#wlterm) to print into. Without that, half of these (`ls`, `df`,
+`ping`) would start with nowhere for their output to go and Enter would look
+like it had done nothing. **Shift+Enter** runs it the other way, for the times
+the answer is wrong.
+
+Matching is case-insensitive, and names that *start* with what was typed come
+before names that merely contain it — `fi` offers `fish` before `fastfetch`.
+The selection returns to the first row on every keystroke, so Enter always runs
+the best match rather than whatever the highlight was left on.
+
+**A query that matches nothing is run as it was typed**, which is how a command
+with an argument gets started: `ping 10.0.2.2` is not the name of a program and
+is not meant to be. The first word decides where it runs if it names one.
+
+| Key | What it does |
+|---|---|
+| any character | narrows the list |
+| ↑, ↓, Tab | move the selection |
+| PgUp, PgDn | a screenful at a time |
+| ←, →, Home, End | move the caret in what was typed |
+| Enter | run it — in a window, or in a terminal |
+| Shift+Enter | run it the other way |
+| Escape | clear the typing; on an empty field, close the window |
+
+The mouse works too: a click selects, a double click runs, the wheel scrolls.
+
+**It asks sway to start things rather than starting them itself**, sending
+`exec <name>` over the IPC socket exactly as a key binding does. What opens is
+the compositor's child and not this window's, so it outlives the launcher
+closing a moment later, and it is started as the same user under the same rule
+about what a bare name means. sway reports a program it could not start on the
+bar, which is where somebody who just pressed a key is already looking.
+
+There are no floating windows in this compositor, so wauncher opens as a tile
+like everything else — for the second it is on screen.
 
 **Exit status:** 0, or 1 if there is no display server to connect to.
 
