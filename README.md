@@ -33,7 +33,7 @@ More in [`docs/screenshots/`](docs/screenshots).
 make          # build the kernel, the apps, the bootable ISO and the disk image
 make run      # boot it in QEMU (VGA window, serial log on stdio)
 make log      # boot headless for a few seconds and dump the serial log
-make check    # boot it and check that it works: seven scenarios, ~2 minutes
+make check    # boot it and check that it works: nine scenarios, ~3 minutes
 make clean
 
 sudo tools/flash-usb.sh   # put it on a USB stick and boot it on real hardware

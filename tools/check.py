@@ -788,6 +788,53 @@ def check_kill(m):
            "the row stayed after the process went: %r" % (left,))
 
 
+@scenario("launcher", "Super+Q opens wauncher, and Enter starts what was typed")
+def check_launcher(m):
+    m.login_desktop()
+
+    # The launcher's selected row: a bar of accent blue across the window,
+    # which is also the thing that disappears when nothing matches.
+    def selection(shot):
+        return shot.blocks("#3584e4", min_w=200, min_h=15)
+
+    m.mon.cmd("sendkey meta_l-q", wait=4)
+    time.sleep(2)
+    shot = m.mon.screen("wauncher")
+
+    expect(shot.count("#f6f5f4") > shot.w * shot.h // 4,
+           "Super+Q did not put a window on the screen")
+    expect(selection(shot), "wauncher listed nothing")
+
+    # A query nothing can match empties the list, which is the whole of the
+    # filtering visible in one picture: no row, so no selection.
+    m.mon.type("zzz")
+    time.sleep(1.5)
+    expect(not selection(m.mon.screen("nomatch")),
+           "typing something no program is called still selected a program")
+
+    # Escape clears the typing before it closes the window.
+    m.mon.cmd("sendkey esc", wait=1.5)
+    expect(selection(m.mon.screen("cleared")),
+           "Escape closed the launcher instead of clearing what was typed")
+
+    # A name only one program has, and Enter.
+    m.mon.type("thunar")
+    time.sleep(1.5)
+    m.mon.cmd("sendkey ret", wait=6)
+    time.sleep(3)
+    shot = m.mon.screen("launched")
+
+    # thunar's folder icons, which the launcher has none of.
+    expect(shot.count("#6da6ee") > 50,
+           "Enter did not start thunar")
+
+    # And the launcher is gone: thunar has the whole screen, which is the only
+    # width its sidebar is drawn at.  A launcher that stayed would leave it
+    # half as wide and the sidebar unrendered.
+    expect(shot.blocks("#ebe8e6", min_w=60, min_h=100),
+           "the launcher was still holding half the screen afterwards")
+
+
 # ------------------------------------------------------------------ #
 #  Running them
 # ------------------------------------------------------------------ #
