@@ -46,6 +46,8 @@ which is the price of having no shared libraries.
 | [`edituser`](#edituser) | add or remove roles |
 | [`fm`](#fm) | browse and manage files |
 | [`stress`](#stress) | put the machine under load on purpose |
+| [`ctest`](#ctest) | check the hosted C library by using it |
+| [`wcc`](#wcc) | the C compiler: compile and link, on the machine |
 
 The graphical session has its own set:
 
@@ -2747,7 +2749,6 @@ the disk — `ctest /home/root` — to exercise WFS instead of the filesystem in
 memory; the stream code is where the difference between the two would show.
 
 **Exit status:** 0 if every check passed, 1 otherwise.
-
 
 # wcc
 

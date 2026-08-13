@@ -1,6 +1,7 @@
 # WOS
 
-A small operating system written from scratch in C, bootable under QEMU.
+A small operating system written from scratch in C, bootable under QEMU — with a
+C compiler that runs on it and compiles itself.
 
 WOS is an x86-64 kernel that boots itself into long mode, with 4-level paging,
 preemptive multitasking, ring-3 processes, a persistent filesystem on a real
@@ -33,7 +34,7 @@ More in [`docs/screenshots/`](docs/screenshots).
 make          # build the kernel, the apps, the bootable ISO and the disk image
 make run      # boot it in QEMU (VGA window, serial log on stdio; QEMU_CPUS=4)
 make log      # boot headless for a few seconds and dump the serial log
-make check    # boot it and check that it works: eleven scenarios, ~4 minutes
+make check    # boot it and check that it works: sixteen scenarios, ~12 minutes
 make clean
 
 sudo tools/flash-usb.sh   # put it on a USB stick and boot it on real hardware
@@ -58,6 +59,8 @@ than a triple fault; see [`docs/architecture.md`](docs/architecture.md).
 |---|---|
 | `kernel/` | the kernel: boot, arch (GDT/IDT/PIC/PIT), drivers, memory, filesystem, processes |
 | `lib/wkernel/` | the application API — `wkernel.h` plus the library applications link against |
+| `lib/wlibc/` | the hosted C library over it — `stdio.h` and the rest, built as `libc.a` |
+| `app/wcc/` | the C compiler, which runs here and on the machine |
 | `app/<name>/sourcecode/` | source for each application; the build installs its binary to `/app/<name>/launch` on the disk |
 | `uefi/` | the UEFI loader — a PE32+ application with the kernel embedded, for firmware GRUB cannot hand over on |
 | `tools/` | host-side tools, notably `mkwfs` which builds the disk image |
@@ -110,13 +113,29 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   reboots, and the disk figures come from its block bitmap.
 - **wkernel**, the documented application API: file and directory I/O, memory
   and disk statistics, process control, `printf`, `malloc`.
+- **Windows whose contents follow them**: a tiling compositor changes a
+  window's size under the program running in it, so the size reaches every
+  process in that window and a program waiting for a key is woken to ask. In
+  half a window `htop` draws half a window of columns rather than eighty
+  wrapped into forty. See [`docs/console.md`](docs/console.md).
 - **whell**, a shell with tab completion and line editing. It is deliberately
   tiny: only `cd`, `exit` and `help` are builtins, because only those change
   state belonging to the shell process.
 - **Commands as programs**: `ls`, `pwd`, `cat`, `free`, `df`, `ps`, `touch`,
-  `mkdir`, `mv`, `rm`, `clear`, `shutdown` and `reboot` each live in `/app`,
-  behaving as
+  `mkdir`, `mv`, `rm`, `make`, `clear`, `shutdown` and `reboot` each live in
+  `/app`, behaving as
   they do on Linux. Both shells run the same ones.
+- **A `make`**: the filesystem keeps a modification time for every file, and
+  `make` compares them — so a file edited in `vim` on the machine is a file the
+  next `make` rebuilds from. There is a worked example in `/home/root/example`.
+- **It compiles itself**: `wcc` is a C compiler written for this machine —
+  preprocessor, parser, x86-64 code generator, ELF writer and linker, no
+  assembler in between. `/lib` holds `libwkernel.a`, a hosted C library and the
+  linker script, `/include` holds their headers, and every
+  `/app/<name>/sourcecode` has a generated Makefile. So editing a command's
+  source in `vim` on the machine and typing `make` rebuilds it — and
+  `cd /app/wcc/sourcecode && make` rebuilds the compiler.
+  See [`docs/wcc.md`](docs/wcc.md).
 - **The hardware, honestly**: `cpufreq` reads the processor's clock and holds
   it at a speed; `battery` says what the firmware knows about the pack,
   charge included. Both report what the machine will not tell them as unknown,
@@ -190,8 +209,12 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   real hardware
 - [`docs/building.md`](docs/building.md) — building, running, debugging, and
   adding an application
-- [`docs/self-hosting.md`](docs/self-hosting.md) — the plan for compiling WOS
-  on WOS: a C compiler, a `make`, and what has to exist under them first
+- [`docs/libc.md`](docs/libc.md) — the hosted C library: what a program ported
+  from Unix finds here, and what it does not
+- [`docs/wcc.md`](docs/wcc.md) — the C compiler: how it works, what it accepts,
+  and the two encoding bugs that cost the most time
+- [`docs/self-hosting.md`](docs/self-hosting.md) — compiling WOS on WOS: all six
+  steps, done
 
 ## Testing
 
