@@ -224,6 +224,29 @@ static void render(void)
     }
 }
 
+/* Take the terminal's size, held to what the scene can be drawn in.  Returns
+ * 1 when it changed, which means the tank is a different shape and everything
+ * in it has to be put back. */
+static int measure(void)
+{
+    int r = 0, c = 0;
+
+    if (wconsize(&r, &c) < 0)
+        return 0;
+
+    if (r > MAXR) r = MAXR;
+    if (c > MAXC) c = MAXC;
+    if (r < 5)  r = 5;
+    if (c < 10) c = 10;
+
+    if (r == ROWS && c == COLS)
+        return 0;
+
+    ROWS = r;
+    COLS = c;
+    return 1;
+}
+
 /* Return 1 if the user asked to quit. */
 static int drained_quit(void)
 {
@@ -239,13 +262,7 @@ static int drained_quit(void)
 
 int main(int argc, char **argv)
 {
-    int r = 0, c = 0;
-    if (wconsize(&r, &c) == 0 && r > 0 && c > 0) {
-        ROWS = r < MAXR ? r : MAXR;
-        COLS = c < MAXC ? c : MAXC;
-    }
-    if (ROWS < 5)  ROWS = 5;
-    if (COLS < 10) COLS = 10;
+    measure();
 
     /* Raw mode so q is seen at once and not echoed; a no-op when stdin is a
      * pipe, which is exactly right there. */
@@ -266,6 +283,18 @@ int main(int argc, char **argv)
 
     int quit = 0;
     while (!quit) {
+        /* A tank that changed shape is stocked again: the fish were placed
+         * for the old one and half of them would be outside this one. */
+        if (measure()) {
+            for (int y = 0; y < MAXR; y++)
+                for (int x = 0; x < MAXC; x++) {
+                    cur_ch[y][x] = 0;
+                    cur_co[y][x] = -100;
+                }
+            init_scene();
+            wcls();
+        }
+
         compose();
         render();
         step();

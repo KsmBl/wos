@@ -336,6 +336,7 @@ int main(int argc, char **argv)
     strlcpy(url, argv[1], sizeof(url));
 
     int prev = wconsole_raw(W_CONSOLE_RAW);
+    wresize_reports(1);      /* wake up when the window changes size */
 
     int running = 1;
     while (running) {
@@ -373,6 +374,17 @@ int main(int argc, char **argv)
 
             int key = wgetkey();
             if (key < 0) { running = 0; break; }
+
+            if (key == W_KEY_RESIZE) {
+                /* The window changed size: the page is re-wrapped to the new
+                 * width, which is why this reloads rather than redrawing --
+                 * the lines were laid out for the old one. */
+                wconsize(&screen_rows, &screen_cols);
+                text_rows = screen_rows - 1;
+                reload = 1;
+                wcls();
+                continue;
+            }
 
             if (key == 'q' || key == 'Q') {
                 running = 0;

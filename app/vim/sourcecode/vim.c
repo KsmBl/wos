@@ -62,6 +62,12 @@ static int  sp_content_h;        /* window height above status   */
 static int  sp_status_row;       /* the per-window status line   */
 static int  cmd_row;             /* the shared command line      */
 
+/* Work out every measurement from the console size.
+ *
+ * Called again whenever the window changes size, which is why it is one
+ * function rather than a startup calculation: an editor whose idea of the
+ * screen is the one it had when it started draws its status line across the
+ * middle of a window that grew, and past the edge of one that shrank. */
 static void layout_init(void)
 {
     int rows = 0, cols = 0;
@@ -69,6 +75,9 @@ static void layout_init(void)
         con_h = rows;
         con_w = cols;
     }
+    if (con_h < 4) con_h = 4;
+    if (con_w < 20) con_w = 20;
+
     text_rows     = con_h - 1;
     sp_left_w     = (con_w - 1) / 2;
     sp_sep_col    = sp_left_w + 1;
@@ -90,6 +99,10 @@ static struct wterm term;
 enum { FOCUS_EDITOR = 0, FOCUS_TERM };
 static int  focus;
 static int  ctrl_w_pending;      /* saw Ctrl+W, waiting for the second key */
+
+/* The editor's half of a split needs repainting.  At file scope because a
+ * resize happens outside the main loop and has to be able to say so. */
+static int  editor_dirty = 1;
 
 static int current_length(void)
 {
@@ -497,6 +510,32 @@ static void close_terminal(void)
     view_h = text_rows;
     wcls();                          /* wipe the split before the editor redraws */
     strlcpy(status, "terminal closed", sizeof(status));
+}
+
+/* The window changed size: work out every measurement again, move the :term
+ * pane to where it now belongs, and repaint from nothing.
+ *
+ * The pane is resized rather than closed, and wterm_resize() tells the program
+ * inside it -- so a shell in vim's split follows the outer window through
+ * vim, which is the case that would otherwise be left one layer stale. */
+static void resize_to_window(void)
+{
+    layout_init();
+
+    if (term.open) {
+        view_w = sp_left_w;
+        view_h = sp_content_h;
+        wterm_resize(&term, sp_content_h, sp_right_w, 1, sp_right_x);
+    } else {
+        view_w = con_w;
+        view_h = text_rows;
+    }
+
+    clamp_cursor();
+    scroll_to_cursor();
+
+    wcls();
+    editor_dirty = 1;
 }
 
 /* Open a terminal in the right half and run `argline` in it.  An empty command
@@ -1041,7 +1080,6 @@ static void dispatch_editor_key(int key)
 
 int main(int argc, char **argv)
 {
-    int editor_dirty = 1;      /* redraw the split's editor chrome next pass */
 
     /* Learn the console size before drawing anything, so the layout matches
      * whatever text mode is in force. */
@@ -1067,6 +1105,7 @@ int main(int argc, char **argv)
     }
 
     wconsole_raw(W_CONSOLE_RAW);
+    wresize_reports(1);      /* wake up when the window changes size */
     wcls();
 
     while (running) {
@@ -1080,6 +1119,11 @@ int main(int argc, char **argv)
             int key = wgetkey();
             if (key < 0)
                 break;
+
+            if (key == W_KEY_RESIZE) {
+                resize_to_window();
+                continue;
+            }
 
             if (mode != MODE_COMMAND)
                 status[0] = '\0';
@@ -1112,6 +1156,11 @@ int main(int argc, char **argv)
         int key = wgetkey();
         if (key < 0)
             break;
+
+        if (key == W_KEY_RESIZE) {
+            resize_to_window();
+            continue;
+        }
 
         /* Ctrl+W is the window-command prefix: Ctrl+W Ctrl+W (or w/h/l)
          * switches which window the keyboard talks to. */

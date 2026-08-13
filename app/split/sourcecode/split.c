@@ -202,6 +202,28 @@ static void draw_chrome(void)
     }
 }
 
+/* The window changed size: lay the panes out again and move each terminal to
+ * where it now belongs.  wterm_resize() tells the shell in each pane, so a
+ * program running in one follows the outer window through two layers of
+ * emulator. */
+static void resize_to_window(void)
+{
+    layout_init();
+
+    if (single) {
+        int s = pane[0].open ? 0 : 1;
+        wterm_resize(&pane[s], CONTENT_H, con_w, 1, 1);
+    } else {
+        for (int i = 0; i < 2; i++)
+            if (pane[i].open)
+                wterm_resize(&pane[i], pane_at[i].h, pane_at[i].w,
+                             pane_at[i].y, pane_at[i].x);
+    }
+
+    wcls();
+    chrome_dirty = 1;
+}
+
 /* When one shell exits, the survivor takes over the whole screen: the split
  * goes away and the last terminal is shown full size. */
 static void collapse_to_survivor(void)
@@ -209,11 +231,11 @@ static void collapse_to_survivor(void)
     int s = pane[0].open ? 0 : 1;
 
     wcls();
-    wterm_resize(&pane[s], CONTENT_H, con_w, 1, 1);
 
-    /* Tell the shell its new size so a program it launches next fills the
-     * widened window rather than the old half. */
-    wsetsize(pane[s].pid, CONTENT_H, con_w);
+    /* wterm_resize() tells the shell its new size, so a program it launches
+     * next fills the widened window rather than the old half -- and one
+     * already running is woken to ask. */
+    wterm_resize(&pane[s], CONTENT_H, con_w, 1, 1);
 
     focus = s;
     single = 1;
@@ -226,6 +248,7 @@ int main(int argc, char **argv)
     find_shell();               /* and run whatever chsh says a shell is    */
 
     int prev = wconsole_raw(W_CONSOLE_RAW);
+    wresize_reports(1);      /* wake up when the window changes size */
     wcursor(1);
     wcolor_reset();
     wcls();
@@ -279,6 +302,11 @@ int main(int argc, char **argv)
         int key = wgetkey();
         if (key < 0)
             break;
+
+        if (key == W_KEY_RESIZE) {
+            resize_to_window();
+            continue;
+        }
 
         /* Ctrl-W is the window-command prefix. */
         if (ctrl_w_pending) {

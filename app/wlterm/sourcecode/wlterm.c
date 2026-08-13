@@ -291,12 +291,11 @@ static void resize_terminal(void)
     if (rows == app.term.rows && cols == app.term.cols)
         return;
 
+    /* wterm_resize() tells the program as well as the grid: a shell that
+     * thinks it has eighty columns in a window with forty wraps in the wrong
+     * places, and a full-screen program blocked for a key would not find out
+     * at all until somebody pressed one. */
     wterm_resize(&app.term, rows, cols, 1, 1);
-
-    /* And tell the program: a shell that thinks it has eighty columns in a
-     * window with forty will wrap in the wrong places. */
-    if (app.term.pid > 0)
-        wsetsize(app.term.pid, rows, cols);
 }
 
 static void toplevel_configure(void *data, struct xdg_toplevel *toplevel,

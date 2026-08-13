@@ -658,6 +658,7 @@ int main(int argc, char **argv)
     }
 
     wconsole_raw(W_CONSOLE_RAW);
+    wresize_reports(1);      /* wake up when the window changes size */
     wcls();
     load();
 

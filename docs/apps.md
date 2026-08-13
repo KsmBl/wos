@@ -1802,6 +1802,15 @@ The window is redrawn from the grid every time the child prints. It uses two
 buffers and alternates between them, so the compositor is never reading a
 buffer the terminal is drawing into.
 
+**The contents follow the window.** When the compositor gives this window a
+different size — another window tiled beside it, or one closed — the grid is
+laid out again and the program inside is told, in both of the ways it can find
+out: `wconsize()` answers with the new size from then on, for the shell *and*
+for whatever the shell is running, and a `W_KEY_RESIZE` arrives in the input of
+any program that asked for one. So `htop` in half a window draws half a window
+of columns rather than eighty of them wrapped into forty. See
+[the console notes](console.md#when-the-size-changes-underneath-a-program).
+
 **Exit status:** 0 when the shell exits or the window is closed.
 
 ## thunar
@@ -2411,10 +2420,13 @@ text modes — it can be **almost any size**, `cols*8` by `rows*16` pixels, from
 screen. Because the font is drawn at native resolution, high-density grids like
 160x50 stay crisp instead of blocky.
 
-Programs that draw to the whole screen — the editor, `split`, `asciiquarium` —
-read the size with `wconsize()`, so they lay themselves out to whatever grid is
-set. Start them after switching and they fit. (Line-oriented tools like `ls`
-still assume 80 columns for their column layout.)
+Programs that draw to the whole screen — the editor, `split`, `htop`, `fm`,
+`lynx`, `asciiquarium` — read the size with `wconsize()`, so they lay themselves
+out to whatever grid is set. They also follow it when it changes *while they are
+running*, which is what happens in a window: see
+[the console notes](console.md#when-the-size-changes-underneath-a-program).
+(Line-oriented tools like `ls` still assume 80 columns for their column
+layout.)
 
 **Exit status:** 0, 2 for a usage error.
 
