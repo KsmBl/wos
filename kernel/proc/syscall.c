@@ -661,8 +661,11 @@ static int64_t sys_setsize(uint64_t pid, uint64_t rows, uint64_t cols)
     if (p->parent != proc_current())
         return -W_EPERM;
 
-    if ((int32_t)rows > 0) p->term_rows = (uint32_t)rows;
-    if ((int32_t)cols > 0) p->term_cols = (uint32_t)cols;
+    /* Everything running in that terminal, not only the process the window
+     * happens to have started: a shell in a window that changed size is now
+     * that size, and so is whatever the shell is running. */
+    proc_resize_terminal(p, (int32_t)rows > 0 ? (uint32_t)rows : 0,
+                         (int32_t)cols > 0 ? (uint32_t)cols : 0);
     return 0;
 }
 

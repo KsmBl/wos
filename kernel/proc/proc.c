@@ -47,6 +47,46 @@ process_t *proc_by_pid(int32_t pid)
     return NULL;
 }
 
+/* Everything below `p` that shares its terminal, given the same size.
+ *
+ * Without this, a resize reaches only the process the window started.  A
+ * `htop` run from a shell in that window keeps the size it was born with and
+ * goes on drawing eighty columns into forty -- which is what a window whose
+ * contents do not follow it looks like from the outside.
+ *
+ * Recursion here is bounded by the process table: thirty-two entries, and each
+ * one is visited once per level of a chain that cannot be longer than the
+ * table itself. */
+static void resize_children(process_t *p, uint32_t rows, uint32_t cols)
+{
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        process_t *child = &processes[i];
+
+        if (!child->used || child->parent != p || child->own_terminal)
+            continue;
+
+        if (rows) child->term_rows = rows;
+        if (cols) child->term_cols = cols;
+
+        resize_children(child, rows, cols);
+    }
+}
+
+void proc_resize_terminal(process_t *p, uint32_t rows, uint32_t cols)
+{
+    if (!p)
+        return;
+
+    if (rows) p->term_rows = rows;
+    if (cols) p->term_cols = cols;
+
+    /* Named directly, so this is the top of the terminal being resized
+     * whether or not it was handed one at birth. */
+    p->own_terminal = true;
+
+    resize_children(p, rows, cols);
+}
+
 static process_t *proc_alloc(void)
 {
     for (int i = 0; i < MAX_PROCESSES; i++) {
@@ -285,8 +325,13 @@ int32_t proc_spawn_io(const char *path, char *const argv[], process_t *parent,
         p->fds[1].type = FD_PIPE; p->fds[1].pipe = io->out; p->fds[1].write_end = true;
         p->fds[2].type = FD_PIPE; p->fds[2].pipe = io->out; p->fds[2].write_end = true;
 
+        /* Given a window of its own, and a size to go with it.  That makes
+         * this process the top of a terminal rather than part of its parent's,
+         * so a resize of the parent's window stops here. */
         if (io->rows) p->term_rows = io->rows;
         if (io->cols) p->term_cols = io->cols;
+        if (io->rows || io->cols)
+            p->own_terminal = true;
     } else {
         /* An ordinary spawn inherits the parent's stdio, so a program run from
          * a shell inside a :term window writes into that window, not past it

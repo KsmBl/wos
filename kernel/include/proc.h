@@ -105,9 +105,17 @@ typedef struct process {
 
     /* The size of the terminal this process draws to, reported by wconsize().
      * The console is a fixed 80x25; a program started into a pipe by vim's
-     * :term is told the size of the window it was given instead. */
+     * :term is told the size of the window it was given instead.
+     *
+     * A resize applies to everything running in that terminal, not only to the
+     * process that was handed it: when a window changes size, the shell in it
+     * and whatever the shell is running are all now that size.  wsetsize()
+     * walks the descendants for exactly that reason, and `own_terminal` is
+     * where it stops -- a process given a window of its own is not part of its
+     * parent's terminal and must not be resized with it. */
     uint32_t     term_rows;
     uint32_t     term_cols;
+    bool         own_terminal;
 
     /* Timer ticks this process has been on a processor for.  Kept here as
      * well as on the thread because a thread's count dies with the thread,
@@ -145,6 +153,16 @@ thread_t  *thread_current(void);
 
 /* Look a process up by pid. Returns NULL if there is no such process. */
 process_t *proc_by_pid(int32_t pid);
+
+/* Tell `p` and everything running in the same terminal that it is now this
+ * size.  A zero for either dimension leaves that one alone.
+ *
+ * The descendants matter as much as `p` does: a window holds a shell and the
+ * shell holds whatever it was asked to run, and all of them draw into the same
+ * rectangle.  The walk stops at any process with a terminal of its own -- vim
+ * gives its `:term` child one, and that child's size belongs to vim's pane
+ * rather than to vim's window. */
+void proc_resize_terminal(process_t *p, uint32_t rows, uint32_t cols);
 
 /* How a spawned process's standard descriptors should be wired.  When `piped`
  * is false the child gets the console, exactly as an ordinary launch does.
