@@ -164,8 +164,18 @@ static void term_csi(struct wterm *t, char final)
     case 's': t->saved_cy = t->cy; t->saved_cx = t->cx; break;
     case 'u': t->cy = t->saved_cy; t->cx = t->saved_cx; break;
 
-    case 'h': if (t->priv && p0 == 25) t->cursor_visible = 1; break;
-    case 'l': if (t->priv && p0 == 25) t->cursor_visible = 0; break;
+    /* ?25 is the cursor.  ?2048 is "tell me when this window is resized",
+     * which the child turns on with wresize_reports() and which nothing is
+     * sent without: the report goes into the child's input, where a program
+     * that did not ask would read it as keys. */
+    case 'h':
+        if (t->priv && p0 == 25)   t->cursor_visible = 1;
+        if (t->priv && p0 == 2048) t->report_resize  = 1;
+        break;
+    case 'l':
+        if (t->priv && p0 == 25)   t->cursor_visible = 0;
+        if (t->priv && p0 == 2048) t->report_resize  = 0;
+        break;
 
     default: break;
     }
@@ -307,8 +317,31 @@ void wterm_input(struct wterm *t, int key)
 
     const char *seq = 0;
     char one[2];
+    char report[24];
 
     switch (key) {
+    /* Not a key: the window this child draws into is a different size now.
+     * It goes through the input stream because that is where the child is
+     * waiting -- there are no signals here, and a full-screen program blocked
+     * for a keystroke has to be woken by something.  The form is the one a
+     * terminal uses to report its size, so it reads as what it means.
+     *
+     * Dropped rather than waited for if the child is not reading: writing to
+     * a full pipe blocks, and blocking here would stop the window drawing
+     * because a program inside it is busy.  Nothing is lost by dropping it --
+     * wconsize() still answers with the new size, so the child finds out the
+     * moment it next looks. */
+    case W_KEY_RESIZE: {
+        wpollfd_t room = { t->in_w, W_POLLOUT, 0 };
+
+        if (wpoll(&room, 1, 0) < 1 || !(room.revents & W_POLLOUT))
+            return;
+
+        wsnprintf(report, sizeof(report), "\033[8;%d;%dt", t->rows, t->cols);
+        seq = report;
+        break;
+    }
+
     case W_KEY_UP:     seq = "\033[A";  break;
     case W_KEY_DOWN:   seq = "\033[B";  break;
     case W_KEY_RIGHT:  seq = "\033[C";  break;
@@ -400,6 +433,18 @@ void wterm_resize(struct wterm *t, int rows, int cols, int oy, int ox)
 
     t->shadow_valid = 0;        /* geometry moved: repaint every cell */
     t->dirty = 1;
+
+    /* And the child is told, in both of the ways it can find out: wconsize()
+     * now answers with the new size, and a resize arrives in its input so a
+     * program blocked for a key wakes up and asks.  Doing it here rather than
+     * leaving it to the caller is what makes every window that uses a wterm --
+     * wlterm, vim's :term, split's panes -- behave the same way. */
+    if (t->open && t->pid > 0) {
+        wsetsize(t->pid, rows, cols);
+
+        if (t->report_resize)
+            wterm_input(t, W_KEY_RESIZE);
+    }
 }
 
 void wterm_cursor(struct wterm *t, int *row, int *col)

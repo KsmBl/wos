@@ -45,6 +45,13 @@ struct wterm {
     int  cursor_visible;
     int  dirty;                /* grid changed since the last render      */
 
+    /* The child asked to be told when this window changes size, with
+     * `ESC[?2048h`.  Off by default and opt-in for a good reason: the report
+     * arrives in the child's input, and a program that did not ask for it
+     * would read the escape sequence as keystrokes -- a shell would echo it,
+     * and anything that quits on Escape would quit. */
+    int  report_resize;
+
     /* ANSI escape parser. */
     int  state;
     int  params[8];
@@ -68,7 +75,11 @@ int  wterm_pump(struct wterm *t);
 
 /* Move and resize the window: change its geometry and screen origin, keeping
  * whatever is already on the grid.  Forces a full repaint at the new size.
- * The child is not told -- use wsetsize() for that if it matters. */
+ *
+ * The child is told: wconsize() answers with the new size from here on, and a
+ * #W_KEY_RESIZE arrives in its input as well if it asked for one with
+ * wresize_reports() -- so a program blocked waiting for a key wakes up and
+ * asks, and one that never asked is not sent bytes it would read as keys. */
 void wterm_resize(struct wterm *t, int rows, int cols, int oy, int ox);
 
 /* Forward one key (an ordinary character or a W_KEY_* code) to the child. */

@@ -725,6 +725,16 @@ typedef struct {
 #define W_KEY_F12    0x11B
 #define W_KEY_ESCAPE 0x1B
 
+/* Not a key anybody pressed: the terminal this program draws to is a different
+ * size than it was.  It arrives through the input stream because that is where
+ * a program is waiting -- there are no signals here, and a full-screen program
+ * blocked for a keystroke has to be woken by something.
+ *
+ * What to do with it is always the same: call wconsize() again and lay out
+ * against what it says.  A program that does not know the code ignores it, as
+ * it would any key it has no use for. */
+#define W_KEY_RESIZE 0x120
+
 /* Colours for wcolor(). Add W_BRIGHT to a foreground for the bright variant. */
 #define W_BLACK   0
 #define W_RED     1

@@ -157,5 +157,40 @@ cursor and the input mode before exiting, since both outlive the process.
 (80x50), not a promise it stays there — the mode is changeable, so a program
 that lays itself out should call `wconsize()`, which reports the size actually
 in force. `wconsize()` is also what a program running in a window rather than
-on the whole screen — under vim's `:term` or `split` — must use, since there it
-reports the window's size rather than the console's.
+on the whole screen — under `wlterm`, vim's `:term` or `split` — must use, since
+there it reports the window's size rather than the console's.
+
+## When the size changes underneath a program
+
+It does, often: a tiling compositor halves a window when another one opens
+beside it, and gives the space back when that one closes. The size a program
+was given when it started is not the size it has now.
+
+`wconsize()` always reports the size in force, and it reports it to *everything*
+running in that window — the shell, and whatever the shell launched, however
+deep. So a program that redraws on a timer, like `htop` or `fm`, only has to
+ask again each time round its loop.
+
+A program *blocked* waiting for a key has nothing to wake it, and there are no
+signals here. That is what `wresize_reports(1)` is for: it asks the terminal to
+send an in-band report when the window changes size, which `wgetkey()` returns
+as `W_KEY_RESIZE`. It is opt-in because the report arrives in the program's own
+input — a shell that had not asked would echo the escape sequence, and a program
+that quits on Escape would quit. See
+[`wkernel-api.md`](wkernel-api.md#void-wresize_reportsint-on).
+
+The two together are the whole mechanism:
+
+```c
+wresize_reports(1);            /* wake me when the window changes  */
+...
+int key = wgetkey();
+if (key == W_KEY_RESIZE) {
+    wconsize(&rows, &cols);    /* and this is what it changed to   */
+    lay_out_again();
+}
+```
+
+A program that lays itself out to whatever it is given also has to be able to
+be *small*: half a screen in a tiling compositor is forty columns, and a table
+that needs eighty has to drop columns rather than run past the edge.

@@ -1576,6 +1576,33 @@ void wcursor(int visible);
 int wgetkey(void);
 
 /**
+ * Ask to be told when this program's terminal changes size.
+ *
+ * Off until asked for. When it is on, and this program is running in a window
+ * rather than on the console, wgetkey() returns #W_KEY_RESIZE as soon as the
+ * window's size changes -- so a full-screen program waiting for a keystroke
+ * wakes up and can lay itself out again rather than drawing the old shape
+ * until somebody presses something.
+ *
+ * @code
+ *     wconsole_raw(W_CONSOLE_RAW);
+ *     wresize_reports(1);
+ *     ...
+ *     int key = wgetkey();
+ *     if (key == W_KEY_RESIZE) {
+ *         wconsize(&rows, &cols);   // re-lay out and redraw
+ *         continue;
+ *     }
+ * @endcode
+ *
+ * It is opt-in because the report arrives in this program's own input: a
+ * shell that had not asked for it would echo the escape sequence, and a
+ * program that quits on Escape would quit. wconsize() is up to date whether
+ * or not this is on, so a program that polls needs neither this nor the key.
+ */
+void wresize_reports(int on);
+
+/**
  * Prompt for a password and read it without echoing.
  *
  * Switches the console to raw mode for the duration, so nothing appears on

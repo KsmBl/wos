@@ -122,7 +122,12 @@ int wgetkey(void)
     default:  break;
     }
 
-    /* The numeric forms end with '~', e.g. ESC[3~ for Delete. */
+    /* The numeric forms end with '~', e.g. ESC[3~ for Delete.  One of them
+     * ends with 't' instead: `ESC[8;rows;cols t` is how a terminal reports the
+     * size of its window, and it is what arrives here when the window changed
+     * size while this program was waiting for a key.  The numbers are read and
+     * thrown away -- wconsize() is the authority, and it is already right by
+     * the time this is delivered. */
     if (c >= '0' && c <= '9') {
         int value = c - '0';
         for (;;) {
@@ -130,9 +135,11 @@ int wgetkey(void)
                 break;
             if (c == '~')
                 break;
+            if (c == 't')
+                return W_KEY_RESIZE;
             if (c >= '0' && c <= '9')
                 value = value * 10 + (c - '0');
-            else
+            else if (c != ';')
                 break;
         }
 
@@ -155,6 +162,19 @@ int wgetkey(void)
     }
 
     return W_KEY_ESCAPE;
+}
+
+void wresize_reports(int on)
+{
+    /* A private mode, like the one that hides the cursor.  The emulator this
+     * program is running in reads it and starts sending #W_KEY_RESIZE when
+     * the window changes size; on the real console nothing is listening and
+     * nothing is printed, since an unknown private mode is ignored there.
+     *
+     * Opt-in because the report arrives in this program's own input: a shell
+     * that had not asked would echo the escape sequence, and a program that
+     * quits on Escape would quit. */
+    wputs(on ? "\033[?2048h" : "\033[?2048l");
 }
 
 int wgetpass(const char *prompt, char *buf, wsize_t size)

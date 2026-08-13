@@ -1163,6 +1163,7 @@ Requires raw mode, and blocks until a key is pressed.
 | `W_KEY_DELETE` | Delete |
 | `W_KEY_F1` … `W_KEY_F12` | the function keys |
 | `W_KEY_ESCAPE` | a bare Escape |
+| `W_KEY_RESIZE` | not a key: the terminal changed size ([below](#void-wresize_reportsint-on)) |
 
 Escape both introduces sequences and is a key in its own right; they are told
 apart by whether anything follows immediately, which is the same guess a
@@ -1182,6 +1183,48 @@ if (key == W_KEY_UP)
     move_up();
 wconsole_raw(W_CONSOLE_CANONICAL);
 ```
+
+## `void wresize_reports(int on)`
+
+Ask to be told when this program's terminal changes size.
+
+A window in the compositor can be made a different size while a program is
+running in it — another window tiled beside it, one closed, the console mode
+changed. `wconsize()` always reports the size in force, so a program that
+redraws on a timer only has to ask again. A program *blocked* in `wgetkey()`
+has nothing to wake it, and there are no signals here; this is what turns the
+change into an event.
+
+With it on, `wgetkey()` returns `W_KEY_RESIZE` as soon as the window's size
+changes. What to do with it is always the same:
+
+```c
+wconsole_raw(W_CONSOLE_RAW);
+wresize_reports(1);
+
+for (;;) {
+    int key = wgetkey();
+
+    if (key == W_KEY_RESIZE) {
+        wconsize(&rows, &cols);    /* the new size */
+        lay_out_again();
+        wcls();
+        continue;
+    }
+    ...
+}
+```
+
+**It is opt-in, and that matters.** The report travels in the program's own
+input, as `ESC [ 8 ; rows ; cols t` — the form a terminal uses to report its
+size, and the same idea as a modern terminal's in-band resize mode. A program
+that had not asked would read those bytes as keystrokes: a shell would echo
+them, and anything that quits on Escape would quit. So nothing is sent until
+this is called, and `wconsize()` is up to date either way.
+
+On the real console there is no window and nothing to report; the call is
+harmless there, and a program that polls `wconsize()` needs neither it nor the
+key.
 
 ---
 
