@@ -1218,15 +1218,13 @@ static int64_t sys_kill(uint64_t pid)
 
 /* Restart the machine.
  *
- * Root only, unlike shutdown -- which predates this system having users at all
- * and still lets anybody stop the machine.  A reboot is the same act: it ends
- * every session on the box, not just the caller's, so it is not something one
- * account should be able to do to another. */
+ * Anybody may, which is the same rule shutdown has always had: the two are the
+ * same act -- the machine stops being available to everybody on it -- and a
+ * system where one of them is everybody's and the other is not would be
+ * arbitrary rather than careful.  Whoever can turn this machine off can
+ * restart it. */
 static int64_t sys_reboot(void)
 {
-    if (proc_current()->uid != W_ROOT_UID)
-        return -W_EPERM;
-
     power_reboot();
     return 0;   /* not reached */
 }

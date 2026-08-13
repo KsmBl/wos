@@ -1398,14 +1398,12 @@ int wshutdown(void);
  * triple fault -- which no machine can refuse, so there is no "this machine
  * cannot restart" to report.
  *
- * @return Only on failure: `-W_EPERM` when the caller is not root. Restarting
- *         ends every session on the machine rather than the caller's own,
- *         which is why it is not everybody's to do.
+ * @return Does not return. There is no failure to report: the last thing the
+ *         kernel tries is a triple fault, which no machine refuses.
  *
- * @code
- *     if (wreboot() == -W_EPERM)
- *         wprintf("only root can restart this machine\n");
- * @endcode
+ * @note Any process may do this, exactly as any process may wshutdown(). The
+ *       two are the same act -- the machine stops being available to everybody
+ *       on it -- so they are one rule rather than two.
  */
 int wreboot(void);
 

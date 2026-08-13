@@ -313,9 +313,9 @@ which is what makes this work under QEMU, VirtualBox and Bochs even when their
 tables say nothing useful. If none of it takes, the kernel says so and halts the
 CPU, which is as close to off as it can get on its own.
 
-Anyone may do this, which predates the machine having users at all and is worth
-knowing: [`reboot`](#reboot) is root's alone, and powering off ends every
-session just as thoroughly.
+Anyone may do this, as anyone may [`reboot`](#reboot): the two are the same act
+— the machine stops being available to everybody on it — so they are one rule
+rather than two.
 
 **Exit status:** does not return on success; 1 if the machine could not be
 powered off.
@@ -346,18 +346,14 @@ fault while handling a fault resets the processor, and every machine does it.
 So there is no "this machine cannot restart" to report, which is the difference
 between this and `shutdown`.
 
-**Root only.** A restart ends every session on the machine rather than the
-caller's own, so it is not something one account should be able to do to
-another — the same reasoning that makes [`htop`](#htop)'s F9 refuse another
-user's process. Anybody else gets:
+**Any user may do this**, exactly as any user may [`shutdown`](#shutdown). A
+restart does end every session on the machine and not just the caller's — the
+same objection that makes [`htop`](#htop)'s F9 refuse another user's process —
+but stopping the machine has always been open to everybody here, and one of the
+two being a privilege while the other is not would be arbitrary rather than
+careful. Whoever can turn this machine off can restart it.
 
-```
-root@wos:/home/root# su tester
-tester@wos:/home/tester$ reboot
-reboot: only root can restart this machine
-```
-
-**Exit status:** does not return on success; 1 if the caller is not root.
+**Exit status:** does not return.
 
 ## uptime
 

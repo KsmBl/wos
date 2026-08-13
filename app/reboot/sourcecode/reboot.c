@@ -10,7 +10,6 @@ int main(int argc, char **argv)
             wprintf("Restarts the machine. Everything written to disk is\n");
             wprintf("already safe: the filesystem writes its metadata\n");
             wprintf("straight through, so there is nothing to flush first.\n");
-            wprintf("Root only -- a restart ends everybody's session.\n");
             return 0;
         }
         wfprintf(W_STDERR, "reboot: unexpected argument: %s\n", argv[i]);
@@ -21,13 +20,8 @@ int main(int argc, char **argv)
 
     int r = wreboot();
 
-    /* Only reached when the kernel refused.  It does not come back having
-     * tried: the last thing it does is fault the processor into a reset, and
-     * that always works. */
-    if (r == -W_EPERM)
-        wfprintf(W_STDERR, "reboot: only root can restart this machine\n");
-    else
-        wfprintf(W_STDERR, "reboot: %s\n", wstrerror(-r));
-
+    /* Effectively unreachable: the kernel's last resort is a triple fault, so
+     * it does not come back having tried. */
+    wfprintf(W_STDERR, "reboot: %s\n", wstrerror(-r));
     return 1;
 }

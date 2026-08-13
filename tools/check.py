@@ -849,13 +849,14 @@ def check_launcher(m):
            "the launcher was still holding half the screen afterwards")
 
 
-@scenario("reboot", "the machine restarts, and only root may ask it to",
+@scenario("reboot", "any user can restart the machine, and it comes back",
           may_reboot=True)
 def check_reboot(m):
     m.login_console()
 
-    # Not everybody's to do: a restart ends every session on the machine, not
-    # the caller's own.
+    # Asked for by somebody who is not root, deliberately: stopping this
+    # machine has always been open to everybody on it, and restarting it is the
+    # same act.
     m.run("adduser tester", settle=1.5)
     m.mon.type("pw\n")
     time.sleep(1)
@@ -863,19 +864,17 @@ def check_reboot(m):
     time.sleep(1.5)
     m.run("su tester", settle=2)
 
-    out = m.run("reboot", settle=2.5)
-    expect("only root" in out,
-           "a user who is not root was allowed to restart the machine: " + out)
-
-    m.run("exit", settle=1.5)
-
-    # And root's does it.  The proof is the machine saying the things it says
-    # on its way up, after having been asked on its way down.
+    # The proof is the machine saying the things it says on its way up, having
+    # said "restarting" on its way down.
     asked = m.mark()
     m.mon.type("reboot\n")
 
-    for _ in range(60):
-        if "scheduler running, syscall gate open" in m.log()[asked:]:
+    # Waited for on the *last* thing a boot says rather than an early one:
+    # the kernel announces its scheduler well before login has drawn anything,
+    # so stopping there and asking about the login screen is a race the fast
+    # machines win and the busy ones lose.
+    for _ in range(90):
+        if "Choose an account" in m.log()[asked:]:
             break
         time.sleep(0.5)
 

@@ -811,15 +811,11 @@ control port, the keyboard controller's reset line, and finally a triple fault
 — which no machine can refuse, so unlike `wshutdown()` there is no "this
 machine cannot do it" to report.
 
-**Root only:** a restart ends every session on the machine rather than the
-caller's own.
+**Any process may do this**, exactly as any process may `wshutdown()`. The two
+are the same act — the machine stops being available to everybody on it — so
+they are one rule rather than two.
 
-**Returns** only on failure: `-W_EPERM` when the caller is not root.
-
-```c
-if (wreboot() == -W_EPERM)
-    wprintf("only root can restart this machine\n");
-```
+**Returns** nothing: there is no failure to report.
 
 ## `void wexit(int status)`
 

@@ -340,9 +340,8 @@ int wtime_set(const wtime_t *t)
 
 int wreboot(void)
 {
-    /* Comes back only when the caller is not root, or on a machine the kernel
-     * cannot restart -- and there is no such machine, since a triple fault is
-     * the last thing it tries. */
+    /* Does not come back: the kernel's last resort is a triple fault, and no
+     * machine refuses that. */
     return (int)wsyscall0(WSYS_REBOOT);
 }
 
