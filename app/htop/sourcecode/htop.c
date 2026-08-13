@@ -333,21 +333,32 @@ static int draw_summary(int row, wmeminfo_t *mem)
     for (int i = 0; i < proc_count; i++)
         threads += procs[i].thread_count;
 
+    /* Three figures with a gap between them, and the gap is the first thing
+     * to go: a line that runs past the edge wraps onto the next one and
+     * pushes the table down by a row it did not lose. */
+    int gap = cols >= 60 ? 6 : (cols >= 46 ? 2 : 1);
+
     wgotoxy(row, 3);
     wcolor(W_CYAN | W_BRIGHT, W_DEFAULT);
     wprintf("Tasks");
     wcolor_reset();
-    wprintf(": %d      ", proc_count);
+    wprintf(": %d%*s", proc_count, gap, "");
 
     wcolor(W_CYAN | W_BRIGHT, W_DEFAULT);
-    wprintf("Threads");
+    wprintf("Thr");
+    if (cols >= 46)
+        wprintf("eads");
     wcolor_reset();
-    wprintf(": %d      ", threads);
+    wprintf(": %d%*s", threads, gap, "");
 
-    wcolor(W_CYAN | W_BRIGHT, W_DEFAULT);
-    wprintf("Kernel");
-    wcolor_reset();
-    wprintf(": %s", whuman(mem->kernel_bytes));
+    /* The kernel's own size is the one that goes when there is no room for
+     * it: it is the least surprising of the three. */
+    if (cols >= 34) {
+        wcolor(W_CYAN | W_BRIGHT, W_DEFAULT);
+        wprintf("Kernel");
+        wcolor_reset();
+        wprintf(": %s", whuman(mem->kernel_bytes));
+    }
     wclear_line();
 
     return row + 2;
@@ -357,18 +368,90 @@ static int draw_summary(int row, wmeminfo_t *mem)
  *  The process table
  * ------------------------------------------------------------------ */
 
-/* The heading and every row are this wide; the rest of the line is padding, so
- * that the reverse-video bar reaches the edge of the screen. */
+/* The whole table, with every column: what it takes when there is room. */
 #define TABLE_WIDTH 77
+
+/* What the row is about, and what is merely useful.
+ *
+ * A window can be narrower than the table wants to be -- half a screen in a
+ * tiling compositor is forty columns -- and something has to give.  The four
+ * columns up to RESIDENT say which process this is and what it is doing, so
+ * they stay; the memory breakdown and the thread count are dropped from the
+ * right as the window narrows.  Drawing all of them anyway is what a fixed
+ * width does, and it wraps every row onto the next line. */
+#define TABLE_CORE   36     /* PID, COMMAND, CPU%, RESIDENT      */
+#define COL_CODE      9
+#define COL_DATA      9
+#define COL_HEAP      9
+#define COL_STACK     9
+#define COL_THR       5
+
+/* How wide the table actually is, and which columns are in it. */
+static int table_shows_code(void)
+{
+    return cols >= TABLE_CORE + COL_CODE;
+}
+
+static int table_shows_data(void)
+{
+    return cols >= TABLE_CORE + COL_CODE + COL_DATA;
+}
+
+static int table_shows_heap(void)
+{
+    return cols >= TABLE_CORE + COL_CODE + COL_DATA + COL_HEAP;
+}
+
+static int table_shows_stack(void)
+{
+    return cols >= TABLE_CORE + COL_CODE + COL_DATA + COL_HEAP + COL_STACK;
+}
+
+static int table_shows_threads(void)
+{
+    return cols >= TABLE_WIDTH;
+}
+
+/* How much of the line the table covers, so the highlight and the heading can
+ * be padded to the edge of whatever is left. */
+static int table_width(void)
+{
+    int width = TABLE_CORE;
+
+    if (table_shows_code())    width += COL_CODE;
+    if (table_shows_data())    width += COL_DATA;
+    if (table_shows_heap())    width += COL_HEAP;
+    if (table_shows_stack())   width += COL_STACK;
+    if (table_shows_threads()) width += COL_THR;
+
+    return width;
+}
+
+/* The name column takes whatever is left over when even the core does not
+ * fit, down to something still worth reading. */
+static int name_width(void)
+{
+    int width = 12;
+
+    if (cols < TABLE_CORE)
+        width -= TABLE_CORE - cols;
+
+    return width < 4 ? 4 : width;
+}
 
 static void draw_process_table(int row, int max_rows)
 {
     wgotoxy(row, 1);
     wcolor(W_BLACK, W_GREEN);
-    wprintf("  %5s %-12s %5s %9s %8s %8s %8s %8s %4s",
-            "PID", "COMMAND", "CPU%", "RESIDENT", "CODE", "DATA", "HEAP",
-            "STACK", "THR");
-    for (int i = 0; i < cols - TABLE_WIDTH; i++)
+    wprintf("  %5s %-*s %5s %9s", "PID", name_width(), "COMMAND",
+            "CPU%", "RESIDENT");
+    if (table_shows_code())    wprintf(" %8s", "CODE");
+    if (table_shows_data())    wprintf(" %8s", "DATA");
+    if (table_shows_heap())    wprintf(" %8s", "HEAP");
+    if (table_shows_stack())   wprintf(" %8s", "STACK");
+    if (table_shows_threads()) wprintf(" %4s", "THR");
+
+    for (int i = 0; i < cols - table_width(); i++)
         wprintf(" ");
     wcolor_reset();
 
@@ -385,21 +468,29 @@ static void draw_process_table(int row, int max_rows)
         wsnprintf(load, sizeof(load), "%u.%u",
                   cpu_tenths[i] / 10, cpu_tenths[i] % 10);
 
-        wprintf("  %5d %-12s %5s %9s %8s %8s %8s %8s %4d",
-                procs[i].pid,
+        wprintf("  %5d %-*.*s %5s %9s",
+                procs[i].pid, name_width(), name_width(),
                 procs[i].name[0] ? procs[i].name : "?",
                 load,
-                whuman(procs[i].resident_bytes),
-                whuman(procs[i].code_bytes),
-                whuman(procs[i].data_bytes),
-                whuman(procs[i].heap_bytes),
-                whuman(procs[i].stack_bytes),
-                procs[i].thread_count);
+                whuman(procs[i].resident_bytes));
+
+        /* whuman() hands back one of a few rotating buffers, so each of these
+         * is printed where it is worked out rather than all at once. */
+        if (table_shows_code())
+            wprintf(" %8s", whuman(procs[i].code_bytes));
+        if (table_shows_data())
+            wprintf(" %8s", whuman(procs[i].data_bytes));
+        if (table_shows_heap())
+            wprintf(" %8s", whuman(procs[i].heap_bytes));
+        if (table_shows_stack())
+            wprintf(" %8s", whuman(procs[i].stack_bytes));
+        if (table_shows_threads())
+            wprintf(" %4d", procs[i].thread_count);
 
         if (i == selected) {
             /* Pad the highlight to the full width so the selected row reads
              * as a bar rather than as coloured text. */
-            for (int c = 0; c < cols - TABLE_WIDTH; c++)
+            for (int c = 0; c < cols - table_width(); c++)
                 wprintf(" ");
         }
 
@@ -460,23 +551,35 @@ static void draw_footer(void)
         message[0] = '\0';
     }
 
+    /* The hints, dropped from the right as the window narrows.  A footer that
+     * ran past the edge would wrap onto the line above it and eat a row of
+     * the table -- the last thing a program short of width should do. */
+    static const struct {
+        const char *key;
+        const char *what;
+    } hints[] = {
+        { " up/dn ", " Select " },
+        { " F9 ",    " Stop   " },
+        { " q ",     " Quit   " },
+        { " r ",     " Refresh now " },
+    };
+
     wgotoxy(rows, 1);
-    wcolor(W_BLACK, W_CYAN);
-    wprintf(" up/dn ");
-    wcolor(W_WHITE, W_BLACK);
-    wprintf(" Select ");
-    wcolor(W_BLACK, W_CYAN);
-    wprintf(" F9 ");
-    wcolor(W_WHITE, W_BLACK);
-    wprintf(" Stop   ");
-    wcolor(W_BLACK, W_CYAN);
-    wprintf(" q ");
-    wcolor(W_WHITE, W_BLACK);
-    wprintf(" Quit   ");
-    wcolor(W_BLACK, W_CYAN);
-    wprintf(" r ");
-    wcolor(W_WHITE, W_BLACK);
-    wprintf(" Refresh now ");
+
+    int at = 0;
+    for (unsigned i = 0; i < sizeof(hints) / sizeof(hints[0]); i++) {
+        int width = (int)strlen(hints[i].key) + (int)strlen(hints[i].what);
+
+        if (at + width > cols)
+            break;
+
+        wcolor(W_BLACK, W_CYAN);
+        wprintf("%s", hints[i].key);
+        wcolor(W_WHITE, W_BLACK);
+        wprintf("%s", hints[i].what);
+        at += width;
+    }
+
     wcolor_reset();
     wclear_line();
 }
@@ -618,9 +721,44 @@ static void sample_procs(void)
     last_sample   = now;
 }
 
+/* Read the terminal size and hold it to what the layout needs.
+ *
+ * Called before every frame rather than once at startup: the window a program
+ * is in can change size while it runs -- another window tiled beside it, the
+ * console mode changed -- and a program that cached the answer draws the old
+ * shape into the new rectangle.  Returns 1 when it changed, which is when the
+ * screen has to be cleared: what was drawn outside the new size is not going
+ * to be painted over. */
+static int measure(void)
+{
+    int r = rows, c = cols;
+
+    if (wconsize(&r, &c) < 0)
+        return 0;
+
+    /* Narrow enough and the table drops columns rather than running past the
+     * edge; there is still a floor, because a window of ten columns is not
+     * something to draw a process list in. */
+    if (c < 24) c = 24;
+    if (r < 8) r = 8;
+
+    if (r == rows && c == cols)
+        return 0;
+
+    rows = r;
+    cols = c;
+    return 1;
+}
+
 static void redraw(void)
 {
     wmeminfo_t mem;
+
+    /* A smaller window leaves what used to be drawn beyond its edge; a bigger
+     * one exposes whatever the compositor had there.  Either way the frame
+     * that follows this has to start from nothing. */
+    if (measure())
+        wcls();
 
     wmeminfo(&mem);
 
@@ -651,9 +789,7 @@ int main(int argc, char **argv)
 {
     int running = 1;
 
-    wconsize(&rows, &cols);
-    if (cols < TABLE_WIDTH + 1) cols = TABLE_WIDTH + 1;  /* the table's minimum */
-    if (rows < 14) rows = 14;
+    measure();
 
     /* Fixed for the life of the program: which processor this is does not
      * change, and neither does what it is called. */
@@ -661,6 +797,7 @@ int main(int argc, char **argv)
         cpu.count = 0;
 
     wconsole_raw(W_CONSOLE_RAW);
+    wresize_reports(1);      /* wake up when the window changes size */
     wcursor(0);
     wcls();
 
@@ -694,7 +831,12 @@ int main(int argc, char **argv)
                 break;
             }
 
-            if (key == W_KEY_F9) {
+            if (key == W_KEY_RESIZE) {
+                /* The window changed while this was waiting for a key.
+                 * Redrawing now rather than at the end of the interval is
+                 * what makes the window look like it followed. */
+                break;
+            } else if (key == W_KEY_F9) {
                 ask_to_stop();
             } else if (key == 'q' || key == 'Q' || key == 0x03) {
                 running = 0;

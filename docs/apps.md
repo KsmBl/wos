@@ -551,7 +551,8 @@ htop
 ```
 
 A full-screen process and resource monitor. It refreshes once a second and
-redraws immediately when a key is pressed.
+redraws immediately when a key is pressed — or when the window it is in changes
+size.
 
 ```
  htop   Intel(R) Core(TM) i7-8665U CPU @ 1.90GHz          up 12 secs
@@ -582,6 +583,13 @@ machine will not report them. Inside a hypervisor that is the usual answer: the
 counters the real clock is measured from and the on-die thermal sensor are both
 model-specific registers, and KVM faults on the ones it was not told to
 emulate. What is shown then is the base clock the CPU quotes.
+
+In a narrow window the table drops columns from the right rather than running
+past the edge: `PID`, `COMMAND`, `CPU%` and `RESIDENT` say which process this is
+and what it is doing and are always there, and the memory breakdown and the
+thread count go as the width does. The meters, the summary line and the footer
+shorten the same way. Half a screen in a tiling compositor is forty columns, and
+a table that insisted on seventy-seven would wrap every row onto the next line.
 
 Each mounted filesystem gets its own bar, labelled by where it is mounted: the
 disk at `/`, and the scratch space in memory at `/ramdisk`. They fill up
