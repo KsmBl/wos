@@ -136,11 +136,26 @@ int wlseek(int fd, int offset, int whence);
  *
  * @param path Path to inspect.
  * @param out  Filled in with the inode number, size in bytes, number of disk
- *             blocks used, and type (#W_FT_FILE or #W_FT_DIR).
+ *             blocks used, type (#W_FT_FILE or #W_FT_DIR), and the time the
+ *             contents last changed -- see wtime_from_epoch().
  *
  * @return 0 on success, or `-W_ENOENT`, `-W_ENOTDIR` or `-W_EFAULT`.
  */
 int wstat(const char *path, wstat_t *out);
+
+/**
+ * Say a file changed now, without changing it: set its modification time to
+ * the current time from the machine's clock.
+ *
+ * This is what `touch` does to a file that already exists, and what makes
+ * something depending on that file stale.  The time stored is the machine's,
+ * not one the caller chooses.
+ *
+ * @param path File to stamp. It must already exist.
+ * @return 0 on success, `-W_ENOENT` if it does not exist, or `-W_EACCES` if it
+ *         is not writable by this user.
+ */
+int wutime(const char *path);
 
 /**
  * Delete a file.
@@ -1341,6 +1356,30 @@ int wtime_get(wtime_t *out);
  * @return 0, `-W_EPERM` if not root, or `-W_EFAULT`.
  */
 int wtime_set(const wtime_t *t);
+
+/**
+ * Turn a file's `mtime` -- seconds since 1970-01-01 UTC, as #wstat_t reports it
+ * -- into a date on the calendar.
+ *
+ * @code
+ *     wstat_t st;
+ *     wtime_t t;
+ *     wstat("notes.txt", &st);
+ *     wtime_from_epoch(st.mtime, &t);
+ *     wprintf("%04d-%02d-%02d %02d:%02d\n", t.year, t.month, t.day,
+ *             t.hour, t.minute);
+ * @endcode
+ */
+void wtime_from_epoch(unsigned int epoch, wtime_t *out);
+
+/**
+ * The other direction: a date on the calendar to seconds since 1970-01-01 UTC.
+ *
+ * This is what the hosted C library's `time()` is made of, and what anything
+ * comparing a date against a file's `mtime` needs. A date before 1970, or one
+ * that does not exist, gives 0.
+ */
+unsigned int wtime_to_epoch(const wtime_t *t);
 
 /**
  * The result of an HTTP GET.  `raw` is the whole response and must be freed;

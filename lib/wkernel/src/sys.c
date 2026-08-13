@@ -338,6 +338,84 @@ int wtime_set(const wtime_t *t)
     return (int)wsyscall1(WSYS_TIME_SET, (long)t);
 }
 
+static const int month_days[12] = { 31, 28, 31, 30, 31, 30,
+                                    31, 31, 30, 31, 30, 31 };
+
+static int is_leap(int year)
+{
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+}
+
+/* A date on the calendar to seconds since 1970.
+ *
+ * The same walk as the kernel's rtc_epoch(), and deliberately the same shape:
+ * a year at a time, then a month at a time.  A date before 1970 has no
+ * representation in an unsigned count of seconds and comes back as zero, which
+ * is also what a file whose time was never set reports. */
+unsigned int wtime_to_epoch(const wtime_t *t)
+{
+    if (t->year < 1970 || t->month < 1 || t->month > 12 ||
+        t->day < 1 || t->day > 31)
+        return 0;
+
+    unsigned int days = 0;
+
+    for (int y = 1970; y < t->year; y++)
+        days += is_leap(y) ? 366u : 365u;
+
+    for (int m = 1; m < t->month; m++) {
+        days += (unsigned int)month_days[m - 1];
+        if (m == 2 && is_leap(t->year))
+            days++;
+    }
+
+    days += (unsigned int)(t->day - 1);
+
+    return days * 86400u + (unsigned int)t->hour * 3600u
+         + (unsigned int)t->minute * 60u + (unsigned int)t->second;
+}
+
+/* Seconds since 1970 to a date on the calendar.
+ *
+ * Days are peeled off a year at a time and then a month at a time, which is the
+ * same walk rtc_epoch() does in the kernel in the other direction.  It is not
+ * the fastest way to do it and it does not need to be: what calls this is a
+ * program printing a column of dates.
+ */
+void wtime_from_epoch(unsigned int epoch, wtime_t *out)
+{
+    unsigned int days = epoch / 86400u;
+    unsigned int rest = epoch % 86400u;
+
+    out->hour   = (int)(rest / 3600u);
+    out->minute = (int)((rest % 3600u) / 60u);
+    out->second = (int)(rest % 60u);
+
+    int year = 1970;
+    for (;;) {
+        unsigned int in_year = is_leap(year) ? 366u : 365u;
+        if (days < in_year)
+            break;
+        days -= in_year;
+        year++;
+    }
+
+    int month = 1;
+    for (;;) {
+        unsigned int in_month = (unsigned int)month_days[month - 1];
+        if (month == 2 && is_leap(year))
+            in_month++;
+        if (days < in_month)
+            break;
+        days -= in_month;
+        month++;
+    }
+
+    out->year  = year;
+    out->month = month;
+    out->day   = (int)days + 1;
+}
+
 int wreboot(void)
 {
     /* Does not come back: the kernel's last resort is a triple fault, and no

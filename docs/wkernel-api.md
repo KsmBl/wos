@@ -167,10 +167,35 @@ typedef struct {
     uint32_t size;     /* length in bytes                    */
     uint32_t blocks;   /* disk blocks occupied               */
     uint32_t type;     /* W_FT_FILE or W_FT_DIR              */
+    uint32_t mtime;    /* last changed, seconds since 1970   */
 } wstat_t;
 ```
 
+`mtime` is when the contents last changed, from the machine's clock, and is
+what tells one build of a file from another:
+
+```c
+wstat_t source, built;
+
+if (wstat("hello.c", &source) == 0 && wstat("hello", &built) == 0 &&
+    source.mtime > built.mtime)
+    /* the program is older than what it was made from */;
+```
+
+Zero means the time is not known — the file was written while the clock was
+unset. Turn it into a date with `wtime_from_epoch()`.
+
 **Returns** 0, or `-W_ENOENT`, `-W_ENOTDIR`, `-W_EFAULT`.
+
+## `int wutime(const char *path)`
+
+Say a file changed now, without changing it: set its modification time to the
+current time. This is what `touch` does to a file that already exists, and the
+time stored is the machine's rather than one the caller names — a program that
+could choose it could make a target look older than it is and quietly break
+every build after it.
+
+**Returns** 0, or `-W_ENOENT`, `-W_EACCES`.
 
 ## `int wunlink(const char *path)`
 
@@ -1033,6 +1058,22 @@ Same rotating buffers, and the same rules, as `whuman()`.
 
 Turn a positive `W_E*` code into a readable message. Negate what the failing
 call returned.
+
+### `void wtime_from_epoch(unsigned int epoch, wtime_t *out)`
+
+Turn a file's `mtime` — seconds since 1970-01-01 UTC, as `wstat()` reports it —
+into a date on the calendar. The other direction is the kernel's: nothing in
+user space builds an epoch, because the only one that matters is the one the
+machine's clock produced.
+
+```c
+wstat_t st;
+wtime_t t;
+
+wstat("notes.txt", &st);
+wtime_from_epoch(st.mtime, &t);
+wprintf("%04d-%02d-%02d %02d:%02d\n", t.year, t.month, t.day, t.hour, t.minute);
+```
 
 ## Heap
 

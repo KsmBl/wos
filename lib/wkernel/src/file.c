@@ -33,6 +33,11 @@ int wstat(const char *path, wstat_t *out)
     return wsyscall2(WSYS_STAT, (long)path, (long)out);
 }
 
+int wutime(const char *path)
+{
+    return wsyscall1(WSYS_UTIME, (long)path);
+}
+
 int wunlink(const char *path)
 {
     return wsyscall1(WSYS_UNLINK, (long)path);
