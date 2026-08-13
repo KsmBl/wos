@@ -489,19 +489,19 @@ void selftest_sockets(void)
     failures = 0;
 
     int err = 0;
-    socket_t *listener = socket_listen("/selftest.sock", &err);
+    socket_t *listener = socket_listen("/selftest.sock", W_ROOT_UID, &err);
     check(listener != NULL, "an address can be listened on");
     if (!listener) {
         panic("socket self-test cannot continue without a listener");
     }
 
-    check(socket_listen("/selftest.sock", &err) == NULL && err == -W_EEXIST,
+    check(socket_listen("/selftest.sock", W_ROOT_UID, &err) == NULL && err == -W_EEXIST,
           "the same address cannot be listened on twice");
 
-    check(socket_connect("/nobody-is-here.sock", &err) == NULL &&
+    check(socket_connect("/nobody-is-here.sock", W_ROOT_UID, &err) == NULL &&
           err == -W_ENOENT, "connecting to nothing reports ENOENT");
 
-    socket_t *client = socket_connect("/selftest.sock", &err);
+    socket_t *client = socket_connect("/selftest.sock", W_ROOT_UID, &err);
     check(client != NULL, "a client can connect");
 
     check(socket_pollin(listener), "the listener reports a connection waiting");
@@ -582,7 +582,7 @@ void selftest_sockets(void)
     socket_unref(server);
     socket_unref(listener);
 
-    check(socket_connect("/selftest.sock", &err) == NULL && err == -W_ENOENT,
+    check(socket_connect("/selftest.sock", W_ROOT_UID, &err) == NULL && err == -W_ENOENT,
           "the address is gone once the listener closes");
 
     if (failures)
