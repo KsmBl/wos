@@ -1,0 +1,5 @@
+This file is what the Makefile beside it builds report.txt from.
+
+Change it -- in vim, or with `touch greeting.txt` -- and the next `make`
+will notice, because the time WFS keeps for this file will be later than
+the one it keeps for report.txt.

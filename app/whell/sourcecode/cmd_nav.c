@@ -69,8 +69,8 @@ int cmd_help(int argc, char **argv)
     wprintf("/app/<name>/launch, so `ls` runs /app/ls/launch. Press Tab to\n");
     wprintf("see what is installed.\n\n");
     wprintf("Installed alongside the shell: ls, pwd, cat, free, df, ps, rm,\n");
-    wprintf("mkdir, touch, clear, shutdown, whoami, passwd, su, adduser,\n");
-    wprintf("edituser, ");
+    wprintf("mkdir, touch, make, clear, shutdown, whoami, passwd, su,\n");
+    wprintf("adduser, edituser, ");
     wprintf("fish, vim, htop, fastfetch.\n");
     return 0;
 }

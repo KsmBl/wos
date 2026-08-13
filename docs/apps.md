@@ -25,6 +25,7 @@ which is the price of having no shared libraries.
 | [`mkdir`](#mkdir) | create directories |
 | [`mv`](#mv) | move or rename files |
 | [`rm`](#rm) | remove files and directories |
+| [`make`](#make) | rebuild what has changed, and only that |
 | [`clear`](#clear) | clear the screen |
 | [`time`](#time) | show or set the clock |
 | [`ping`](#ping) | send ICMP echo requests to a host |
@@ -287,6 +288,77 @@ ones after it and the walk would silently skip files.
 
 **Exit status:** 0, or 1 if anything could not be removed. With `-f`, a missing
 file is not a failure.
+
+## make
+
+```
+make [-f file] [-C dir] [-n] [-s] [-B] [VAR=value ...] [target ...]
+```
+
+Reads a `Makefile` and brings targets up to date. A target is out of date when
+something it is built from has a later modification time than it has — the
+times WFS keeps for every file, which is what makes this possible at all.
+
+With no target named, the first one in the file is built.
+
+| Option | Effect |
+|---|---|
+| `-f file` | read this file instead of `Makefile` or `makefile` |
+| `-C dir` | change to this directory first |
+| `-n` | print the commands without running any of them |
+| `-s` | run the commands without printing them |
+| `-B` | rebuild every target, whatever the times say |
+| `VAR=value` | set a variable; the Makefile's own assignment to it is ignored |
+
+What the Makefile may contain:
+
+| | |
+|---|---|
+| `NAME = value` | expanded every time it is used, so it may mention a variable defined later |
+| `NAME := value` | expanded once, here |
+| `NAME += value` | added to what is there |
+| `$(NAME)`, `${NAME}` | the value; an unset variable is empty, as in make |
+| `target: prereq...` | a rule. Several targets on one line share what follows |
+| a tab, then a command | a recipe line. It must be a real tab |
+| `$@`, `$<`, `$^` | the target, the first prerequisite, all of them |
+| `@command` | run it without printing it |
+| `-command` | carry on even if it fails |
+| `.PHONY: name...` | build these whatever the times say |
+| `#` to end of line | a comment, except inside a recipe |
+| `\` at end of line | joins it to the next |
+
+```
+wos:/home/root/example# make
+cat greeting.txt
+...
+touch report.txt
+wos:/home/root/example# make
+make: 'report.txt' is up to date
+wos:/home/root/example# touch greeting.txt
+wos:/home/root/example# make
+cat greeting.txt
+...
+touch report.txt
+```
+
+There is a worked example on the machine, in `/home/root/example`.
+
+Recipes are run by `whell -c`, one process per line, whatever the user's login
+shell is: a recipe is written against one syntax and has to get the one it was
+written for. That also means one line cannot affect the next — `cd` in a recipe
+changes nothing for the line after it — and that a recipe gets a single command
+rather than a pipeline, because that is what `whell` runs.
+
+What it deliberately has not got: pattern rules (`%.o: %.c`), built-in rules,
+functions like `$(wildcard)`, conditionals, `include`, and parallel builds.
+Each is something a Makefile written for this machine can do without, and
+leaving them out is what keeps the program small enough to read.
+
+A prerequisite that does not exist and has no rule is an error, as in make. A
+target that depends on itself, directly or through a chain, is reported rather
+than followed.
+
+**Exit status:** 0, or 2 if a recipe failed or the Makefile could not be used.
 
 ## clear
 
