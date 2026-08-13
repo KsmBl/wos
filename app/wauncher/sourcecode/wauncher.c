@@ -90,12 +90,19 @@
 #define QUERY_MAX 64
 
 /* What starting one of these means.  KIND_UNKNOWN is "not looked at yet":
- * finding out costs a read of the executable, so it is done for the rows on
- * screen rather than for fifty programs at startup, and remembered. */
+ * finding out means opening the executable, and on this machine opening a file
+ * is the expensive part -- four directory lookups down a disk with no cache in
+ * front of it -- so it is done for the rows on screen, once each, after the
+ * window is up.
+ *
+ * KIND_MISSING is a directory under /app with no program in it.  That is the
+ * same discovery: the open says so, and the row leaves the list when it does,
+ * which is why nothing is checked before the list is drawn. */
 enum kind {
     KIND_UNKNOWN,
     KIND_WINDOW,                    /* a Wayland client: it opens its own */
     KIND_TERMINAL,                  /* it prints, so it is given a terminal */
+    KIND_MISSING,                   /* /app/<name>/launch is not there */
 };
 
 struct app_entry {
@@ -160,10 +167,13 @@ static int find_fold(const char *haystack, const char *needle)
 
 /* Read the directory every program on this machine lives in.
  *
- * An entry counts when it has a `launch` inside it, which is the same rule
- * whell uses to decide that a bare word is a command -- a directory under /app
- * with no executable in it is a source tree somebody left behind, not a
- * program. */
+ * This is the only thing that happens before the window is drawn, and it is
+ * one directory read.  Asking after each entry's `launch` as well -- fifty
+ * more walks down the same path -- costs more than the listing itself did and
+ * answers a question nobody has asked yet: whether a name that is on screen is
+ * a program is worth knowing when somebody looks at it, not before they can
+ * see it.  A directory with no program in it leaves the list when its turn
+ * comes round. */
 static void load_apps(void)
 {
     int d = wopendir("/app");
@@ -177,13 +187,6 @@ static void load_apps(void)
 
     while (app_count < MAX_APPS && wreaddir(d, &e) == 1) {
         if (e.name[0] == '.' || e.type != W_FT_DIR)
-            continue;
-
-        char    path[W_PATH_MAX + 1];
-        wstat_t st;
-
-        wsnprintf(path, sizeof(path), "/app/%s/launch", e.name);
-        if (wstat(path, &st) != 0 || st.type != W_FT_FILE)
             continue;
 
         strlcpy(apps[app_count].name, e.name, sizeof(apps[app_count].name));
@@ -216,38 +219,72 @@ static void load_apps(void)
  * program that prints does not pull the client library in and does not carry
  * the name of a socket it never opens.
  *
- * Read in blocks, with the tail of each one carried over: a name that fell
- * across a block boundary would otherwise be a program quietly given the wrong
- * kind of start. */
-static enum kind kind_of(struct app_entry *a)
+ * Only one section of the file can hold it.  A string constant is read-only
+ * data, and the linker puts read-only data in the one section that is loaded,
+ * not written and not executed -- so the executable says where to look, and
+ * the rest of it, which is nearly all of it, is never read.  Across the fifty
+ * programs here that is 194K instead of 1.4M, and the reads go through a PIO
+ * disk driver a block at a time, so it is the difference between a window that
+ * is there and a window that arrives.
+ *
+ * Anything that does not parse is called a printer.  It is the answer that
+ * shows what happened -- a terminal with an error in it -- rather than the one
+ * that swallows it.
+ */
+
+#define ELF_SHT_PROGBITS 1
+#define ELF_SHF_WRITE    0x1
+#define ELF_SHF_ALLOC    0x2
+#define ELF_SHF_EXEC     0x4
+
+#define MAX_SECTIONS 48
+
+typedef struct {
+    uint32_t name;
+    uint32_t type;
+    uint64_t flags;
+    uint64_t addr;
+    uint64_t offset;
+    uint64_t size;
+    uint32_t link;
+    uint32_t info;
+    uint64_t align;
+    uint64_t entsize;
+} elf64_shdr_t;
+
+static int read_at(int fd, int offset, void *buf, int len)
 {
-    if (a->kind != KIND_UNKNOWN)
-        return a->kind;
+    if (wlseek(fd, offset, W_SEEK_SET) < 0)
+        return -1;
 
-    const char *needle = WL_DEFAULT_DISPLAY;
-    int         len    = (int)strlen(needle);
+    return wread(fd, buf, (wsize_t)len);
+}
 
-    char path[W_PATH_MAX + 1];
-    wsnprintf(path, sizeof(path), "/app/%s/launch", a->name);
-
-    int fd = wopen(path, W_O_RDONLY);
-    if (fd < 0) {
-        /* Unreadable is not "prints", but a terminal is the start that shows
-         * the error rather than swallowing it. */
-        a->kind = KIND_TERMINAL;
-        return a->kind;
-    }
-
-    static char block[8192];
+/* Search one stretch of the file, in blocks with the tail of each carried into
+ * the next: a name that fell across a block boundary would otherwise be a
+ * program quietly given the wrong kind of start. */
+static int section_has(int fd, int offset, int size, const char *needle)
+{
+    static char block[4096];
+    int         len     = (int)strlen(needle);
     int         carried = 0;
+    int         read_so_far = 0;
 
-    a->kind = KIND_TERMINAL;
+    if (size < len || wlseek(fd, offset, W_SEEK_SET) < 0)
+        return 0;
 
-    for (;;) {
-        int got = wread(fd, block + carried, sizeof(block) - (wsize_t)carried);
+    while (read_so_far < size) {
+        int want = size - read_so_far;
+
+        if (want > (int)sizeof(block) - carried)
+            want = (int)sizeof(block) - carried;
+
+        int got = wread(fd, block + carried, (wsize_t)want);
 
         if (got <= 0)
             break;
+
+        read_so_far += got;
 
         int have = carried + got;
 
@@ -257,11 +294,8 @@ static enum kind kind_of(struct app_entry *a)
             while (j < len && block[i + j] == needle[j])
                 j++;
 
-            if (j == len) {
-                a->kind = KIND_WINDOW;
-                wclose(fd);
-                return a->kind;
-            }
+            if (j == len)
+                return 1;
         }
 
         carried = len - 1 < have ? len - 1 : have;
@@ -269,7 +303,85 @@ static enum kind kind_of(struct app_entry *a)
             block[i] = block[have - carried + i];
     }
 
+    return 0;
+}
+
+static void resolve(struct app_entry *a)
+{
+    char path[W_PATH_MAX + 1];
+
+    if (a->kind != KIND_UNKNOWN)
+        return;
+
+    a->kind = KIND_TERMINAL;
+
+    wsnprintf(path, sizeof(path), "/app/%s/launch", a->name);
+
+    int fd = wopen(path, W_O_RDONLY);
+    if (fd < 0) {
+        /* Not a program at all: a directory under /app with nothing to run in
+         * it.  This is where that is found out, because this is the first time
+         * anybody needed to know. */
+        if (fd == -W_ENOENT)
+            a->kind = KIND_MISSING;
+        return;
+    }
+
+    uint8_t header[64];
+
+    if (read_at(fd, 0, header, sizeof(header)) != (int)sizeof(header) ||
+        header[0] != 0x7F || header[1] != 'E' || header[2] != 'L' ||
+        header[3] != 'F' || header[4] != 2) {          /* 2: 64-bit */
+        wclose(fd);
+        return;
+    }
+
+    uint64_t shoff;
+    uint16_t shentsize, shnum;
+
+    memcpy(&shoff, header + 0x28, sizeof(shoff));
+    memcpy(&shentsize, header + 0x3A, sizeof(shentsize));
+    memcpy(&shnum, header + 0x3C, sizeof(shnum));
+
+    if (shentsize != sizeof(elf64_shdr_t) || shnum == 0 ||
+        shnum > MAX_SECTIONS) {
+        wclose(fd);
+        return;
+    }
+
+    static elf64_shdr_t sections[MAX_SECTIONS];
+    int                 bytes = (int)shnum * (int)shentsize;
+
+    if (read_at(fd, (int)shoff, sections, bytes) != bytes) {
+        wclose(fd);
+        return;
+    }
+
+    /* Loaded, not written, not executed: that is what read-only data is, and
+     * saying it in flags rather than by name means the section table's own
+     * string table never has to be read either. */
+    for (int i = 0; i < shnum; i++) {
+        uint64_t flags = sections[i].flags &
+                         (ELF_SHF_WRITE | ELF_SHF_ALLOC | ELF_SHF_EXEC);
+
+        if (sections[i].type != ELF_SHT_PROGBITS || flags != ELF_SHF_ALLOC)
+            continue;
+
+        if (section_has(fd, (int)sections[i].offset, (int)sections[i].size,
+                        WL_DEFAULT_DISPLAY)) {
+            a->kind = KIND_WINDOW;
+            break;
+        }
+    }
+
     wclose(fd);
+}
+
+/* The kind, for a program that has to be started right now.  Everywhere else
+ * takes KIND_UNKNOWN for an answer and waits for the loop to fill it in. */
+static enum kind kind_of(struct app_entry *a)
+{
+    resolve(a);
     return a->kind;
 }
 
@@ -284,7 +396,7 @@ static enum kind kind_of(struct app_entry *a)
  * fastfetch, which contains an "f" and an "i" in the wrong places; and an exact
  * name is always the first row, so a name typed in full and Enter is a
  * launcher that never surprises anybody. */
-static void refilter(void)
+static void rebuild(void)
 {
     shown_count = 0;
 
@@ -292,13 +404,18 @@ static void refilter(void)
         for (int i = 0; i < app_count; i++) {
             int at = find_fold(apps[i].name, query);
 
-            if (at < 0)
+            if (at < 0 || apps[i].kind == KIND_MISSING)
                 continue;
             if ((pass == 0) != (at == 0))
                 continue;
 
             shown[shown_count++] = i;
         }
+}
+
+static void refilter(void)
+{
+    rebuild();
 
     /* Back to the top on every keystroke, deliberately.  Carrying the old
      * selection over to whichever row it landed on in the new list is how a
@@ -307,6 +424,26 @@ static void refilter(void)
      * Enter should be pointing at the moment the typing stops. */
     selected = 0;
     top      = 0;
+}
+
+/* The same, for a row that has just turned out not to be a program: the list
+ * gets shorter under a hand that is not typing, so the selection stays on
+ * whatever it was on rather than on whatever moved into its place. */
+static void drop_missing(void)
+{
+    struct app_entry *on = (selected < shown_count) ? &apps[shown[selected]]
+                                                    : NULL;
+
+    rebuild();
+
+    selected = 0;
+
+    if (on)
+        for (int i = 0; i < shown_count; i++)
+            if (&apps[shown[i]] == on) {
+                selected = i;
+                break;
+            }
 }
 
 /* ------------------------------------------------------------------ *
@@ -380,8 +517,20 @@ static void start(const char *command, int in_terminal)
 static void run_selected(int other_way)
 {
     if (shown_count > 0) {
-        struct app_entry *a  = &apps[shown[selected]];
-        int               in = kind_of(a) == KIND_TERMINAL;
+        struct app_entry *a    = &apps[shown[selected]];
+        enum kind         kind = kind_of(a);
+
+        /* The row was listed before anything had opened it, and this is the
+         * moment that catches up: a directory under /app with no program in it
+         * says so here rather than starting nothing. */
+        if (kind == KIND_MISSING) {
+            complain("%s: nothing to run in /app/%s", a->name, a->name);
+            drop_missing();
+            app.redraw = 1;
+            return;
+        }
+
+        int in = kind == KIND_TERMINAL;
 
         start(a->name, other_way ? !in : in);
         return;
@@ -561,18 +710,24 @@ static void draw_rows(void)
 
         /* What Enter would do to this row, in the row.  A launcher that opened
          * a terminal for one name and a window for the next without ever
-         * saying so would be a launcher nobody could predict. */
-        const char *tag = kind_of(a) == KIND_WINDOW ? "window" : "terminal";
-        int         tw  = wdraw_text_width(tag);
-        int         ty  = y + (ROW_H - CELL_H) / 2;
+         * saying so would be a launcher nobody could predict.
+         *
+         * A row whose executable has not been read yet leaves the column
+         * empty rather than guessing or saying "checking": the answer arrives
+         * within a frame or two, and the column is kept the width of the
+         * longest tag either way, so nothing moves sideways when it does. */
+        const char *tag = a->kind == KIND_WINDOW   ? "window"
+                        : a->kind == KIND_TERMINAL ? "terminal" : NULL;
 
-        int room = app.width - PAD * 3 - tw;
+        int column = wdraw_text_width("terminal");
+        int ty     = y + (ROW_H - CELL_H) / 2;
+        int room   = app.width - PAD * 3 - column;
 
         draw_text_fit(PAD, ty, a->name, sel ? C_SEL_TEXT : C_TEXT,
                       room < 0 ? 0 : room);
 
-        if (app.width > PAD * 3 + tw + CELL_W * 4)
-            draw_text(app.width - PAD - tw, ty, tag,
+        if (tag && app.width > PAD * 3 + column + CELL_W * 4)
+            draw_text(app.width - PAD - wdraw_text_width(tag), ty, tag,
                       sel ? C_SEL_DIM : C_DIM);
     }
 }
@@ -609,6 +764,81 @@ static void draw_status(void)
             app.width)
             draw_text(app.width - PAD - w, ty, right, C_DIM);
     }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Filling in the tags
+ *
+ *  Reading an executable is the one slow thing this program does, and it is
+ *  done between frames rather than during one.  The window is on screen before
+ *  the first byte of any of them is read; the tags land over the next moment,
+ *  a few rows at a time, and a key pressed while that is happening is answered
+ *  in the same pass rather than after the last row.
+ * ------------------------------------------------------------------ */
+
+#define RESOLVE_BATCH 4
+
+/* The rows on screen, selection first -- the one row whose tag somebody is
+ * about to act on should be the one that arrives first. */
+static int visible_row(int n)
+{
+    int rows = rows_visible();
+    int last = top + rows;
+
+    if (shown_count == 0)
+        return -1;
+
+    if (n == 0)
+        return selected < shown_count ? selected : -1;
+
+    int at      = top + n - 1;
+    int on_show = (selected >= top && selected < last);
+
+    if (on_show && at >= selected)
+        at++;                       /* it went first */
+
+    return (at < shown_count && at < last) ? at : -1;
+}
+
+static int tags_pending(void)
+{
+    for (int n = 0; ; n++) {
+        int at = visible_row(n);
+
+        if (at < 0)
+            break;
+        if (at < shown_count && apps[shown[at]].kind == KIND_UNKNOWN)
+            return 1;
+    }
+
+    return 0;
+}
+
+/* Work out a few, and say whether anything changed. */
+static int resolve_some(void)
+{
+    int done = 0;
+    int lost = 0;
+
+    for (int n = 0; done < RESOLVE_BATCH; n++) {
+        int at = visible_row(n);
+
+        if (at < 0)
+            break;
+        if (at >= shown_count || apps[shown[at]].kind != KIND_UNKNOWN)
+            continue;
+
+        resolve(&apps[shown[at]]);
+        done++;
+
+        if (apps[shown[at]].kind == KIND_MISSING)
+            lost = 1;
+    }
+
+    if (lost)
+        drop_missing();
+
+    return done;
 }
 
 static void draw(uint32_t *pixels)
@@ -1237,10 +1467,23 @@ int main(int argc, char **argv)
         watch[0].events  = W_POLLIN;
         watch[0].revents = 0;
 
-        if (wpoll(watch, 1, 100) > 0 && (watch[0].revents & W_POLLIN)) {
+        /* Waiting is the normal state of this loop.  While there are still
+         * executables to read it waits for a shorter moment and then reads a
+         * few -- not none, so the tags arrive; not all of them, so a key
+         * pressed in the middle is answered in the middle.  The short wait is
+         * what keeps the reading off the processor rather than merely spread
+         * across it: this is a window somebody is about to type into, and it
+         * has nothing to do that is worth a busy machine. */
+        int pending = tags_pending();
+
+        if (wpoll(watch, 1, pending ? 20 : 100) > 0 &&
+            (watch[0].revents & W_POLLIN)) {
             if (wl_display_dispatch(app.display) < 0)
                 break;
         }
+
+        if (pending && resolve_some())
+            app.redraw = 1;
 
         if (app.redraw)
             present();

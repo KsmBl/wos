@@ -2073,12 +2073,23 @@ also what a bare name means to [`whell`](whell.md) and to sway's `exec`. So the
 launcher reads the directory, and a program that is installed is a program that
 is listed.
 
+**One directory read is all that happens before the window is drawn.** Opening
+a file on this machine is four directory walks down a disk with no cache in
+front of it, and fifty of them cost more than everything else the launcher does
+put together — so nothing is opened until the names are on screen. The
+executables are read afterwards, a few between frames, which is why the tags
+appear a moment after the list does and why a key pressed in that moment is
+answered in it. A directory under `/app` with nothing to run in it is found out
+the same way, and leaves the list when its turn comes.
+
 **`window` or `terminal`** is what Enter will do with the row, and it is worked
 out from the program rather than guessed from its name. A Wayland client is a
 program that called `wl_display_connect()`, and that call carries the name of
 the socket into the executable with it — so a binary with `wayland-0` inside it
 opens its own window, and one without it is a program that prints and is given
-a [`wlterm`](#wlterm) to print into. Without that, half of these (`ls`, `df`,
+a [`wlterm`](#wlterm) to print into. Only the read-only data is read, not the
+whole file: a string constant is the one section the linker could have put it
+in, and the executable says where that is. Without that, half of these (`ls`, `df`,
 `ping`) would start with nowhere for their output to go and Enter would look
 like it had done nothing. **Shift+Enter** runs it the other way, for the times
 the answer is wrong.

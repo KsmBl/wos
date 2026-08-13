@@ -797,13 +797,23 @@ def check_launcher(m):
     def selection(shot):
         return shot.blocks("#3584e4", min_w=200, min_h=15)
 
-    m.mon.cmd("sendkey meta_l-q", wait=4)
+    # Two seconds is a long time and this has to be well inside it: the list is
+    # one directory read, and the executables behind it are read after the
+    # window is up rather than before.  Checking fifty of them first put the
+    # whole of that on the near side of the first frame, which is the shape of
+    # regression this catches.
+    m.mon.cmd("sendkey meta_l-q", wait=0)
     time.sleep(2)
     shot = m.mon.screen("wauncher")
 
     expect(shot.count("#f6f5f4") > shot.w * shot.h // 4,
-           "Super+Q did not put a window on the screen")
+           "Super+Q did not put a window on the screen within two seconds")
     expect(selection(shot), "wauncher listed nothing")
+
+    # And the tags arrive on their own, without anything being pressed.
+    time.sleep(2.5)
+    expect(m.mon.screen("tagged").count("#8a8e8f") > 200,
+           "the rows never said whether they open a window or print")
 
     # A query nothing can match empties the list, which is the whole of the
     # filtering visible in one picture: no row, so no selection.
