@@ -190,6 +190,8 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   real hardware
 - [`docs/building.md`](docs/building.md) — building, running, debugging, and
   adding an application
+- [`docs/self-hosting.md`](docs/self-hosting.md) — the plan for compiling WOS
+  on WOS: a C compiler, a `make`, and what has to exist under them first
 
 ## Testing
 
