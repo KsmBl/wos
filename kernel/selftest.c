@@ -13,6 +13,7 @@
 #include "ata.h"
 #include "wfs_kernel.h"
 #include "ramfs.h"
+#include "rtc.h"
 #include "proc.h"
 #include "sched.h"
 #include "socket.h"
@@ -331,6 +332,28 @@ static void test_filesystem_write(void)
           "the free block count dropped after writing");
 
     kfree(data);
+
+    /* The time the write left behind.  Comparing it against the clock rather
+     * than against a time taken before the write means this does not depend on
+     * how long the write took; a second either side is the resolution of the
+     * clock itself.
+     *
+     * Then the same file is made deliberately ancient and written again, which
+     * is the part that matters to make: a write has to move the time, and
+     * waiting a second at boot to prove it is not a trade worth making. */
+    struct wfs_inode stamped;
+    uint32_t now = rtc_epoch();
+
+    if (wfs_read_inode(ino, &stamped) == 0)
+        check(stamped.mtime != 0 && stamped.mtime + 2 >= now &&
+              stamped.mtime <= now + 2,
+              "a written file carries the time from the clock");
+
+    wfs_utime(ino, 1);
+    wfs_write(ino, 0, "x", 1);
+
+    if (wfs_read_inode(ino, &stamped) == 0)
+        check(stamped.mtime > 1, "writing it again moves the time forward");
 
     r = wfs_unlink(path);
     check(r == 0, "the file can be deleted");
