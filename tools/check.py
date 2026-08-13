@@ -1001,6 +1001,50 @@ def check_resize(m):
            "htop did not grow back with the window")
 
 
+@scenario("make", "make rebuilds what changed, and only what changed")
+def check_make(m):
+    m.login_console()
+    m.run("cd /home/root/example")
+
+    # The example ships without report.txt, so the first make has to build it.
+    out = m.run("make", settle=2.5)
+    expect("touch report.txt" in out, "make did not run the recipe: " + out)
+    expect("Error" not in out and "***" not in out, "make failed: " + out)
+
+    out = m.run("ls")
+    expect("report.txt" in out, "the target was not created: " + out)
+
+    # Nothing has changed since, so nothing should happen.
+    out = m.run("make", settle=2)
+    expect("up to date" in out, "make rebuilt something for no reason: " + out)
+    expect("touch report.txt" not in out,
+           "make ran the recipe again with nothing changed: " + out)
+
+    # Touching what it is built from is exactly the change it must notice.
+    m.run("touch greeting.txt")
+    out = m.run("make", settle=2.5)
+    expect("touch report.txt" in out,
+           "make missed a changed prerequisite: " + out)
+
+    # -n says what it would do without doing it, and .PHONY targets always run.
+    m.run("touch greeting.txt")
+    out = m.run("make -n", settle=2)
+    expect("touch report.txt" in out, "-n printed nothing: " + out)
+
+    out = m.run("make show", settle=2.5)
+    expect("cat report.txt" in out,
+           "a phony target did not run its recipe: " + out)
+
+    out = m.run("make clean", settle=2.5)
+    out = m.run("ls")
+    expect("report.txt" not in out, "make clean left the target: " + out)
+
+    # A variable given on the command line beats the one in the file.
+    out = m.run("make REPORT=other.txt", settle=2.5)
+    expect("touch other.txt" in out,
+           "a command-line variable did not override the Makefile: " + out)
+
+
 # ------------------------------------------------------------------ #
 #  Running them
 # ------------------------------------------------------------------ #
