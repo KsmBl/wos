@@ -2748,3 +2748,42 @@ memory; the stream code is where the difference between the two would show.
 
 **Exit status:** 0 if every check passed, 1 otherwise.
 
+
+# wcc
+
+```
+wcc [-c] [-o out] [-I dir] [-D name[=value]] [-E] input...
+```
+
+The C compiler. Reads C, writes ELF64 objects, links them into executables this
+machine runs — and compiles itself. [`docs/wcc.md`](wcc.md) is the full
+description; this is how to use it.
+
+| Option | Effect |
+|---|---|
+| `-c` | compile each input to an object; do not link |
+| `-o out` | where to put the result |
+| `-I dir` | look here for `#include <...>` |
+| `-D n[=v]` | define a macro before reading anything |
+| `-E` | preprocess only, and print the result |
+| `-T file` | accepted and ignored: the layout of a WOS program is fixed |
+
+Inputs ending in `.c` are compiled; `.o` and `.a` are for the linker. Options it
+does not know — `-g`, `-O2`, `-Wall` — are named and ignored.
+
+```
+root@wos:/app/hello/sourcecode# wcc -c hello.c -o /ramdisk/hello.o
+root@wos:/app/hello/sourcecode# wcc /ramdisk/hello.o /lib/libc.a /lib/libwkernel.a -o /ramdisk/hello
+root@wos:/app/hello/sourcecode# /ramdisk/hello
+hello: pid 8, argc 1 argv[0]=/ramdisk/hello
+```
+
+In practice nobody types that: every `/app/<name>/sourcecode` has a generated
+Makefile that says it already, so the way to rebuild a program on the machine
+is to edit it and run `make`.
+
+It searches `/lib/wcc/include` before `/include`, because `<stddef.h>` and its
+three neighbours describe the language rather than the library and belong to the
+compiler.
+
+**Exit status:** 0, or 1 with a message naming the file and line.
