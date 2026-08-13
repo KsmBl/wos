@@ -202,9 +202,29 @@ make log        # "this is boot number 3"
    `int main(int argc, char **argv)`.
 3. `make`
 
-It is compiled as an ELF64 binary, linked against `libwkernel.a` at
-`0x40000000`, and installed at
-`/app/<name>/launch`. In whell, type `<name>` to run it.
+It is compiled as an ELF64 binary, linked against `libwkernel.a` and `libc.a`
+at `0x40000000`, and installed at `/app/<name>/launch` with its source and a
+generated Makefile beside it. In whell, type `<name>` to run it.
 
 `app/hello/sourcecode/hello.c` is a worked example that exercises most of the
 API.
+
+The standard C headers are available too — `<stdio.h>`, `<stdlib.h>`,
+`<string.h>` and the rest of [`docs/libc.md`](libc.md) — for a program ported
+from Unix rather than written for this machine. `app/ctest/sourcecode/ctest.c`
+is written that way and includes no WOS header at all, and so is the compiler
+in `app/wcc`.
+
+An application can also be built **on the machine**: every
+`/app/<name>/sourcecode` gets a generated Makefile, so editing the source there
+and running `make` rebuilds it with [`wcc`](wcc.md). The host build and the
+machine build produce different code from the same source — gcc's is faster,
+wcc's is the one WOS can make for itself.
+
+Applications are compiled with **`-nostdinc`**: the host's `/usr/include` is
+not on the search path, so a WOS program cannot accidentally be built against
+the host's C library. What is still available is gcc's own freestanding
+headers — `<stddef.h>`, `<stdarg.h>`, `<stdint.h>`, `<stdbool.h>` — which
+belong to the compiler rather than to any library. `<limits.h>` is
+`lib/wlibc`'s, because gcc's version hands the actual numbers over to the
+host's.

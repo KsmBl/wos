@@ -340,7 +340,8 @@ APP_SRC    := $(shell find app -type f 2>/dev/null)
 
 disk: $(DISK)
 
-$(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(ROOTFS_SRC) $(APP_SRC) $(DISK_STAMP)
+$(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(LIBW) $(LIBC) $(ROOTFS_SRC) \
+         $(APP_SRC) tools/appmakefile.sh $(DISK_STAMP)
 	@rm -rf $(ROOTFS)
 	@mkdir -p $(ROOTFS)
 	@cp -r rootfs/. $(ROOTFS)/
@@ -349,19 +350,46 @@ $(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(ROOTFS_SRC) $(APP_SRC) $(DISK_STAMP)
 	@mkdir -p $(ROOTFS)/ramdisk
 	@# Stripped on the way in, the same way the kernel is.  Debug information
 	@# is for the build tree, where it is still there for gdb; on the disk it
-	@# is dead weight that the 268 KiB per-file ceiling eventually refuses --
+	@# is dead weight that the 267 KiB per-file ceiling eventually refuses --
 	@# sway is 88 KiB of program and 300 KiB with its symbols attached.
+	@# Each application's source arrives with a Makefile that rebuilds it,
+	@# written by tools/appmakefile.sh rather than by hand -- fifty-two
+	@# hand-written ones are fifty-two chances for one to drift.  It is
+	@# generated at every build, so a file added to an application is in its
+	@# Makefile without anybody remembering to put it there.
 	@for a in $(APPS); do \
 	    mkdir -p $(ROOTFS)/app/$$a/sourcecode; \
 	    objcopy --strip-debug $(BUILD)/app/$$a/launch $(ROOTFS)/app/$$a/launch; \
 	    cp app/$$a/sourcecode/* $(ROOTFS)/app/$$a/sourcecode/; \
+	    tools/appmakefile.sh $$a app/$$a/sourcecode \
+	        > $(ROOTFS)/app/$$a/sourcecode/Makefile; \
 	done
 	@# /kernel gets the stripped binary and the source it came from. Stripped
-	@# because the debug build is close to the 268 KiB per-file ceiling.
+	@# because the debug build is close to the 267 KiB per-file ceiling.
 	@mkdir -p $(ROOTFS)/kernel/sourcecode
 	@objcopy --strip-debug $(KERNEL) $(ROOTFS)/kernel/kernel.elf
 	@find kernel include -name '*.c' -o -name '*.h' -o -name '*.S' \
 	    | while read f; do cp "$$f" $(ROOTFS)/kernel/sourcecode/; done
+	@# The toolchain's own half: what a program on this machine would have to
+	@# compile and link against.  A compiler running here can find `wprintf`
+	@# only if something on the disk has heard of it, and until these two
+	@# directories exist nothing has.
+	@#
+	@# Stripped for the same reason the binaries are, and more urgently: the
+	@# archive is 347 KiB with its debug information and 117 KiB without, and
+	@# WFS holds 267 KiB in one file.
+	@mkdir -p $(ROOTFS)/lib $(ROOTFS)/include
+	@objcopy --strip-debug $(LIBW) $(ROOTFS)/lib/libwkernel.a
+	@objcopy --strip-debug $(LIBC) $(ROOTFS)/lib/libc.a
+	@cp lib/wkernel/include/*.h $(ROOTFS)/include/
+	@cp lib/wlibc/include/*.h $(ROOTFS)/include/
+	@cp include/wabi.h $(ROOTFS)/include/
+	@cp lib/wkernel/user.ld $(ROOTFS)/lib/user.ld
+	@# The compiler's own headers -- stddef.h and the three beside it, which
+	@# describe the language rather than the library and so belong to wcc.
+	@# It looks here before /include.
+	@mkdir -p $(ROOTFS)/lib/wcc/include
+	@cp app/wcc/include/*.h $(ROOTFS)/lib/wcc/include/
 	$(MKWFS) $@ $(DISK_MB) $(ROOTFS)
 
 QEMU := qemu-system-x86_64
