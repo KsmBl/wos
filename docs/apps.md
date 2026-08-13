@@ -564,7 +564,7 @@ here:
 | thunar | GTK, GLib, GIO and gvfs, an icon theme, a MIME database, a mouse |
 
 WOS has a 30-call kernel API, no `fork`, no signals, no `termios`, no dynamic
-linking, and a 268 KiB limit on any single file. Building the real thing would
+linking, and a 267 KiB limit on any single file. Building the real thing would
 mean writing a POSIX layer several times the size of the whole system.
 
 What is here instead: each program does what the original is *for*, using the
@@ -2461,7 +2461,7 @@ skip any of it.
 has no such call: writes reach the disk as they are made. `--hdd` is the disk
 test.
 
-`--hdd-bytes` is capped at 256K because WFS holds at most 268 KiB in one file.
+`--hdd-bytes` is capped at 256K because WFS holds at most 267 KiB in one file.
 A larger figure is lowered, with a line saying so, rather than failing.
 
 **Exit status:** 0 if every worker finished cleanly, 1 if any failed or if
