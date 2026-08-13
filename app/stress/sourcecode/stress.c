@@ -37,7 +37,7 @@ static const char *hog_name(enum hog h)
     return h == HOG_CPU ? "cpu" : h == HOG_VM ? "vm" : "hdd";
 }
 
-/* WFS caps a file at 268 KiB, so a disk worker writes something that fits and
+/* WFS caps a file at 267 KiB, so a disk worker writes something that fits and
  * writes it over and over rather than writing one enormous file. */
 #define HDD_MAX_BYTES (256u * 1024u)
 

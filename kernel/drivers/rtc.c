@@ -88,6 +88,49 @@ void rtc_read(wtime_t *out)
     out->year   = 2000 + year;          /* two-digit register, this century */
 }
 
+/* Days from 1970-01-01 to the first of the given month.
+ *
+ * Counted rather than looked up, because the leap-year rule is three lines and
+ * a table for 136 years is not.  The year is stepped through one at a time,
+ * which for a clock that starts in this century is under a hundred iterations
+ * of an addition -- and it is a great deal easier to check than the closed form
+ * that does it without a loop. */
+static uint32_t days_before(int year, int month, int day)
+{
+    static const int month_days[12] = { 31, 28, 31, 30, 31, 30,
+                                        31, 31, 30, 31, 30, 31 };
+    uint32_t days = 0;
+
+    for (int y = 1970; y < year; y++)
+        days += ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0) ? 366 : 365;
+
+    for (int m = 1; m < month; m++) {
+        days += (uint32_t)month_days[m - 1];
+        if (m == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0))
+            days++;
+    }
+
+    return days + (uint32_t)(day - 1);
+}
+
+uint32_t rtc_epoch(void)
+{
+    wtime_t t;
+    rtc_read(&t);
+
+    /* A clock that has never been set can report something before the epoch or
+     * a date that does not exist, and an unsigned count of seconds can hold
+     * neither.  Zero is the honest answer, and it is the same one an inode that
+     * was never written gives. */
+    if (t.year < 1970 || t.month < 1 || t.month > 12 || t.day < 1 || t.day > 31)
+        return 0;
+
+    uint32_t days = days_before(t.year, t.month, t.day);
+
+    return days * 86400u + (uint32_t)t.hour * 3600u
+         + (uint32_t)t.minute * 60u + (uint32_t)t.second;
+}
+
 void rtc_set(const wtime_t *t)
 {
     uint8_t status_b = cmos_read(REG_STATUS_B);

@@ -25,6 +25,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <unistd.h>
+#include <time.h>
 
 #include "wfs.h"
 
@@ -79,6 +80,11 @@ static uint32_t block_alloc(void)
     return 0;
 }
 
+/* When the image was built.  Directories and anything without a host file of
+ * its own get this, so that every inode on a fresh volume has a time rather
+ * than a zero that `ls -l` would have to print as a blank. */
+static uint32_t build_time;
+
 static uint32_t inode_alloc(uint16_t type)
 {
     for (uint32_t i = WFS_ROOT_INO; i < sb->total_inodes; i++) {
@@ -86,6 +92,7 @@ static uint32_t inode_alloc(uint16_t type)
             memset(&inodes[i], 0, sizeof(inodes[i]));
             inodes[i].type  = type;
             inodes[i].links = 1;
+            inodes[i].mtime = build_time;
             sb->free_inodes--;
             return i;
         }
@@ -208,6 +215,14 @@ static void add_host_file(uint32_t parent, const char *name, const char *path)
     if (size > 0)
         file_write(ino, 0, data, (uint32_t)size);
     inodes[ino].size = (uint32_t)size;
+
+    /* The host file's own time, not the time the image was built: a source file
+     * copied in unchanged is not a file that just changed, and a make on the
+     * machine would rebuild the whole tree at first boot if it were. */
+    struct stat st;
+    if (stat(path, &st) == 0 && st.st_mtime > 0)
+        inodes[ino].mtime = (uint32_t)st.st_mtime;
+
     dir_add(parent, name, ino);
 
     free(data);
@@ -262,6 +277,8 @@ int main(int argc, char **argv)
 
     if (size_mb < 1)
         die("image must be at least 1 MiB");
+
+    build_time = (uint32_t)time(NULL);
 
     image_blocks = (uint32_t)((uint64_t)size_mb * 1024u * 1024u / WFS_BLOCK_SIZE);
 

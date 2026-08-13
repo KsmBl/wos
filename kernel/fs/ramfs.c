@@ -11,6 +11,7 @@
  */
 
 #include "ramfs.h"
+#include "rtc.h"
 #include "kheap.h"
 #include "pmm.h"
 #include "paging.h"
@@ -25,6 +26,7 @@ typedef struct ramfs_node {
     uint32_t ino;
     uint16_t type;                       /* WFS_TYPE_FILE or WFS_TYPE_DIR */
     uint32_t size;
+    uint32_t mtime;                      /* seconds since 1970, from the RTC */
 
     char     name[W_NAME_MAX + 1];
     struct ramfs_node *parent;
@@ -65,6 +67,7 @@ static ramfs_node_t *node_new(const char *name, uint16_t type,
     n->ino    = next_ino++;
     n->type   = type;
     n->parent = parent;
+    n->mtime  = rtc_epoch();
     strlcpy(n->name, name, sizeof(n->name));
 
     if (parent) {
@@ -267,6 +270,7 @@ int ramfs_read_inode(uint32_t ino, struct wfs_inode *out)
     out->type   = n->type;
     out->links  = 1;
     out->size   = n->size;
+    out->mtime  = n->mtime;
 
     /* In blocks of the size the rest of the system counts in, so that `df` and
      * `stat` do not have to know this filesystem uses pages. */
@@ -347,6 +351,7 @@ int ramfs_write(uint32_t ino, uint32_t offset, const void *buf, uint32_t len)
     if (done == 0 && len > 0)
         return -W_ENOSPC;
 
+    n->mtime = rtc_epoch();
     return (int)done;
 }
 
@@ -372,6 +377,12 @@ int ramfs_create(const char *path, uint16_t type, uint32_t *ino_out)
     ramfs_node_t *n = node_new(name, type, parent);
     if (!n)
         return -W_ENOSPC;
+
+    /* A directory here is a list of children rather than a file of entries, so
+     * nothing writes to the parent and its time has to be set by hand -- on the
+     * disk the same thing happens by itself, because adding a name there *is* a
+     * write. */
+    parent->mtime = n->mtime;
 
     if (ino_out)
         *ino_out = n->ino;
@@ -415,6 +426,7 @@ int ramfs_unlink(const char *path)
 
     detach(parent, n);
     destroy(n);
+    parent->mtime = rtc_epoch();
     return 0;
 }
 
@@ -465,6 +477,10 @@ int ramfs_rename(const char *from, const char *to)
     n->next            = to_parent->children;
     to_parent->children = n;
 
+    /* Both directories changed -- one lost a name and one gained it -- and the
+     * file itself did not: its contents are exactly what they were. */
+    from_parent->mtime = to_parent->mtime = rtc_epoch();
+
     return 0;
 }
 
@@ -475,7 +491,18 @@ int ramfs_truncate(uint32_t ino)
         return -W_ENOENT;
 
     blocks_release(n, 0);
-    n->size = 0;
+    n->size  = 0;
+    n->mtime = rtc_epoch();
+    return 0;
+}
+
+int ramfs_utime(uint32_t ino, uint32_t mtime)
+{
+    ramfs_node_t *n = node_of(ino);
+    if (!n)
+        return -W_ENOENT;
+
+    n->mtime = mtime;
     return 0;
 }
 

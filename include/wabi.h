@@ -92,6 +92,12 @@ typedef struct {
     uint32_t size;       /* size in bytes                              */
     uint32_t blocks;     /* disk blocks the file occupies              */
     uint32_t type;       /* W_FT_FILE or W_FT_DIR                      */
+
+    /* When the contents last changed, in seconds since 1970-01-01 UTC, from
+     * the machine's clock.  Zero on a file whose time is not known -- one made
+     * while the clock was unset.  This is what tells `make` that a target is
+     * older than what it was built from. */
+    uint32_t mtime;
 } wstat_t;
 
 typedef struct {
@@ -663,7 +669,8 @@ typedef struct {
 #define WSYS_RENAME     77
 #define WSYS_KILL       78
 #define WSYS_REBOOT     79
-#define WSYS_MAX        80
+#define WSYS_UTIME      80
+#define WSYS_MAX        81
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

@@ -9,6 +9,7 @@
 #include "pit.h"
 #include "wfs_kernel.h"
 #include "ramfs.h"
+#include "rtc.h"
 #include "keyboard.h"
 #include "kheap.h"
 #include "string.h"
@@ -964,7 +965,32 @@ int vfs_stat(struct process *p, const char *path, wstat_t *out)
     out->size   = in.size;
     out->blocks = in.blocks;
     out->type   = in.type;
+    out->mtime  = in.mtime;
     return 0;
+}
+
+/* Say a file changed now, without changing it.
+ *
+ * `touch` on a file that already exists has nothing to write -- that is the
+ * whole point of it -- so there has to be a way to move the time on its own.
+ * It is the caller's own clock reading that is stored, taken here rather than
+ * passed in, because a process that could name the time could make a target
+ * look older or newer than it is and quietly break every build after it. */
+int vfs_utime(struct process *p, const char *path)
+{
+    char abs[W_PATH_MAX + 1];
+    int  r = resolve_for_write(p, path, abs, sizeof(abs));
+    if (r < 0)
+        return r;
+
+    uint32_t ino;
+    r = fs_lookup(abs, &ino);
+    if (r < 0)
+        return r;
+
+    uint32_t now = rtc_epoch();
+
+    return ramfs_owns(abs) ? ramfs_utime(ino, now) : wfs_utime(ino, now);
 }
 
 int vfs_unlink(struct process *p, const char *path)

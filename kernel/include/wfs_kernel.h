@@ -59,6 +59,10 @@ int wfs_rename(const char *from, const char *to);
 /* Release every block of a file and set its size to zero. */
 int wfs_truncate(uint32_t ino);
 
+/* Set the modification time, without writing anything else -- what `touch` on
+ * a file that already exists has to do, since it changes no contents. */
+int wfs_utime(uint32_t ino, uint32_t mtime);
+
 /* Read directory entry number `index` (0-based, skipping free slots).
  * Returns 1 when an entry was produced, 0 at the end of the directory. */
 int wfs_readdir(uint32_t ino, uint32_t index, wdirent_t *out);

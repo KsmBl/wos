@@ -518,10 +518,27 @@ tool, so the two cannot drift apart):
 | inode table | 64-byte inodes, 16 per block |
 | data | file and directory contents |
 
-Blocks are 1 KiB. A file reaches 268 KiB through 12 direct blocks and one
+Blocks are 1 KiB. A file reaches 267 KiB through 11 direct blocks and one
 indirect block. Directories are files holding fixed 32-byte records, so
 reading one needs no variable-length parsing, and `.` and `..` are real entries
 so path resolution has no special cases.
+
+An inode also carries `mtime`: when its contents last changed, in seconds since
+1970, read from the CMOS clock by whatever wrote it. Eleven direct blocks
+rather than the twelve a Unix inode traditionally has is where that field came
+from — the inode is 64 bytes so that sixteen fit in a block with nothing left
+over, and it was exactly full. The kilobyte of maximum file size it costs is
+the cheapest thing in the structure; the largest file on the disk is the kernel
+at about 216 KiB. It is what `wstat()` reports, what `ls -l` prints, and what
+`make` compares to decide whether a target is out of date.
+
+**This changed the on-disk layout**, so the magic went from `WFS1` to `WFS2`
+and an image built by an older `mkwfs` is refused at mount with a line in the
+boot log saying to rebuild it. It is not read with the field treated as zero,
+because the field is *before* the block pointers rather than after them: an old
+volume read by this driver would find file contents wherever a block number
+used to be. Rebuilding is `make` — the disk image is a build product, and
+nothing on a development machine outlives one.
 
 Bitmap and superblock changes are written straight back rather than cached:
 there is no fsck here, so a volume that loses its free list on a hard reset is

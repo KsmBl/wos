@@ -163,6 +163,7 @@ static int64_t sys_path_only(uint64_t path,
 }
 
 static int64_t sys_unlink(uint64_t path)  { return sys_path_only(path, vfs_unlink); }
+static int64_t sys_utime(uint64_t path)   { return sys_path_only(path, vfs_utime); }
 static int64_t sys_mkdir(uint64_t path)   { return sys_path_only(path, vfs_mkdir); }
 static int64_t sys_rmdir(uint64_t path)   { return sys_path_only(path, vfs_rmdir); }
 static int64_t sys_chdir(uint64_t path)   { return sys_path_only(path, vfs_chdir); }
@@ -1254,6 +1255,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_WRITE:     r = sys_write(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_LSEEK:     r = sys_lseek(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_STAT:      r = sys_stat(regs->rdi, regs->rsi); break;
+    case WSYS_UTIME:     r = sys_utime(regs->rdi); break;
     case WSYS_UNLINK:    r = sys_unlink(regs->rdi); break;
     case WSYS_MKDIR:     r = sys_mkdir(regs->rdi); break;
     case WSYS_RMDIR:     r = sys_rmdir(regs->rdi); break;

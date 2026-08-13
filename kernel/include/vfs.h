@@ -88,6 +88,10 @@ int vfs_write(struct process *p, int fd, const void *buf, uint32_t len);
 int vfs_lseek(struct process *p, int fd, int32_t offset, int whence);
 int vfs_stat(struct process *p, const char *path, wstat_t *out);
 
+/* Set a file's modification time to now.  Needs the same permission writing to
+ * it would, since it is what `touch` does to a file that already exists. */
+int vfs_utime(struct process *p, const char *path);
+
 /* Open the keyboard as a stream of key transitions: presses and releases with
  * evdev key codes, rather than the lines or characters the console makes of
  * them.  Reads come back as whole winput_t records, and the descriptor can be

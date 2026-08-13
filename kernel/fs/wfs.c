@@ -13,6 +13,7 @@
 #include "kheap.h"
 #include "string.h"
 #include "kprintf.h"
+#include "rtc.h"
 
 static struct wfs_superblock sb;
 static uint8_t              *block_bitmap;   /* sb.bitmap_blocks * BLOCK_SIZE */
@@ -176,6 +177,7 @@ static int inode_alloc(uint16_t type, uint32_t *ino_out)
         memset(&in, 0, sizeof(in));
         in.type  = type;
         in.links = 1;
+        in.mtime = rtc_epoch();
 
         int r = write_inode(i, &in);
         if (r < 0)
@@ -199,6 +201,17 @@ static void inode_free(uint32_t ino)
 
     sb.free_inodes++;
     sync_superblock();
+}
+
+int wfs_utime(uint32_t ino, uint32_t mtime)
+{
+    struct wfs_inode in;
+    int r = wfs_read_inode(ino, &in);
+    if (r < 0)
+        return r;
+
+    in.mtime = mtime;
+    return write_inode(ino, &in);
 }
 
 /* ------------------------------------------------------------------ *
@@ -294,6 +307,7 @@ int wfs_truncate(uint32_t ino)
 
     in.size   = 0;
     in.blocks = 0;
+    in.mtime  = rtc_epoch();
     return write_inode(ino, &in);
 }
 
@@ -390,6 +404,17 @@ int wfs_write(uint32_t ino, uint32_t offset, const void *buf, uint32_t len)
         in.size = offset + done;
         dirty = true;
     }
+
+    /* Any write at all changes the modification time, even one that overwrote
+     * bytes in a block the file already had -- which is the case the size and
+     * the block list would otherwise have nothing to say about.  It is also
+     * what gives a directory a time: adding and removing names is a write to
+     * the directory's own contents. */
+    if (done > 0) {
+        in.mtime = rtc_epoch();
+        dirty = true;
+    }
+
     if (dirty)
         write_inode(ino, &in);
 
@@ -814,7 +839,14 @@ bool wfs_on_ramdisk(void) { return source == WFS_SOURCE_RAMDISK; }
 
 wfs_source_t wfs_source(void) { return source; }
 
-/* Read the first block of the volume and keep it if it is a WFS superblock. */
+/* Read the first block of the volume and keep it if it is a WFS superblock.
+ *
+ * A volume from before inodes had a modification time is recognised and
+ * refused: its block pointers are one field earlier than this driver looks for
+ * them, so mounting it would find file contents wherever a block number
+ * happened to land.  Saying which build made it, and what to do about it, is
+ * worth the four lines -- the alternative is an unmountable disk with no
+ * explanation. */
 static bool superblock_ok(void)
 {
     uint8_t buf[WFS_BLOCK_SIZE];
@@ -823,6 +855,13 @@ static bool superblock_ok(void)
         return false;
 
     memcpy(&sb, buf, sizeof(sb));
+
+    if (sb.magic == WFS_MAGIC_V1) {
+        kputs("wfs    : this volume predates file times (WFS1); "
+              "rebuild the image with make\n");
+        return false;
+    }
+
     return sb.magic == WFS_MAGIC;
 }
 
