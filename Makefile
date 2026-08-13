@@ -325,7 +325,11 @@ QEMU := qemu-system-x86_64
 KVM := $(shell test -w /dev/kvm 2>/dev/null && echo "-enable-kvm -cpu host")
 # An RTL8139 on QEMU's user-mode (SLIRP) network gives the guest 10.0.2.15 with
 # a gateway at 10.0.2.2 that answers ARP and ping -- what the net stack targets.
-QEMU_FLAGS := $(KVM) -m $(QEMU_MEM) \
+# How many processors the emulated machine has.  Four, because the point of
+# starting them is lost on one and four fits on any host that can run this.
+QEMU_CPUS ?= 4
+
+QEMU_FLAGS := $(KVM) -m $(QEMU_MEM) -smp $(QEMU_CPUS) \
               -cdrom $(ISO) \
               -drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
               -netdev user,id=net0 -device rtl8139,netdev=net0 \

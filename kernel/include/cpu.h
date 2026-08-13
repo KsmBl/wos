@@ -6,11 +6,10 @@
  *   how fast one is going measured from the performance counters each tick
  *   how hot it is         the digital thermal sensor, read on demand
  *
- * Only the boot processor is ever running WOS code, so it is the only one with
- * anything to report.  The others are listed because they are part of the
- * machine and a program showing the CPU should say so rather than claim the
- * box has one core; when WOS learns to start them, they fill in here and
- * nothing above this file has to change.
+ * Every processor runs WOS code now, so every one of them has something to
+ * report: the busy and idle ticks are charged to the core the timer fired on,
+ * and each core answers for its own clock.  One that could not be started is
+ * still listed, present and offline -- it is part of the machine either way.
  */
 #ifndef WOS_CPU_H
 #define WOS_CPU_H
@@ -25,6 +24,10 @@ void cpu_init(void);
 /* Sample the performance counters and account the tick to whichever core it
  * happened on.  Called from the timer interrupt; a no-op before cpu_init(). */
 void cpu_tick(void);
+
+/* Say that WOS is now executing on the processor with this APIC id, so that
+ * anything listing the machine's cores stops calling it offline. */
+void cpu_set_online(uint32_t apic_id);
 
 /* Fill in what is true of the machine as a whole. */
 void cpu_info(wcpuinfo_t *out);

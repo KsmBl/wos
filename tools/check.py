@@ -319,7 +319,7 @@ class Machine:
               else []
 
         self.qemu = subprocess.Popen([
-            "qemu-system-x86_64", *kvm, "-m", "256M",
+            "qemu-system-x86_64", *kvm, "-m", "256M", "-smp", "4",
             "-cdrom", os.path.join(BUILD, "wos.iso"),
             "-drive", "file=%s,format=raw,if=ide,index=0,media=disk"
                       % os.path.join(BUILD, "wos.img"),
@@ -843,6 +843,37 @@ def check_launcher(m):
     # half as wide and the sidebar unrendered.
     expect(shot.blocks("#ebe8e6", min_w=60, min_h=100),
            "the launcher was still holding half the screen afterwards")
+
+
+@scenario("smp", "every processor is started and the machine runs on all of them")
+def check_smp(m):
+    m.wait_for("smp    :", 90, "the processors to be started")
+    time.sleep(1)
+
+    log = m.log()
+
+    # Started, and all of them: a machine that brought up three of four would
+    # still boot and still work, which is exactly why it needs saying.
+    started = re.search(r"smp    : (\d+) of (\d+) processors running", log)
+    expect(started, "the kernel never said how many processors it started")
+    expect(started.group(1) == started.group(2),
+           "only %s of %s processors started" % started.groups())
+    expect(int(started.group(2)) > 1,
+           "the emulated machine only has one processor to start")
+
+    # And the machine agrees afterwards: htop draws a meter per core, from the
+    # same list `ps` and fastfetch read, so four meters is the kernel and the
+    # programs on top of it telling the same story.
+    m.login_console()
+    m.mon.type("htop\n")
+    time.sleep(3)
+    screen = m.log()
+    m.mon.type("q")
+    time.sleep(1.5)
+
+    cores = int(started.group(2))
+    for n in range(cores):
+        expect("CPU%d" % n in screen, "htop has no meter for cpu%d" % n)
 
 
 # ------------------------------------------------------------------ #

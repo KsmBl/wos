@@ -6,6 +6,7 @@
 #include "sched.h"
 #include "kheap.h"
 #include "kprintf.h"
+#include "lapic.h"
 #include "string.h"
 
 /* ------------------------------------------------------------------ *
@@ -578,12 +579,38 @@ static void sample_clock(struct core *c)
     c->clock_source = W_CLOCK_APERF;
 }
 
+/* The core this is running on, by the id the processor answers with.  Falls
+ * back to the boot core before the local APIC is up, which is the only core
+ * running anything then anyway. */
+static struct core *this_core(void)
+{
+    if (lapic_present()) {
+        uint32_t id = lapic_id();
+
+        for (int i = 0; i < core_count; i++)
+            if (cores[i].apic_id == id)
+                return &cores[i];
+    }
+
+    return &cores[boot_core];
+}
+
+void cpu_set_online(uint32_t apic_id)
+{
+    for (int i = 0; i < core_count; i++)
+        if (cores[i].apic_id == apic_id)
+            cores[i].online = true;
+}
+
 void cpu_tick(void)
 {
     if (!ready)
         return;
 
-    struct core *c = &cores[boot_core];
+    /* Charged to the core the tick happened on.  Every core has a timer of
+     * its own now, so the answer is different on each of them -- which is
+     * what makes a meter per core mean anything. */
+    struct core *c = this_core();
 
     if (sched_current_is_idle())
         c->idle_ticks++;
@@ -634,7 +661,15 @@ void cpu_info(wcpuinfo_t *out)
     memset(out, 0, sizeof(*out));
 
     out->count      = core_count;
-    out->online     = ready ? 1 : 0;
+    /* However many are actually executing WOS code, which is what a program
+     * asking wants to know: it was always one, and now it is however many
+     * smp_init() managed to start. */
+    int online = 0;
+    for (int i = 0; i < core_count; i++)
+        if (cores[i].online)
+            online++;
+
+    out->online     = ready ? (uint32_t)(online ? online : 1) : 0;
     out->tick_hz    = PIT_HZ;
     out->base_khz   = base_khz;
     out->min_khz    = min_khz;
@@ -702,9 +737,13 @@ void cpu_print_report(void)
                                       : "settable, through the performance "
                                         "control register");
 
+    /* What is running now.  The rest are started later in the boot, once the
+     * memory and process table they need exist -- smp_init() says so itself
+     * when it has done it. */
     if (core_count > 1)
-        kprintf("cpu    : running on core %d; the other %d are listed but "
-                "never started\n", boot_core, core_count - 1);
+        kprintf("cpu    : booted on core %d of %d; the others are started "
+                "once the kernel is ready for them\n",
+                boot_core, core_count);
 }
 
 void cpu_init(void)

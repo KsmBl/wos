@@ -1,6 +1,7 @@
 /* Four-level paging for x86-64. */
 
 #include "paging.h"
+#include "smp.h"
 #include "pmm.h"
 #include "kheap.h"
 #include "kprintf.h"
@@ -25,7 +26,27 @@ extern uint64_t boot_pdpt[];
 extern uint64_t boot_pd[];
 
 static addrspace_t  kernel_space;
-static addrspace_t *current_space;
+/* Which address space this processor has loaded.
+ *
+ * It was one variable when there was one processor, and it is the kind of
+ * thing that goes wrong quietly rather than loudly when there are four: every
+ * "can this page be touched through its own address" test reads it, and a
+ * global would answer with whatever core switched last.  So it lives beside
+ * the rest of what differs per core.
+ *
+ * `paging_ready` is separate because it is a question about the kernel rather
+ * than about a processor: has paging been set up at all. */
+static bool paging_is_up;
+
+static addrspace_t *this_space(void)
+{
+    return smp_this()->space;
+}
+
+static void set_this_space(addrspace_t *as)
+{
+    smp_this()->space = as;
+}
 
 static inline void invlpg(uint64_t virt)
 {
@@ -170,7 +191,7 @@ bool paging_map(addrspace_t *as, uint64_t virt, uint64_t phys, uint64_t flags)
     if (flags & PTE_USER)
         as->user_frames++;
 
-    if (as == current_space)
+    if (as == this_space())
         invlpg(virt);
 
     return true;
@@ -188,7 +209,7 @@ bool paging_map_alloc(addrspace_t *as, uint64_t virt, uint64_t flags, bool zero)
     }
 
     if (zero) {
-        if (as != current_space)
+        if (as != this_space())
             panic("paging_map_alloc: cannot zero %p in a non-current space",
                   (void *)virt);
         memset((void *)virt, 0, PAGE_SIZE);
@@ -219,7 +240,7 @@ static void unmap(addrspace_t *as, uint64_t virt, bool free_frame)
     if (entry & PTE_USER)
         as->user_frames--;
 
-    if (as == current_space)
+    if (as == this_space())
         invlpg(virt);
 }
 
@@ -288,7 +309,7 @@ bool paging_user_can_access(addrspace_t *as, uint64_t virt, bool need_write)
 }
 
 addrspace_t *paging_kernel_space(void) { return &kernel_space; }
-addrspace_t *paging_current(void)      { return current_space; }
+addrspace_t *paging_current(void)      { return this_space(); }
 
 /* Identity-map a 2 MiB region into the kernel address space with a huge page.
  * Used for a device aperture -- the linear framebuffer -- that lives above the
@@ -310,14 +331,14 @@ bool paging_map_huge(uint64_t virt, uint64_t phys, uint64_t flags)
                        | (flags & (PTE_WRITE | PTE_WC | PTE_UNCACHED))
                        | PTE_HUGE | PTE_PRESENT;
 
-    if (&kernel_space == current_space)
+    if (&kernel_space == this_space())
         invlpg(virt);
     return true;
 }
 
 void paging_switch(addrspace_t *as)
 {
-    current_space = as;
+    set_this_space(as);
     load_cr3((uint64_t)as->pml4);
 }
 
@@ -362,7 +383,7 @@ void paging_free_addrspace(addrspace_t *as)
 {
     if (!as || as == &kernel_space)
         return;
-    if (as == current_space)
+    if (as == this_space())
         panic("paging_free_addrspace: refusing to free the current space");
 
     uint64_t *pdpt = (uint64_t *)FRAME_OF(as->pml4[0]);
@@ -473,7 +494,7 @@ void *paging_map_device(uint64_t phys, uint64_t size)
     return (void *)(virt + offset);
 }
 
-bool paging_ready(void) { return current_space != 0; }
+bool paging_ready(void) { return paging_is_up; }
 
 void paging_init(void)
 {
@@ -483,7 +504,8 @@ void paging_init(void)
     kernel_space.user_frames  = 0;
     kernel_space.table_frames = 3;      /* PML4, PDPT and the identity PD */
 
-    current_space = &kernel_space;
+    set_this_space(&kernel_space);
+    paging_is_up = true;
 
     /* Split the first 2 MiB huge page into 4 KiB pages so that page zero can
      * be left unmapped.  Without this a null dereference would quietly write

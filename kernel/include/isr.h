@@ -33,6 +33,10 @@ typedef void (*interrupt_handler_t)(regs_t *regs);
 
 void idt_init(void);
 
+/* Load the table on this processor.  idt_init() does it for the one that
+ * builds it; every other core calls this when it starts. */
+void idt_load(void);
+
 /* Install the CPU exception handlers (page fault, breakpoint, ...). */
 void traps_init(void);
 

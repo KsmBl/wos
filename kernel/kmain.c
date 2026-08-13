@@ -33,6 +33,7 @@
 #include "battery.h"
 #include "user.h"
 #include "proc.h"
+#include "smp.h"
 #include "sched.h"
 #include "service.h"
 #include "selftest.h"
@@ -321,6 +322,12 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     syscall_init();
     kputs("proc   : scheduler running, syscall gate open\n");
 
+    /* And now the rest of the machine's processors.  Last of the low-level
+     * bring-up, deliberately: everything a started core immediately touches --
+     * the page tables it runs on, the heap its stack came from, the process
+     * table it looks for work in -- has to be there before it can look. */
+    smp_init();
+
     /* Anything the machine is meant to be running, before anyone logs in:
      * that is what makes it a service rather than something you start. */
     service_init();
@@ -428,7 +435,12 @@ static void run_shell(void)
          * without it a stopped service would keep its slot in the process
          * table and its whole address space until the machine went down, and
          * would go on being listed by `ps` after it had exited. */
+        /* Behind the kernel lock like any other kernel work: by now the
+         * other processors are running and one of them may be in the middle
+         * of the process table this walks. */
+        bool took = klock_enter();
         proc_reap_orphans(pid);
+        klock_leave(took);
 
         sti();
         hlt();

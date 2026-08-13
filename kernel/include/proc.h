@@ -64,6 +64,10 @@ typedef struct thread {
     uint64_t        user_entry;
     uint64_t        user_stack;
 
+    /* This is a processor's idle thread.  There is one per core and the
+     * scheduler skips them all when looking for work. */
+    bool            is_idle;
+
     uint64_t        cpu_ticks;
     uint32_t        wake_at;           /* tick to wake on, for WAIT_TIME */
     struct thread  *next;              /* run queue link */
@@ -197,6 +201,12 @@ int32_t proc_reap(int32_t *status);
  * whose exit the loop has to see on its own terms so that it can start
  * another.  Returns how many were reaped. */
 int32_t proc_reap_orphans(int32_t keep);
+
+/* A thread record for a processor that has just started, describing the stack
+ * it is already running on.  It becomes that core's idle thread: the context
+ * the scheduler switches away from and back to, rather than something new to
+ * run. */
+thread_t *proc_make_idle_thread(uint64_t stack_base, uint64_t stack_size);
 
 /* Ask a process to stop, from outside it.
  *

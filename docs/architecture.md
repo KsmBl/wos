@@ -135,10 +135,11 @@ faults on every register it was not told to emulate.
 places.
 
 **How many there are** comes from the ACPI processor list, and from CPUID on a
-machine that has no such list. WOS runs on the processor it booted on and
-never starts the others, so they are reported as present and offline rather
-than left out — a monitor that showed one core on an eight-core machine would
-simply be wrong.
+machine that has no such list. They are all started (see [more than one
+processor](#more-than-one-processor)), and each is marked online as it reports
+in — a core the kernel failed to start is still listed, as present and offline,
+because a monitor that showed one core on an eight-core machine would simply be
+wrong.
 
 **How fast one is going** comes from APERF and MPERF, sampled on every timer
 tick. MPERF counts at the base clock and APERF at whatever the core is really
@@ -153,7 +154,9 @@ but a distance: how many degrees below the point at which this part throttles
 itself the core currently is.
 
 Timer ticks are counted as busy or idle depending on whether the scheduler had
-anything to run, which is where a CPU usage figure comes from.
+anything to run on **that** core — every processor has a timer of its own, so
+the answer differs between them, which is what makes a meter per core mean
+something rather than repeat one number four times.
 
 ## Processes and scheduling
 
@@ -228,6 +231,65 @@ machine went down, and thirty-two stops would have filled the table. The
 kernel's idle loop reaps them, which is the part of an init's job that has to
 be done even by a kernel that is its own init. The login shell is the one child
 it skips: that loop watches for its exit itself, to start another.
+
+## More than one processor
+
+The machine boots on one processor and starts the rest at the end of the boot,
+once the page tables, the heap and the process table they immediately touch all
+exist. A started core repeats `boot.S` in miniature from a page copied into low
+memory — real mode, a GDT, PAE, the long mode bit, paging — with one difference:
+it does not build page tables, it loads the CR3 the boot processor is already
+using, so the kernel is mapped the instant paging comes on. See
+`kernel/arch/trampoline.S`.
+
+Three things had to exist first, and each is small:
+
+- **The local APIC** (`kernel/arch/lapic.c`), because a processor is started by
+  sending it an interrupt, and because a core with no timer of its own would
+  run the first thread it picked up forever. The 8259 and the PIT stay where
+  they are, wired to the boot processor: they are the machine's clock and its
+  keyboard, and one of each is enough. The one trap worth naming is that
+  **enabling the local APIC puts it in front of the legacy interrupt line** —
+  the 8259 then arrives on LINT0, and a masked LINT0 is a machine that halts
+  with interrupts enabled and never wakes up.
+- **Per-processor state** (`kernel/include/smp.h`): which thread this core is
+  running, which idle thread it falls back to, which address space it has in
+  CR3, and a GDT with a TSS of its own — `rsp0` is the stack the core takes its
+  next ring 3 interrupt on, and two cores sharing that would take an interrupt
+  onto the same stack at the same moment.
+- **A lock** (`kernel/include/spinlock.h`). Until now the kernel's mutual
+  exclusion was `cli`, which says nothing at all about what another processor
+  is doing.
+
+### One lock around the kernel
+
+Every way into the kernel — a syscall, an interrupt, a fault — funnels through
+`interrupt_dispatch()`, and that is where the lock is taken and released. So
+kernel code still runs one processor at a time and every assumption it was
+written with still holds; what runs in parallel is **user code**, which is where
+the time goes. Four cores running four programs now run them at once.
+
+It is deliberately the coarse answer. The alternative is a lock per structure —
+the frame allocator, the heap, the filesystem, the console, every driver — and
+getting one of them wrong is not a crash but a corruption that surfaces
+somewhere else an hour later.
+
+The lock is **handed over rather than carried across** a context switch. A core
+that switched while holding it would give the kernel to a thread that never
+asked for it, and a core with nothing to run would hold it while it slept, which
+is the whole machine stopped behind one idle processor. So `schedule()` releases
+it, switches, and takes it again on the other side — and a core with no work
+releases it before it halts.
+
+Two things make this smaller than it sounds. **Every process here has exactly
+one thread**, so no address space is ever loaded on two cores at once and there
+is no TLB shootdown to do. And the kernel's own mappings are shared by every
+core's tables and effectively never change after boot.
+
+What was already per-processor in spirit and had to become so in fact: the
+running thread, the idle thread, the current address space, the GDT and TSS, and
+the busy/idle tick counters — which is what makes [`htop`](apps.md#htop)'s meter
+per core mean anything.
 
 ## Local sockets
 

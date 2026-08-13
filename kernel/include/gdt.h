@@ -44,6 +44,10 @@ struct tss64 {
 
 void gdt_init(void);
 
+/* The same, for a processor other than the one that booted: each has its own
+ * table because each needs its own TSS. */
+void gdt_init_cpu(int cpu);
+
 /* Point the TSS at the kernel stack to use for the next ring 3 -> ring 0
  * transition.  Called by the scheduler on every context switch. */
 void tss_set_kernel_stack(uint64_t rsp0);

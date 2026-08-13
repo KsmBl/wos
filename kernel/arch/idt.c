@@ -2,6 +2,7 @@
 
 #include "isr.h"
 #include "gdt.h"
+#include "lapic.h"
 
 /* Long mode gates are 16 bytes: the handler address is 64-bit and there is an
  * IST field selecting an alternative stack. */
@@ -33,6 +34,8 @@ static struct idt_pointer idtp;
 extern uint64_t isr_stub_table[];
 #define STUB_COUNT 48
 #define STUB_SYSCALL_INDEX 48
+#define STUB_LAPIC_TIMER_INDEX 49
+#define STUB_LAPIC_SPURIOUS_INDEX 50
 
 static void idt_set_gate(uint8_t n, uint64_t handler, uint16_t sel,
                          uint8_t flags)
@@ -59,7 +62,24 @@ void idt_init(void)
     idt_set_gate(INT_SYSCALL, isr_stub_table[STUB_SYSCALL_INDEX],
                  SEL_KCODE, GATE_RING3);
 
+    /* The local APIC's own two: the timer that preempts whichever processor
+     * it belongs to, and the spurious vector the controller raises when it
+     * could not take an interrupt back in time. */
+    idt_set_gate(LAPIC_VECTOR_TIMER, isr_stub_table[STUB_LAPIC_TIMER_INDEX],
+                 SEL_KCODE, GATE_RING0);
+    idt_set_gate(LAPIC_VECTOR_SPURIOUS,
+                 isr_stub_table[STUB_LAPIC_SPURIOUS_INDEX],
+                 SEL_KCODE, GATE_RING0);
+
     idtp.limit = (uint16_t)(sizeof(idt) - 1);
     idtp.base  = (uint64_t)&idt;
+
+    idt_load();
+}
+
+/* Point this processor at the table.  It is built once and shared: a gate says
+ * what code to run, which is the same answer on every core. */
+void idt_load(void)
+{
     __asm__ volatile("lidt %0" : : "m"(idtp));
 }

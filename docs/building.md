@@ -58,6 +58,7 @@ make log TIMEOUT=20
 
 ```sh
 make check                    # every scenario
+make run QEMU_CPUS=1           # boot with one processor instead of four
 make check ARGS=-l            # list them
 make check ARGS="boot mv"     # only these
 ```

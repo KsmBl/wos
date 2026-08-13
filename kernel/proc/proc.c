@@ -142,6 +142,27 @@ void proc_init(void)
     sched_init(idle);
 }
 
+/* The same adoption, for a processor that has just been started.
+ *
+ * It runs on the stack the processor that woke it allocated, and it belongs to
+ * the kernel's own process like the boot context does -- so it is listed
+ * nowhere and billed to nobody, which is what an idle thread should be. */
+thread_t *proc_make_idle_thread(uint64_t stack_base, uint64_t stack_size)
+{
+    thread_t *idle = thread_alloc();
+
+    if (!idle)
+        return NULL;
+
+    idle->proc              = &kernel_proc;
+    idle->kernel_stack      = stack_base;
+    idle->kernel_stack_size = stack_size;
+    idle->state             = THREAD_RUNNING;
+    idle->is_idle           = true;
+
+    return idle;
+}
+
 /* Copy argv into the top of the new process's user stack and return the esp
  * the program should start with.
  *

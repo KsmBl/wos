@@ -4,8 +4,18 @@
 
 #include "types.h"
 #include "proc.h"
+#include "isr.h"
 
 void sched_init(thread_t *idle);
+
+/* Give this processor its idle thread.  sched_init() does it for the one that
+ * boots; every other core does it as it joins. */
+void sched_adopt_idle(thread_t *idle);
+
+/* The thread this processor is running, and the tick that may preempt it.
+ * Both were file-static when there was one processor and one caller. */
+thread_t *sched_current_thread(void);
+void      sched_tick(regs_t *regs);
 
 /* Add a thread to the run queue. */
 void sched_add(thread_t *t);

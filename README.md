@@ -31,9 +31,9 @@ More in [`docs/screenshots/`](docs/screenshots).
 
 ```sh
 make          # build the kernel, the apps, the bootable ISO and the disk image
-make run      # boot it in QEMU (VGA window, serial log on stdio)
+make run      # boot it in QEMU (VGA window, serial log on stdio; QEMU_CPUS=4)
 make log      # boot headless for a few seconds and dump the serial log
-make check    # boot it and check that it works: nine scenarios, ~3 minutes
+make check    # boot it and check that it works: ten scenarios, ~4 minutes
 make clean
 
 sudo tools/flash-usb.sh   # put it on a USB stick and boot it on real hardware
@@ -94,6 +94,13 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   jumps into 64-bit, then four-level paging with a per-process address space, a
   preemptive round-robin scheduler, ring-3 processes loaded from ELF64
   binaries, and `int 0x80` syscalls with every user pointer validated.
+- **Every processor**: the machine's cores are started at the end of the boot
+  with an interrupt and a page of real-mode code that repeats the long mode
+  entry, each getting a local APIC timer, a TSS and an idle thread of its own.
+  Threads are scheduled onto all of them from one run queue, behind a single
+  kernel lock — so user code runs genuinely in parallel while kernel code stays
+  serialised. Four `stress` workers peg four cores. See
+  [`docs/architecture.md`](docs/architecture.md).
 - **USB mass storage**: an xHCI driver and the bulk-only transport, so a machine
   that boots from a USB stick reads and writes that stick directly. See
   [`docs/usb.md`](docs/usb.md).

@@ -45,6 +45,10 @@ isr\n:
 /* The syscall gate. */
 ISR_NOERR 128
 
+/* The local APIC's timer and spurious vectors. */
+ISR_NOERR 240
+ISR_NOERR 255
+
 int_common:
     /* No pusha in long mode: push the fifteen registers by hand, in the
      * order regs_t expects to find them. */
@@ -102,3 +106,5 @@ isr_stub_table:
     .quad isr\n
 .endr
     .quad isr128
+    .quad isr240
+    .quad isr255

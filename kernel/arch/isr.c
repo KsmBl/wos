@@ -2,6 +2,8 @@
 
 #include "isr.h"
 #include "pic.h"
+#include "lapic.h"
+#include "smp.h"
 #include "kprintf.h"
 
 static interrupt_handler_t handlers[256];
@@ -52,9 +54,20 @@ void dump_regs(const regs_t *regs)
     kprintf("  cr2=%016lx cr3=%016lx\n", cr2, cr3);
 }
 
-/* Called from int_common in isr.S with a pointer to the saved state. */
+/* Called from int_common in isr.S with a pointer to the saved state.
+ *
+ * This is every way into the kernel there is -- a fault, a hardware interrupt,
+ * or a program's syscall -- which is what makes it the place to take the
+ * kernel lock.  One processor runs kernel code at a time; the rest run user
+ * code, or wait here.  See smp.h.
+ *
+ * The lock is not taken again if this processor already holds it: a page fault
+ * inside a syscall arrives here on a processor that is already inside the
+ * kernel, and waiting for itself would stop the machine. */
 void interrupt_dispatch(regs_t *regs)
 {
+    bool took = klock_enter();
+
     interrupt_handler_t handler = handlers[regs->int_no & 0xFF];
 
     /* Acknowledge the controller *before* running the handler.  The timer
@@ -65,6 +78,18 @@ void interrupt_dispatch(regs_t *regs)
      * until the iret. */
     if (regs->int_no >= IRQ_BASE && regs->int_no < IRQ_BASE + 16)
         pic_send_eoi((uint8_t)(regs->int_no - IRQ_BASE));
+
+    /* The local APIC has an acknowledgement of its own, for the interrupts it
+     * raised rather than the 8259.  The spurious vector is the exception the
+     * manual is explicit about: it must not be acknowledged, because nothing
+     * was ever really delivered. */
+    if (regs->int_no == LAPIC_VECTOR_TIMER)
+        lapic_eoi();
+
+    if (regs->int_no == LAPIC_VECTOR_SPURIOUS) {
+        klock_leave(took);
+        return;
+    }
 
     if (handler) {
         handler(regs);
@@ -77,4 +102,6 @@ void interrupt_dispatch(regs_t *regs)
     }
     /* Unhandled hardware IRQs are simply ignored; they were acknowledged
      * above, so the controller keeps working. */
+
+    klock_leave(took);
 }
