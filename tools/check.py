@@ -952,55 +952,6 @@ def check_times(m):
            "a file on the disk has no time: " + out)
 
 
-@scenario("resize", "a program in a window follows the window when it changes size")
-def check_resize(m):
-    m.login_desktop()
-
-    # htop, filling the whole screen.  Its table heading is a green bar as
-    # wide as the window, which is what makes this measurable in pixels: how
-    # wide the bar is, is how wide the program thinks it is.
-    m.mon.cmd("sendkey meta_l-ret", wait=5)
-    time.sleep(3)
-    m.mon.type("htop\n")
-    time.sleep(4)
-
-    shot = m.mon.screen("htop-wide")
-    wide = shot.blocks("#00aa00", min_w=100, min_h=8)
-    expect(wide, "htop drew no table heading")
-    full_width = max(b["w"] for b in wide)
-    expect(full_width > shot.w * 8 // 10,
-           "htop's heading is %d pixels of a %d pixel screen before any "
-           "resize" % (full_width, shot.w))
-
-    # A second window: the tiling compositor halves the first one.
-    m.mon.cmd("sendkey meta_l-ret", wait=5)
-    time.sleep(4)
-
-    shot = m.mon.screen("htop-narrow")
-    narrow = shot.blocks("#00aa00", min_w=50, min_h=8)
-    expect(narrow, "htop's table heading is gone after the resize")
-    half_width = max(b["w"] for b in narrow)
-
-    expect(half_width < full_width * 7 // 10,
-           "htop still draws %d pixels wide in a window half that size "
-           "(%d before)" % (half_width, full_width))
-    expect(half_width > full_width // 3,
-           "htop shrank to %d pixels, far below half of %d" %
-           (half_width, full_width))
-
-    # Closing the second window gives the first one the screen back, and the
-    # heading has to grow with it: a program that only ever shrinks is one
-    # that clamped rather than measured.
-    m.mon.cmd("sendkey meta_l-shift-q", wait=3)
-    time.sleep(3)
-
-    shot = m.mon.screen("htop-wide-again")
-    again = shot.blocks("#00aa00", min_w=100, min_h=8)
-    expect(again, "htop's table heading is gone after the window grew")
-    expect(max(b["w"] for b in again) > full_width * 8 // 10,
-           "htop did not grow back with the window")
-
-
 @scenario("make", "make rebuilds what changed, and only what changed")
 def check_make(m):
     m.login_console()
@@ -1142,6 +1093,55 @@ def check_selfhost(m):
     out = m.run("pwd", settle=3)
     expect("/app/pwd/sourcecode" in out,
            "the rebuilt pwd does not work: " + out)
+
+
+@scenario("resize", "a program in a window follows the window when it changes size")
+def check_resize(m):
+    m.login_desktop()
+
+    # htop, filling the whole screen.  Its table heading is a green bar as
+    # wide as the window, which is what makes this measurable in pixels: how
+    # wide the bar is, is how wide the program thinks it is.
+    m.mon.cmd("sendkey meta_l-ret", wait=5)
+    time.sleep(3)
+    m.mon.type("htop\n")
+    time.sleep(4)
+
+    shot = m.mon.screen("htop-wide")
+    wide = shot.blocks("#00aa00", min_w=100, min_h=8)
+    expect(wide, "htop drew no table heading")
+    full_width = max(b["w"] for b in wide)
+    expect(full_width > shot.w * 8 // 10,
+           "htop's heading is %d pixels of a %d pixel screen before any "
+           "resize" % (full_width, shot.w))
+
+    # A second window: the tiling compositor halves the first one.
+    m.mon.cmd("sendkey meta_l-ret", wait=5)
+    time.sleep(4)
+
+    shot = m.mon.screen("htop-narrow")
+    narrow = shot.blocks("#00aa00", min_w=50, min_h=8)
+    expect(narrow, "htop's table heading is gone after the resize")
+    half_width = max(b["w"] for b in narrow)
+
+    expect(half_width < full_width * 7 // 10,
+           "htop still draws %d pixels wide in a window half that size "
+           "(%d before)" % (half_width, full_width))
+    expect(half_width > full_width // 3,
+           "htop shrank to %d pixels, far below half of %d" %
+           (half_width, full_width))
+
+    # Closing the second window gives the first one the screen back, and the
+    # heading has to grow with it: a program that only ever shrinks is one
+    # that clamped rather than measured.
+    m.mon.cmd("sendkey meta_l-shift-q", wait=3)
+    time.sleep(3)
+
+    shot = m.mon.screen("htop-wide-again")
+    again = shot.blocks("#00aa00", min_w=100, min_h=8)
+    expect(again, "htop's table heading is gone after the window grew")
+    expect(max(b["w"] for b in again) > full_width * 8 // 10,
+           "htop did not grow back with the window")
 
 
 # ------------------------------------------------------------------ #
