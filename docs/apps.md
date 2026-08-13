@@ -2639,3 +2639,40 @@ resets, when QEMU seeds the emulated clock from the host again.
 
 **Exit status:** 0, 1 on error (not root, cannot read the clock), 2 for a bad
 argument.
+
+# ctest
+
+```
+ctest [directory]
+```
+
+Checks the hosted C library — [`docs/libc.md`](libc.md) — by using it. The
+program includes no WOS header at all: `<stdio.h>`, `<stdlib.h>`, `<string.h>`,
+`<ctype.h>`, `<setjmp.h>` and `<time.h>` are the whole of what it knows about
+the machine, which is the point of it. If this runs, a program written for Unix
+has somewhere to land here.
+
+Seventy checks, over streams (buffered reads and writes, seeking, `ungetc`, end
+of file, `errno` after a failure), `stdlib` (`qsort`, `bsearch`, the `strtol`
+family and their edge cases), strings and character classes, `setjmp`/`longjmp`
+through eight frames, formatted output, and the clock.
+
+```
+root@wos:/home/root# ctest
+ctest -- the hosted C library, in /ramdisk
+
+streams
+  [ok  ] a file can be opened for writing
+  [ok  ] fprintf returns the length it produced
+  ...
+
+70 checks, 0 failed
+ctest: all passed
+```
+
+The scratch files go in `/ramdisk` unless a directory is named. Give it one on
+the disk — `ctest /home/root` — to exercise WFS instead of the filesystem in
+memory; the stream code is where the difference between the two would show.
+
+**Exit status:** 0 if every check passed, 1 otherwise.
+
