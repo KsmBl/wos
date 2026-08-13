@@ -121,6 +121,13 @@ struct acpi_fadt {
  *  What we learned
  * ------------------------------------------------------------------ */
 
+/* The reset register, when the firmware described one and put it somewhere
+ * this kernel can reach: system I/O space.  Memory-mapped and PCI-config
+ * variants exist and are rarer than the fallbacks that follow them, so they
+ * are left to those rather than half-supported here. */
+static uint16_t reset_port;
+static uint8_t  reset_data;
+
 static uint16_t pm1a_cnt, pm1b_cnt;
 static uint16_t slp_typ_a, slp_typ_b;
 static uint16_t smi_cmd;
@@ -559,6 +566,16 @@ void acpi_init(const struct multiboot_info *mbi)
     smi_cmd  = (uint16_t)fadt->smi_cmd;
     acpi_enable_value = fadt->acpi_enable;
 
+    /* The reset register, if this FADT is long enough to have one and the
+     * firmware put it in I/O space.  Address space 1 is system I/O; anything
+     * else is left to the fallbacks in power.c, which are what actually answer
+     * on the machines this runs on. */
+    if (FADT_HAS(fadt, reset_value) && (fadt->flags & (1u << 10)) &&
+        fadt->reset_reg.space_id == GAS_SYSTEM_IO && fadt->reset_reg.address) {
+        reset_port = (uint16_t)fadt->reset_reg.address;
+        reset_data = fadt->reset_value;
+    }
+
     uint64_t dsdt_phys = fadt->dsdt;
     if (!dsdt_phys && FADT_HAS(fadt, x_dsdt))
         dsdt_phys = fadt->x_dsdt;
@@ -578,6 +595,17 @@ void acpi_init(const struct multiboot_info *mbi)
     scan_for_battery((const uint8_t *)(dsdt + 1), dsdt->length - sizeof(*dsdt));
 
     kfree(dsdt);
+}
+
+bool acpi_can_reset(void)
+{
+    return reset_port != 0;
+}
+
+void acpi_reset(void)
+{
+    if (reset_port)
+        outb(reset_port, reset_data);
 }
 
 void acpi_power_off(void)

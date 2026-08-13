@@ -32,6 +32,7 @@ which is the price of having no shared libraries.
 | [`wget`](#wget) | download a URL to a file |
 | [`lynx`](#lynx) | browse the web as text |
 | [`shutdown`](#shutdown) | power the machine off |
+| [`reboot`](#reboot) | restart it |
 | [`uptime`](#uptime) | how long the machine has been running |
 | [`cpufreq`](#cpufreq) | show the processor's clock, and change it |
 | [`systemctl`](#systemctl) | list, start, stop, enable and disable services |
@@ -312,10 +313,51 @@ which is what makes this work under QEMU, VirtualBox and Bochs even when their
 tables say nothing useful. If none of it takes, the kernel says so and halts the
 CPU, which is as close to off as it can get on its own.
 
-There is no user or permission model in WOS, so any process can do this.
+Anyone may do this, which predates the machine having users at all and is worth
+knowing: [`reboot`](#reboot) is root's alone, and powering off ends every
+session just as thoroughly.
 
 **Exit status:** does not return on success; 1 if the machine could not be
 powered off.
+
+## reboot
+
+```
+reboot
+```
+
+Restarts the machine. Nothing needs flushing first, for the same reason
+[`shutdown`](#shutdown) does not: the filesystem writes its metadata straight
+through.
+
+Four ways are tried, in the order they are worth trying, and each is harmless
+where it is not recognised — an unclaimed port decodes to nothing and the write
+is dropped:
+
+| | |
+|---|---|
+| the firmware's reset register | what the FADT described, when it described one in I/O space |
+| the chipset's, at port `0xCF9` | what PCs have done since the ICH, and what QEMU's q35 answers |
+| the keyboard controller's reset line | how the PC did it before there was a chipset register, still implemented by every emulator |
+| a triple fault | an interrupt table with nothing in it, and then an interrupt |
+
+The last one is not a trick, it is the architecture: a fault while handling a
+fault while handling a fault resets the processor, and every machine does it.
+So there is no "this machine cannot restart" to report, which is the difference
+between this and `shutdown`.
+
+**Root only.** A restart ends every session on the machine rather than the
+caller's own, so it is not something one account should be able to do to
+another — the same reasoning that makes [`htop`](#htop)'s F9 refuse another
+user's process. Anybody else gets:
+
+```
+root@wos:/home/root# su tester
+tester@wos:/home/tester$ reboot
+reboot: only root can restart this machine
+```
+
+**Exit status:** does not return on success; 1 if the caller is not root.
 
 ## uptime
 

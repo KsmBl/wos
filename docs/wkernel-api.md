@@ -802,6 +802,25 @@ if (wkill(pid) == -W_EPERM)
 
 [`htop`](apps.md#htop) is what this is for: F9 on a row asks, and yes stops it.
 
+## `int wreboot(void)`
+
+Restart the machine. Does not return when it succeeds.
+
+The kernel tries the reset register the firmware described, the chipset's reset
+control port, the keyboard controller's reset line, and finally a triple fault
+— which no machine can refuse, so unlike `wshutdown()` there is no "this
+machine cannot do it" to report.
+
+**Root only:** a restart ends every session on the machine rather than the
+caller's own.
+
+**Returns** only on failure: `-W_EPERM` when the caller is not root.
+
+```c
+if (wreboot() == -W_EPERM)
+    wprintf("only root can restart this machine\n");
+```
+
 ## `void wexit(int status)`
 
 End the calling process. Does not return. Descriptors are closed and all

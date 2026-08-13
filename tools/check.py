@@ -309,7 +309,7 @@ class Failure(Exception):
 class Machine:
     """One booted WOS, on its own copy of the disk image."""
 
-    def __init__(self, work, headless=True):
+    def __init__(self, work, headless=True, may_reboot=False):
         self.work = work
         self.serial = os.path.join(work, "serial.log")
         mon_path    = os.path.join(work, "mon.sock")
@@ -328,7 +328,10 @@ class Machine:
             # against is the image that is still there afterwards.
             "-snapshot",
             "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0",
-            "-vga", "std", "-boot", "d", "-no-reboot",
+            "-vga", "std", "-boot", "d",
+            # QEMU exits on a guest reboot unless told otherwise, which is what
+            # a check wants everywhere except where the reboot is the point.
+            *([] if may_reboot else ["-no-reboot"]),
             "-display", "none",
             "-serial", "file:" + self.serial,
             "-monitor", "unix:%s,server,nowait" % mon_path,
@@ -410,9 +413,10 @@ class Machine:
 SCENARIOS = {}
 
 
-def scenario(name, description):
+def scenario(name, description, may_reboot=False):
     def register(fn):
         fn.description = description
+        fn.may_reboot  = may_reboot
         SCENARIOS[name] = fn
         return fn
     return register
@@ -845,6 +849,44 @@ def check_launcher(m):
            "the launcher was still holding half the screen afterwards")
 
 
+@scenario("reboot", "the machine restarts, and only root may ask it to",
+          may_reboot=True)
+def check_reboot(m):
+    m.login_console()
+
+    # Not everybody's to do: a restart ends every session on the machine, not
+    # the caller's own.
+    m.run("adduser tester", settle=1.5)
+    m.mon.type("pw\n")
+    time.sleep(1)
+    m.mon.type("pw\n")
+    time.sleep(1.5)
+    m.run("su tester", settle=2)
+
+    out = m.run("reboot", settle=2.5)
+    expect("only root" in out,
+           "a user who is not root was allowed to restart the machine: " + out)
+
+    m.run("exit", settle=1.5)
+
+    # And root's does it.  The proof is the machine saying the things it says
+    # on its way up, after having been asked on its way down.
+    asked = m.mark()
+    m.mon.type("reboot\n")
+
+    for _ in range(60):
+        if "scheduler running, syscall gate open" in m.log()[asked:]:
+            break
+        time.sleep(0.5)
+
+    fresh = m.log()[asked:]
+    expect("restarting" in fresh, "the kernel never said it was restarting")
+    expect("scheduler running, syscall gate open" in fresh,
+           "the machine did not come back up")
+    expect("Choose an account" in fresh,
+           "it came up but never reached the login screen")
+
+
 @scenario("smp", "every processor is started and the machine runs on all of them")
 def check_smp(m):
     m.wait_for("smp    :", 90, "the processors to be started")
@@ -887,7 +929,7 @@ def run_one(name, keep):
     machine = None
 
     try:
-        machine = Machine(work)
+        machine = Machine(work, may_reboot=getattr(fn, "may_reboot", False))
         fn(machine)
         print("  ok    %-9s %-56s %4.0fs" % (name, fn.description,
                                              time.time() - started))

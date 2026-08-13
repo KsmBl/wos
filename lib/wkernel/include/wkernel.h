@@ -1386,6 +1386,29 @@ int whttp_get(const char *url, whttp_t *out);
  */
 int wshutdown(void);
 
+/**
+ * Restart the machine.
+ *
+ * Does not return when it succeeds. Nothing needs to be flushed first: the
+ * filesystem writes its metadata straight through, so the disk is consistent
+ * at every moment.
+ *
+ * The kernel tries the reset register the firmware described, the chipset's
+ * reset control port, the keyboard controller's reset line, and finally a
+ * triple fault -- which no machine can refuse, so there is no "this machine
+ * cannot restart" to report.
+ *
+ * @return Only on failure: `-W_EPERM` when the caller is not root. Restarting
+ *         ends every session on the machine rather than the caller's own,
+ *         which is why it is not everybody's to do.
+ *
+ * @code
+ *     if (wreboot() == -W_EPERM)
+ *         wprintf("only root can restart this machine\n");
+ * @endcode
+ */
+int wreboot(void);
+
 /* ==================================================================== *
  *  POSIX-style aliases
  *

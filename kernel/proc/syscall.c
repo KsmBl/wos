@@ -1216,6 +1216,21 @@ static int64_t sys_kill(uint64_t pid)
     return proc_kill((int32_t)pid);
 }
 
+/* Restart the machine.
+ *
+ * Root only, unlike shutdown -- which predates this system having users at all
+ * and still lets anybody stop the machine.  A reboot is the same act: it ends
+ * every session on the box, not just the caller's, so it is not something one
+ * account should be able to do to another. */
+static int64_t sys_reboot(void)
+{
+    if (proc_current()->uid != W_ROOT_UID)
+        return -W_EPERM;
+
+    power_reboot();
+    return 0;   /* not reached */
+}
+
 static int64_t sys_shutdown(void)
 {
     /* There is no user or permission model in WOS, so any process may do
@@ -1313,6 +1328,7 @@ static void syscall_handler(regs_t *regs)
     case WSYS_REAP:      r = sys_reap(regs->rdi); break;
     case WSYS_KILL:      r = sys_kill(regs->rdi); break;
     case WSYS_SHUTDOWN:  r = sys_shutdown(); break;
+    case WSYS_REBOOT:    r = sys_reboot(); break;
     default:             r = -W_ENOSYS; break;
     }
 

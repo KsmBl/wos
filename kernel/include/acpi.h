@@ -29,6 +29,11 @@ void acpi_power_info(uint16_t *port, uint16_t *sleep_type);
 /* Ask the chipset for soft-off.  Returns only if the machine ignored it. */
 void acpi_power_off(void);
 
+/* The reset register the firmware described, when it described one this kernel
+ * can write: an address in system I/O space.  Restarts the machine. */
+bool acpi_can_reset(void);
+void acpi_reset(void);
+
 /* Copy the table with this four-character signature out of physical memory,
  * or NULL if the machine has not got one.  The caller owns the copy and frees
  * it with kfree(); `length_out` receives its length in bytes.

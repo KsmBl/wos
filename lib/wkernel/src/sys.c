@@ -338,6 +338,14 @@ int wtime_set(const wtime_t *t)
     return (int)wsyscall1(WSYS_TIME_SET, (long)t);
 }
 
+int wreboot(void)
+{
+    /* Comes back only when the caller is not root, or on a machine the kernel
+     * cannot restart -- and there is no such machine, since a triple fault is
+     * the last thing it tries. */
+    return (int)wsyscall0(WSYS_REBOOT);
+}
+
 int wshutdown(void)
 {
     /* Only comes back if the kernel could not power the machine off, and even

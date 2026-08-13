@@ -662,7 +662,8 @@ typedef struct {
 #define WSYS_PTRSPEED   76
 #define WSYS_RENAME     77
 #define WSYS_KILL       78
-#define WSYS_MAX        79
+#define WSYS_REBOOT     79
+#define WSYS_MAX        80
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

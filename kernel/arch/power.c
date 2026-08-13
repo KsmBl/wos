@@ -29,12 +29,16 @@
  *
  * Interrupts are already disabled here, so this has to be a spin rather than
  * a hlt -- there is nothing left to wake us up. */
+static void settle(void)
+{
+    for (volatile uint32_t i = 0; i < 20000000u; i++)
+        ;
+}
+
 static void try_power_off(uint16_t port, uint16_t value)
 {
     outw(port, value);
-
-    for (volatile uint32_t i = 0; i < 20000000u; i++)
-        ;
+    settle();
 }
 
 void power_off(void)
@@ -67,6 +71,57 @@ void power_off(void)
 
     kputs("[kernel] no ACPI soft-off available on this machine\n");
     kputs("[kernel] it is now safe to turn off the power\n");
+
+    for (;;)
+        __asm__ volatile("hlt");
+}
+
+/* Restarting the machine.
+ *
+ * There is no single way to do it, so this is four in the order they are worth
+ * trying.  Each is harmless where it is not recognised: an unclaimed port
+ * decodes to nothing and the write is dropped.
+ *
+ * The last one is not a trick, it is the architecture: a fault while handling
+ * a fault while handling a fault is defined to reset the processor, and a
+ * table with no entries in it faults on the first interrupt.  Every machine
+ * does it, which is what makes it the honest last resort.
+ */
+void power_reboot(void)
+{
+    kputs("\n[kernel] restarting\n");
+
+    __asm__ volatile("cli");
+
+    /* What the firmware said to do. */
+    if (acpi_can_reset()) {
+        acpi_reset();
+        settle();
+    }
+
+    /* The chipset's reset control register: set the system-reset bit, then
+     * pulse it.  This is what PCs have done since the ICH, and what QEMU's
+     * q35 answers to. */
+    outb(0xCF9, 0x02);
+    outb(0xCF9, 0x06);
+    settle();
+
+    /* The keyboard controller's pulse-reset line, which is how the PC did it
+     * before there was a chipset register for it, and which the emulators
+     * still implement.  Wait for the input buffer to be free first, or the
+     * command is dropped rather than obeyed. */
+    for (int i = 0; i < 100000 && (inb(0x64) & 0x02); i++)
+        ;
+    outb(0x64, 0xFE);
+    settle();
+
+    /* And the architecture's own answer.  An IDT with no entries, then an
+     * interrupt: the fault cannot be delivered, nor can the fault about the
+     * fault, and a triple fault resets the processor. */
+    struct { uint16_t limit; uint64_t base; } __attribute__((packed))
+        nothing = { 0, 0 };
+
+    __asm__ volatile("lidt %0; int3" : : "m"(nothing));
 
     for (;;)
         __asm__ volatile("hlt");

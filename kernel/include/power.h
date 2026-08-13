@@ -12,4 +12,9 @@
  */
 void power_off(void) __attribute__((noreturn));
 
+/* Restart it.  Tries the firmware's reset register, the chipset's, the
+ * keyboard controller's reset line and finally a triple fault, which no
+ * machine can refuse.  Does not return. */
+void power_reboot(void) __attribute__((noreturn));
+
 #endif /* WOS_POWER_H */
