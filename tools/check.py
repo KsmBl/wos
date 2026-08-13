@@ -917,6 +917,41 @@ def check_smp(m):
         expect("CPU%d" % n in screen, "htop has no meter for cpu%d" % n)
 
 
+@scenario("times", "the filesystem stores when a file was written")
+def check_times(m):
+    m.login_console()
+
+    # The clock is set to a time nothing else could produce, so a date that
+    # comes back matching it can only have come from the clock through the
+    # write and out of wstat() again.
+    m.run("time 2001-02-03 04:05")
+
+    m.run("cd /ramdisk")
+    m.run("touch first.txt")
+
+    out = m.run("ls -l")
+    expect("2001-02-03 04:05" in out,
+           "a file written just now has no time from the clock: " + out)
+
+    # Written again at a different time, it reports the different time --
+    # which is the whole property make depends on.
+    m.run("time 2001-02-03 06:07")
+    m.run("touch first.txt")
+
+    out = m.run("ls -l")
+    expect("2001-02-03 06:07" in out,
+           "writing the file again did not move its time: " + out)
+    expect("2001-02-03 04:05" not in out,
+           "the old time is still there: " + out)
+
+    # And on the disk, not only in memory: /home is WFS.
+    m.run("cd /home/root")
+    m.run("touch dated.txt")
+    out = m.run("ls -l")
+    expect("2001-02-03 06:07" in out,
+           "a file on the disk has no time: " + out)
+
+
 # ------------------------------------------------------------------ #
 #  Running them
 # ------------------------------------------------------------------ #
