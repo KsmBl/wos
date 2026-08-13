@@ -1,7 +1,8 @@
-/* touch -- create files.
+/* touch -- create files, and mark existing ones as changed just now.
  *
- * WFS stores no timestamps, so unlike Linux there is nothing to update on a
- * file that already exists; touch simply succeeds and leaves it alone.
+ * The second half is the useful one: a file that already exists has nothing to
+ * write, so wutime() moves its modification time on its own.  That is what
+ * makes anything built from it -- by `make`, say -- out of date.
  */
 
 #include <wkernel.h>
@@ -16,7 +17,19 @@ int main(int argc, char **argv)
     int status = 0;
 
     for (int i = 1; i < argc; i++) {
-        /* Without W_O_TRUNC an existing file keeps its contents. */
+        wstat_t st;
+
+        if (wstat(argv[i], &st) == 0) {
+            int r = wutime(argv[i]);
+            if (r < 0) {
+                wfprintf(W_STDERR, "touch: %s: %s\n", argv[i], wstrerror(-r));
+                status = 1;
+            }
+            continue;
+        }
+
+        /* Without W_O_TRUNC a file that appeared in the meantime keeps its
+         * contents; creating it is enough to give it a time. */
         int fd = wopen(argv[i], W_O_WRONLY | W_O_CREAT);
 
         if (fd < 0) {

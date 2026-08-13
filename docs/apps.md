@@ -78,22 +78,27 @@ output is laid out in columns with a `/` after directory names.
 
 | Option | Effect |
 |---|---|
-| `-l` | long listing: type, size in bytes, blocks used, name |
+| `-l` | long listing: type, size in bytes, blocks used, when it last changed, name |
 | `-a` | include entries starting with `.`, including `.` and `..` |
 
 ```
 wos:/home$ ls -l
 total 3
--   2     1  boots.txt
--  66     1  notes.txt
-- 560     1  readme.txt
+-   2     1  2026-08-13 11:19  boots.txt
+-  66     1  2026-08-13 11:19  notes.txt
+- 560     1  2026-08-13 11:19  readme.txt
 ```
 
 The first column is `d` for a directory and `-` for a file. `total` is the sum
 of the block counts, as in Linux.
 
-WFS stores no owners, permissions or timestamps, so those Linux columns are
-absent rather than filled with invented values.
+The date is the modification time WFS keeps for every file, from the machine's
+clock — the same number `make` compares to decide what is out of date. A file
+written while the clock was unset has none, and its column is left blank rather
+than showing a date in 1970.
+
+WFS stores no owners and no permissions, so those Linux columns are absent
+rather than filled with invented values.
 
 **Exit status:** 0, or 1 if any operand could not be read.
 
@@ -199,10 +204,11 @@ touch file...
 Creates each file if it does not exist, and leaves the contents of one that
 does alone.
 
-WFS stores no timestamps, so unlike Linux there is nothing to update on a file
-that already exists — `touch` on it simply succeeds.
+A file that already exists has its modification time set to now, which is the
+useful half: it is how you tell `make` that something has changed without
+changing it. The time stored is the machine's own, not one you can name.
 
-**Exit status:** 0, or 1 if any file could not be created.
+**Exit status:** 0, or 1 if any file could not be created or stamped.
 
 ## mkdir
 

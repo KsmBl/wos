@@ -4,21 +4,45 @@
  * hidden unless -a is given, directories get a "path:" header when several
  * operands are listed, and plain output is laid out in columns.
  *
- * -l shows type, size and block count. WFS has no owners, permissions or
- * timestamps, so those Linux columns are left out rather than filled with
- * invented values.
+ * -l shows type, size, block count and the time the file last changed. WFS has
+ * no owners and no permissions, so those Linux columns are left out rather than
+ * filled with invented values.
  */
 
 #include <wkernel.h>
 
 #define MAX_OPERANDS 32
 
+/* Room for "2026-08-13 12:23". */
+#define DATE_WIDTH 16
+
 struct entry {
     char     name[W_NAME_MAX + 1];
     uint32_t type;
     uint32_t size;
     uint32_t blocks;
+    uint32_t mtime;
 };
+
+/* The date column: the day and the minute, which is what tells two builds of
+ * the same file apart.  A file with no time -- one written while the clock was
+ * unset -- gets spaces, because a date of 1970 would be a claim rather than an
+ * absence. */
+static void format_time(uint32_t mtime, char *buf, wsize_t size)
+{
+    if (mtime == 0) {
+        for (int i = 0; i < DATE_WIDTH; i++)
+            buf[i] = ' ';
+        buf[DATE_WIDTH] = '\0';
+        return;
+    }
+
+    wtime_t t;
+    wtime_from_epoch(mtime, &t);
+
+    wsnprintf(buf, size, "%04d-%02d-%02d %02d:%02d",
+              t.year, t.month, t.day, t.hour, t.minute);
+}
 
 static int opt_long;
 static int opt_all;
@@ -56,10 +80,14 @@ static void print_long(const struct entry *e, int count)
         total += e[i].blocks;
     wprintf("total %lu\n", total);
 
-    for (int i = 0; i < count; i++)
-        wprintf("%c %*u %5u  %s\n",
+    for (int i = 0; i < count; i++) {
+        char when[DATE_WIDTH + 1];
+        format_time(e[i].mtime, when, sizeof(when));
+
+        wprintf("%c %*u %5u  %s  %s\n",
                 e[i].type == W_FT_DIR ? 'd' : '-',
-                (int)widest, e[i].size, e[i].blocks, e[i].name);
+                (int)widest, e[i].size, e[i].blocks, when, e[i].name);
+    }
 }
 
 /* Lay the names out in columns that fit the terminal, like ls does. */
@@ -139,8 +167,9 @@ static int list_directory(const char *path)
         entries[count].type   = raw.type;
         entries[count].size   = 0;
         entries[count].blocks = 0;
+        entries[count].mtime  = 0;
 
-        /* Sizes need a stat per entry, so only pay for it with -l. */
+        /* Sizes and times need a stat per entry, so only pay for it with -l. */
         if (opt_long) {
             char full[W_PATH_MAX + 1];
             wsnprintf(full, sizeof(full), "%s/%s", path, raw.name);
@@ -149,6 +178,7 @@ static int list_directory(const char *path)
             if (wstat(full, &st) == 0) {
                 entries[count].size   = st.size;
                 entries[count].blocks = st.blocks;
+                entries[count].mtime  = st.mtime;
             }
         }
 
@@ -209,10 +239,14 @@ int main(int argc, char **argv)
 
         /* A file operand is listed as itself, not descended into. */
         if (st.type != W_FT_DIR) {
-            if (opt_long)
-                wprintf("- %u %5u  %s\n", st.size, st.blocks, operands[i]);
-            else
+            if (opt_long) {
+                char when[DATE_WIDTH + 1];
+                format_time(st.mtime, when, sizeof(when));
+                wprintf("- %u %5u  %s  %s\n",
+                        st.size, st.blocks, when, operands[i]);
+            } else {
                 wprintf("%s\n", operands[i]);
+            }
             continue;
         }
 
