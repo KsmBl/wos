@@ -1045,6 +1045,105 @@ def check_make(m):
            "a command-line variable did not override the Makefile: " + out)
 
 
+@scenario("toolchain", "the headers, the libraries and a Makefile per program")
+def check_toolchain(m):
+    m.login_console()
+
+    # Step 3 of docs/self-hosting.md: what a compiler running here would have
+    # to compile and link against.
+    out = m.run("ls /include")
+    for header in ("wkernel.h", "stdio.h", "stdlib.h", "string.h", "setjmp.h"):
+        expect(header in out, "/include has no %s: %s" % (header, out))
+
+    out = m.run("ls /lib")
+    expect("libwkernel.a" in out and "libc.a" in out and "user.ld" in out,
+           "/lib is missing part of the toolchain: " + out)
+
+    # Step 4: a program that includes no WOS header at all, running here.
+    out = m.run("ctest", settle=6)
+    expect("all passed" in out, "the C library failed its own checks: " + out)
+
+    # And again on the disk rather than the filesystem in memory, because the
+    # stream code is where the difference between the two would show.
+    out = m.run("ctest /home/root", settle=6)
+    expect("all passed" in out, "the C library failed against WFS: " + out)
+
+    # Step 6: every application's source has the Makefile that rebuilds it.
+    # There is no compiler yet, so what can be checked is what it would run --
+    # which is the part that has to be right before one arrives.
+    m.run("cd /app/ls/sourcecode")
+    out = m.run("ls")
+    expect("Makefile" in out, "no Makefile beside ls.c: " + out)
+
+    out = m.run("make -n", settle=3)
+    expect("-c -I/include -o ls.o ls.c" in out,
+           "the generated Makefile does not compile ls.c: " + out)
+    expect("/lib/user.ld -o /app/ls/launch ls.o" in out,
+           "and does not link it into place: " + out)
+
+    # An application of several files links all of its objects, which is the
+    # case a hand-written Makefile per application would get wrong first.
+    m.run("cd /app/whell/sourcecode")
+    out = m.run("make -n", settle=3)
+    for obj in ("cmd_nav.o", "complete.o", "parse.o", "whell.o"):
+        expect(obj in out, "whell's Makefile forgot %s: %s" % (obj, out))
+
+    expect("/lib/libc.a /lib/libwkernel.a" in out,
+           "the link line does not name the libraries on the disk: " + out)
+
+    # The compiler those Makefiles name is on the machine too.
+    out = m.run("wcc --help", settle=3)
+    expect("usage: wcc" in out, "the compiler is not installed: " + out)
+
+
+@scenario("selfhost", "the machine compiles, links and rebuilds its own programs")
+def check_selfhost(m):
+    m.login_console()
+
+    # A program compiled and linked on the machine, by the machine.
+    m.run("cd /app/hello/sourcecode")
+
+    out = m.run("wcc -c hello.c -o /ramdisk/hello.o", settle=30)
+    expect("error" not in out.lower() and "wcc:" not in out,
+           "the compiler could not compile hello.c: " + out)
+
+    out = m.run("ls /ramdisk")
+    expect("hello.o" in out, "no object came out: " + out)
+
+    out = m.run("wcc /ramdisk/hello.o /lib/libc.a /lib/libwkernel.a "
+                "-o /ramdisk/hello", settle=30)
+    expect("undefined" not in out, "the link failed: " + out)
+
+    out = m.run("/ramdisk/hello", settle=4)
+    expect("hello: pid" in out, "what it built does not run: " + out)
+
+    # And the C library's own 70 checks, on a binary this compiler produced --
+    # which is the evidence that the code it generates is right and not only
+    # that it parses.
+    m.run("cd /app/ctest/sourcecode")
+    out = m.run("wcc -c ctest.c -o /ramdisk/ctest.o", settle=60)
+    expect("wcc:" not in out, "the compiler could not compile ctest.c: " + out)
+
+    out = m.run("wcc /ramdisk/ctest.o /lib/libc.a /lib/libwkernel.a "
+                "-o /ramdisk/ctest", settle=30)
+    expect("undefined" not in out, "the link failed: " + out)
+
+    out = m.run("/ramdisk/ctest", settle=10)
+    expect("all passed" in out,
+           "a wcc-compiled program failed the library's checks: " + out)
+
+    # Rebuilding one of the machine's own commands from its source, through
+    # the generated Makefile -- the sentence docs/self-hosting.md opens with.
+    m.run("cd /app/pwd/sourcecode")
+    out = m.run("make", settle=60)
+    expect("wcc -c" in out and "Error" not in out,
+           "make could not rebuild pwd: " + out)
+
+    out = m.run("pwd", settle=3)
+    expect("/app/pwd/sourcecode" in out,
+           "the rebuilt pwd does not work: " + out)
+
+
 # ------------------------------------------------------------------ #
 #  Running them
 # ------------------------------------------------------------------ #
