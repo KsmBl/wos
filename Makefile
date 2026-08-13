@@ -218,12 +218,21 @@ $(ISO): $(KERNEL) $(EFIAPP) $(DISK) grub/grub.cfg
 # the image installs at /app/<name>/launch alongside a copy of its source.
 # ---------------------------------------------------------------------------
 
+# -nostdinc keeps the host's /usr/include out of a WOS program entirely: a
+# program that compiles here has compiled against wkernel and lib/wlibc and
+# nothing else, which is the only way to know the machine can build it too.
+# What is still needed from the compiler is its freestanding headers --
+# stddef.h, stdarg.h, limits.h, stdint.h -- which belong to gcc rather than to
+# any C library, and which -isystem puts back.
+GCC_INCLUDE := $(shell $(CC) -print-file-name=include)
+
 UCFLAGS := -m64 -std=gnu11 -ffreestanding -O2 -g \
            -Wall -Wextra -Wno-unused-parameter \
            -fno-pie -fno-pic -fno-stack-protector -fno-builtin \
            -fno-asynchronous-unwind-tables \
            -mcmodel=small -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
-           -Ilib/wkernel/include -Iinclude
+           -nostdinc -isystem $(GCC_INCLUDE) \
+           -Ilib/wkernel/include -Ilib/wlibc/include -Iinclude
 # No -n here, unlike the kernel: letting the linker page-align the segments
 # keeps text and data in separate LOAD headers, so the loader can account for
 # them separately instead of seeing one merged RWX blob.
@@ -253,7 +262,38 @@ $(LIBW): $(LIBW_OBJ)
 	ar rcs $@ $(LIBW_OBJ)
 	@echo "  built $@"
 
-lib: $(LIBW)
+# ---------------------------------------------------------------------------
+# lib/wlibc -- the hosted C library, over wkernel
+#
+# What a program ported from Unix expects to find and wkernel deliberately does
+# not have: FILE and stdio, qsort and strtol, setjmp, errno.  It is called
+# libc.a because that is the name a compiler looks for.
+#
+# It is a layer, not a second system: malloc, strlen and the formatter come
+# from libwkernel.a, which this archive is always linked beside.
+# ---------------------------------------------------------------------------
+
+LIBC     := $(BUILD)/lib/libc.a
+LIBC_C   := $(wildcard lib/wlibc/src/*.c)
+LIBC_S   := $(wildcard lib/wlibc/src/*.S)
+LIBC_OBJ := $(patsubst lib/wlibc/src/%.c,$(BUILD)/lib/wlibc/%.o,$(LIBC_C)) \
+            $(patsubst lib/wlibc/src/%.S,$(BUILD)/lib/wlibc/%.asm.o,$(LIBC_S))
+LIBC_DEP := $(LIBC_OBJ:.o=.d)
+
+$(BUILD)/lib/wlibc/%.o: lib/wlibc/src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD)/lib/wlibc/%.asm.o: lib/wlibc/src/%.S
+	@mkdir -p $(dir $@)
+	$(CC) -m64 -g -MMD -MP -c $< -o $@
+
+$(LIBC): $(LIBC_OBJ)
+	@mkdir -p $(dir $@)
+	ar rcs $@ $(LIBC_OBJ)
+	@echo "  built $@"
+
+lib: $(LIBW) $(LIBC)
 
 # Only directories that actually contain sources; an empty app/<name>/ would
 # otherwise produce a link with no input files.
@@ -270,9 +310,14 @@ $$(BUILD)/app/$(1)/%.o: app/$(1)/sourcecode/%.c
 	@mkdir -p $$(dir $$@)
 	$$(CC) $$(UCFLAGS) -MMD -MP -c $$< -o $$@
 
-$$(BUILD)/app/$(1)/launch: $$(APP_$(1)_OBJ) $$(LIBW) lib/wkernel/user.ld
+$$(BUILD)/app/$(1)/launch: $$(APP_$(1)_OBJ) $$(LIBC) $$(LIBW) lib/wkernel/user.ld
 	@mkdir -p $$(dir $$@)
-	$$(LD) $$(ULDFLAGS) -T lib/wkernel/user.ld -o $$@ $$(APP_$(1)_OBJ) $$(LIBW)
+	@# libc.a before libwkernel.a, because what it needs -- malloc, wwrite,
+	@# the formatter -- is in there, and a static archive is searched once
+	@# for what is undefined at the moment it is reached.  An application
+	@# that uses nothing from either takes nothing from either.
+	$$(LD) $$(ULDFLAGS) -T lib/wkernel/user.ld -o $$@ $$(APP_$(1)_OBJ) \
+	    $$(LIBC) $$(LIBW)
 	@echo "  built $$@"
 
 APP_BINS += $$(BUILD)/app/$(1)/launch
@@ -370,4 +415,5 @@ clean:
 
 -include $(KDEP)
 -include $(LIBW_DEP)
+-include $(LIBC_DEP)
 -include $(APP_DEPS)

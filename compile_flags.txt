@@ -11,3 +11,4 @@
 -Ikernel/include
 -Iinclude
 -Ilib/wkernel/include
+-Ilib/wlibc/include
