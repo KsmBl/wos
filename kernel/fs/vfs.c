@@ -437,7 +437,12 @@ static int16_t poll_state(struct process *p, int fd, int16_t events)
 
     case FD_PIPE:
         if (f->write_end) {
-            if (events & W_POLLOUT) r |= W_POLLOUT;   /* a write may block */
+            /* Only when there is actually room.  Saying "writable" whatever
+             * the buffer holds is the answer that makes a poll useless: a
+             * caller checking before it writes is asking precisely so that it
+             * will not be put to sleep in the middle of something else. */
+            if ((events & W_POLLOUT) && pipe_pollout(f->pipe))
+                r |= W_POLLOUT;
         } else if ((events & W_POLLIN) && pipe_pollin(f->pipe)) {
             r |= W_POLLIN;
         }

@@ -48,4 +48,9 @@ int pipe_write(pipe_t *p, const void *buf, uint32_t len);
  * and the reader should be told about the end of file. */
 bool pipe_pollin(pipe_t *p);
 
+/* True if a write would not block: there is room in the buffer, or nobody is
+ * reading any more -- a write to a pipe with no readers fails at once rather
+ * than waiting for room that will never come. */
+bool pipe_pollout(pipe_t *p);
+
 #endif /* WOS_PIPE_H */

@@ -130,3 +130,10 @@ bool pipe_pollin(pipe_t *p)
         return true;            /* a bad pipe should not make a poller hang */
     return p->count > 0 || p->writers <= 0;
 }
+
+bool pipe_pollout(pipe_t *p)
+{
+    if (!p)
+        return true;
+    return p->count < PIPE_CAP || p->readers <= 0;
+}
