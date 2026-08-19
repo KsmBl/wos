@@ -18,11 +18,15 @@
 #define WOS_BATTERY_H
 
 #include "types.h"
+#include "wosconfig.h"
+#include "string.h"
 #include "wabi.h"
 
 /* Read the firmware's description of the machine's battery, if it has one.
  * Needs the heap, paging and acpi_init(), and is boot-time only for the same
  * reason acpi_init() is. */
+#if CONFIG_BATTERY
+
 void battery_init(void);
 
 /* Fill in what was found.  Safe at any time; everything was read at boot. */
@@ -30,5 +34,21 @@ void battery_info(wbattery_t *out);
 
 /* One line for the boot log. */
 void battery_print_report(void);
+
+
+#else
+/* Without the driver: a machine that reports no battery, which is what a
+ * desktop reports anyway. */
+static inline void battery_init(void) { }
+static inline void battery_info(wbattery_t *out)
+{
+    if (out) {
+        memset(out, 0, sizeof(*out));
+        out->charge_percent = -1;   /* -1 is "cannot be read", which is true */
+        out->ac_online = -1;
+    }
+}
+static inline void battery_print_report(void) { }
+#endif /* CONFIG_BATTERY */
 
 #endif /* WOS_BATTERY_H */

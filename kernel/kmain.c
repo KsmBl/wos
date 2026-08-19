@@ -213,7 +213,9 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     /* Also from the firmware's tables, and for the same reason it has to
      * happen here: the window they are read through cannot be opened once
      * anything else is running. */
+#if CONFIG_BATTERY
     battery_init();
+#endif
     battery_print_report();
 
     /* Move the console onto a linear framebuffer for crisp text at real
@@ -249,7 +251,9 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
 
     /* After the display, because the pointer is clamped to the screen and the
      * driver has to know how big it is before the first movement. */
+#if CONFIG_MOUSE
     mouse_init();
+#endif
 
     if (ata_init()) {
         uint32_t sectors = ata_sector_count();
@@ -326,7 +330,9 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
      * bring-up, deliberately: everything a started core immediately touches --
      * the page tables it runs on, the heap its stack came from, the process
      * table it looks for work in -- has to be there before it can look. */
+#if CONFIG_SMP
     smp_init();
+#endif
 
     /* Anything the machine is meant to be running, before anyone logs in:
      * that is what makes it a service rather than something you start. */

@@ -9,6 +9,7 @@
 # Build settings live in config.mk -- edit that file, or override any of them
 # for one build on the command line:
 #
+#   make menuconfig    pick the drivers, the programs and the settings
 #   make SELFTEST=0    build without the boot-time self-tests
 #   make DISK_MB=16    build a smaller filesystem image
 #   make config        print what is currently set
@@ -26,6 +27,32 @@ DISK_MB  ?= 64
 KHEAP_MB ?= 8
 QEMU_MEM ?= 256M
 TIMEOUT  ?= 12
+
+# What is built in.  `make menuconfig` writes these; they can equally be set
+# by hand here or on the command line, which is why they are ordinary
+# variables and not a format of their own.
+#
+# A driver that is off is not compiled at all -- its source leaves the build
+# and the call that would have started it is compiled away, so what is left is
+# a kernel that has never heard of it.  The drivers not listed here are not
+# optional: the console, the keyboard, the timer and the PCI bus are how the
+# machine works at all.
+DRIVERS := RTL8139 IWLWIFI XHCI ATA MOUSE BATTERY
+
+CONFIG_RTL8139 ?= y
+CONFIG_IWLWIFI ?= y
+CONFIG_XHCI    ?= y
+CONFIG_ATA     ?= y
+CONFIG_MOUSE   ?= y
+CONFIG_BATTERY ?= y
+
+# Multicore.  Off means the other processors are never started and the machine
+# runs on the one it booted on.
+SMP ?= y
+
+# Programs left off the disk, by name.  Everything in app/ is included unless
+# it is named here, so a program added to the tree needs no mention.
+APPS_OFF ?=
 
 BUILD    := build
 ISODIR   := $(BUILD)/isodir
@@ -53,7 +80,7 @@ CFLAGS := -m64 -std=gnu11 -ffreestanding -O2 -g \
           -fno-pie -fno-pic -fno-stack-protector -fno-builtin \
           -fno-asynchronous-unwind-tables -fno-omit-frame-pointer \
           -mcmodel=small -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
-          -DWOS_KERNEL -DKHEAP_MB=$(KHEAP_MB) -Ikernel/include -Iinclude
+          -DWOS_KERNEL -DKHEAP_MB=$(KHEAP_MB) -Ikernel/include -Iinclude -I$(BUILD)/include
 ifeq ($(SELFTEST),0)
 CFLAGS += -DWOS_NO_SELFTEST
 endif
@@ -64,14 +91,49 @@ LDFLAGS := -m elf_x86_64 -nostdlib -no-pie -z noexecstack -n
 # directory cannot silently compile over each other's object file.
 KSRC_C := $(shell find kernel -name '*.c' | sort)
 KSRC_S := $(shell find kernel -name '*.S' | sort)
+
+# Leave out what is switched off.  The call sites are compiled away too, by
+# the CONFIG_* defines in the generated header below, so nothing is left
+# referring to a driver that is not there.
+ifneq ($(CONFIG_RTL8139),y)
+KSRC_C := $(filter-out kernel/drivers/rtl8139.c,$(KSRC_C))
+endif
+ifneq ($(CONFIG_IWLWIFI),y)
+KSRC_C := $(filter-out kernel/drivers/iwlwifi/%,$(KSRC_C))
+endif
+ifneq ($(CONFIG_XHCI),y)
+KSRC_C := $(filter-out kernel/drivers/xhci.c kernel/drivers/usbdisk.c,$(KSRC_C))
+endif
+ifneq ($(CONFIG_ATA),y)
+KSRC_C := $(filter-out kernel/drivers/ata.c,$(KSRC_C))
+endif
+ifneq ($(CONFIG_MOUSE),y)
+KSRC_C := $(filter-out kernel/drivers/mouse.c,$(KSRC_C))
+endif
+ifneq ($(CONFIG_BATTERY),y)
+KSRC_C := $(filter-out kernel/drivers/battery.c,$(KSRC_C))
+endif
+# SMP is not a file that can be left out: smp.c also owns the lock the
+# scheduler, the page tables and the interrupt path take, on one processor as
+# much as on eight.  Switching it off means not starting the other processors,
+# which is what CONFIG_SMP does at the one call site that matters.
+
+# What the kernel sources see of all that: one generated header, included by
+# everything, saying which of the optional pieces are present.
+WOSCONFIG := $(BUILD)/include/wosconfig.h
+
 KOBJ   := $(patsubst %.c,$(BUILD)/%.o,$(KSRC_C)) $(patsubst %.S,$(BUILD)/%.asm.o,$(KSRC_S))
 KDEP   := $(KOBJ:.o=.d)
 
-.PHONY: all kernel lib apps efi iso disk run run-nox log debug clean config
+.PHONY: all kernel lib apps efi iso disk run run-nox log debug clean config menuconfig
 
 all: iso disk
 
 kernel: $(KERNEL)
+
+# Pick what goes into the build, and write it to config.mk.
+menuconfig:
+	@python3 tools/menuconfig.py
 
 # What the next build will use, and where each value came from -- editing
 # config.mk and forgetting to save it looks exactly like a build that ignored
@@ -89,7 +151,13 @@ config:
 # output built the other way.  A stamp named after the current value stands in
 # for it: change the value and the name no longer exists, which rebuilds
 # whatever depends on it.
-KERNEL_STAMP := $(BUILD)/.build-selftest$(SELFTEST)-kheap$(KHEAP_MB)
+# The configuration is part of this too.  Without it, switching a driver off
+# on the command line would change nothing that make can see -- no source file
+# is newer, so nothing is rebuilt, and the build quietly keeps the driver.
+CONFIG_SIG := $(shell echo '$(foreach d,$(DRIVERS),$(CONFIG_$(d)))$(SMP)$(APPS_OFF)' \
+                      | cksum | cut -d' ' -f1)
+
+KERNEL_STAMP := $(BUILD)/.build-selftest$(SELFTEST)-kheap$(KHEAP_MB)-cfg$(CONFIG_SIG)
 DISK_STAMP   := $(BUILD)/.disk-$(DISK_MB)
 
 $(KERNEL_STAMP):
@@ -102,11 +170,24 @@ $(DISK_STAMP):
 	@rm -f $(BUILD)/.disk-*
 	@touch $@
 
-$(BUILD)/%.o: %.c $(KERNEL_STAMP)
+$(WOSCONFIG): config.mk Makefile $(KERNEL_STAMP)
+	@mkdir -p $(dir $@)
+	@{ echo "/* Generated from config.mk by the build -- do not edit."; \
+	   echo " * 'make menuconfig' is what writes the settings behind it. */"; \
+	   echo "#ifndef WOS_WOSCONFIG_H"; \
+	   echo "#define WOS_WOSCONFIG_H"; \
+	   $(foreach d,$(DRIVERS), \
+	     echo "#define CONFIG_$(d) $(if $(filter y,$(CONFIG_$(d))),1,0)";) \
+	   echo "#define CONFIG_SMP $(if $(filter y,$(SMP)),1,0)"; \
+	   echo "#endif"; } > $@
+	@echo "  configured: $(strip $(foreach d,$(DRIVERS),$(if $(filter y,$(CONFIG_$(d))),$(d))))$(if $(filter y,$(SMP)), SMP)"
+
+
+$(BUILD)/%.o: %.c $(KERNEL_STAMP) $(WOSCONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD)/%.asm.o: %.S $(KERNEL_STAMP)
+$(BUILD)/%.asm.o: %.S $(KERNEL_STAMP) $(WOSCONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -MMD -MP -c $< -o $@
 
@@ -299,6 +380,8 @@ lib: $(LIBW) $(LIBC)
 # otherwise produce a link with no input files.
 APPS     := $(sort $(foreach f,$(wildcard app/*/sourcecode/*.c),\
                      $(word 2,$(subst /, ,$(f)))))
+# ... minus the ones config.mk says to leave out.
+APPS     := $(filter-out $(APPS_OFF),$(APPS))
 APP_BINS :=
 APP_DEPS :=
 
