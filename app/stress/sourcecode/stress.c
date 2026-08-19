@@ -37,8 +37,14 @@ static const char *hog_name(enum hog h)
     return h == HOG_CPU ? "cpu" : h == HOG_VM ? "vm" : "hdd";
 }
 
-/* WFS caps a file at 267 KiB, so a disk worker writes something that fits and
- * writes it over and over rather than writing one enormous file. */
+/* A disk worker writes this much over and over rather than one enormous file.
+ *
+ * This began as the largest file WFS could hold; the filesystem holds 64 MiB
+ * in a file now, and the figure stays because it is a sensible one on its own.
+ * The point of the disk worker is sustained traffic to the platter, and a
+ * quarter of a megabyte rewritten in a loop produces more of that than one
+ * huge file written once -- which would spend most of its time allocating
+ * blocks rather than moving bytes. */
 #define HDD_MAX_BYTES (256u * 1024u)
 
 static int verbose;

@@ -2463,8 +2463,11 @@ skip any of it.
 has no such call: writes reach the disk as they are made. `--hdd` is the disk
 test.
 
-`--hdd-bytes` is capped at 256K because WFS holds at most 267 KiB in one file.
-A larger figure is lowered, with a line saying so, rather than failing.
+`--hdd-bytes` is capped at 256K. That was once the largest file WFS could
+hold; the filesystem holds 64 MiB in a file now, and the cap stays because
+rewriting a quarter of a megabyte in a loop puts more sustained traffic on the
+disk than writing one huge file once. A larger figure is lowered, with a line
+saying so, rather than failing.
 
 **Exit status:** 0 if every worker finished cleanly, 1 if any failed or if
 nothing was asked for.

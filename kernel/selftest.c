@@ -390,6 +390,95 @@ static void test_filesystem_dirs(void)
           "emptying it first lets it be removed");
 }
 
+/* A file past the old ceiling, which is the only way to reach the
+ * double-indirect block.
+ *
+ * WFS used to hold 267 KiB in one file: eleven direct blocks and one indirect
+ * one.  That was chosen when the largest thing stored here was the kernel,
+ * and it stopped being enough -- the kernel outgrew it, and the wireless
+ * adapter's firmware is 1.45 MiB.  The block of blocks of pointers that
+ * lifted the limit to 64 MiB is reached only by a file large enough to need
+ * it, so nothing else in this suite touches that code at all.
+ *
+ * The free-space check at the end is the point as much as the readback is: a
+ * pointer block that is allocated and never freed leaks silently, a few
+ * kilobytes at a time, and the only symptom is a disk that slowly fills. */
+static void test_filesystem_large(void)
+{
+    const char    *path = "/selftest-large.tmp";
+    const uint32_t chunk = 32 * 1024;
+    const uint32_t size  = 384 * 1024;      /* well past the old 267 KiB */
+    wdiskinfo_t    before, after;
+    uint32_t       ino;
+
+    wfs_statfs(&before);
+    wfs_unlink(path);                       /* a previous boot may have left it */
+
+    int r = wfs_create(path, WFS_TYPE_FILE, &ino);
+
+    check(r == 0, "a file larger than the old limit can be created");
+    if (r < 0)
+        return;
+
+    uint8_t *buf = kmalloc(chunk);
+
+    if (!buf) {
+        check(false, "allocating the buffer for the large-file test");
+        return;
+    }
+
+    /* The pattern depends on the absolute offset, so a block written to the
+     * wrong place -- the failure a wrong index calculation produces -- shows
+     * up as a mismatch rather than as plausible-looking data. */
+    bool wrote = true;
+
+    for (uint32_t at = 0; at < size; at += chunk) {
+        for (uint32_t i = 0; i < chunk; i++)
+            buf[i] = (uint8_t)((at + i) * 31 + ((at + i) >> 11));
+
+        if (wfs_write(ino, at, buf, chunk) != (int)chunk)
+            wrote = false;
+    }
+    check(wrote, "384 KiB writes through the double-indirect block");
+
+    uint32_t stored = 0;
+    struct wfs_inode in;
+
+    if (wfs_read_inode(ino, &in) == 0)
+        stored = in.size;
+    check(stored == size, "and the file is as long as what was written");
+
+    bool matched = true;
+
+    for (uint32_t at = 0; at < size && matched; at += chunk) {
+        if (wfs_read(ino, at, buf, chunk) != (int)chunk) {
+            matched = false;
+            break;
+        }
+        for (uint32_t i = 0; i < chunk; i++)
+            if (buf[i] != (uint8_t)((at + i) * 31 + ((at + i) >> 11))) {
+                kprintf("  byte %u came back as %x, not %x\n",
+                        at + i, buf[i],
+                        (uint8_t)((at + i) * 31 + ((at + i) >> 11)));
+                matched = false;
+                break;
+            }
+    }
+    check(matched, "and reads back byte for byte");
+
+    kfree(buf);
+
+    check(wfs_unlink(path) == 0, "the large file can be deleted");
+
+    wfs_statfs(&after);
+    check(after.free_bytes == before.free_bytes,
+          "and every block it used came back, the pointer blocks included");
+
+    if (after.free_bytes != before.free_bytes)
+        kprintf("  %s went missing across the large-file test\n",
+                fmt_bytes(before.free_bytes - after.free_bytes));
+}
+
 void selftest_filesystem(void)
 {
     kputs("\n-- filesystem self-test --\n");
@@ -409,6 +498,7 @@ void selftest_filesystem(void)
 
     test_filesystem_paths();
     test_filesystem_write();
+    test_filesystem_large();
     test_filesystem_dirs();
     test_boot_counter();
 

@@ -1,9 +1,9 @@
 /* Reading a Makefile: variables, rules, and `$(...)` expansion.
  *
  * The whole file is read into memory first.  Makefiles here are a few hundred
- * bytes and the largest thing this machine can hold in one file is 267 KiB, so
- * there is nothing to be gained by streaming it -- and having the whole text in
- * one place is what makes joining continuation lines two lines of code.
+ * bytes, so there is nothing to be gained by streaming one -- and having the
+ * whole text in one place is what makes joining continuation lines two lines
+ * of code.
  */
 
 #include "make.h"

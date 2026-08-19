@@ -218,47 +218,42 @@ int wfs_utime(uint32_t ino, uint32_t mtime)
  *  Block mapping
  * ------------------------------------------------------------------ */
 
-/* Translate a file-relative block index to a disk block, optionally
- * allocating.  `*dirty` is set when the inode itself changed. */
-static int bmap(struct wfs_inode *in, uint32_t index, bool alloc,
-                uint32_t *out, bool *dirty)
+/* Fill in a block number that is not there yet: allocate one, count it, and
+ * note that the inode changed.  Used for the pointer blocks themselves, which
+ * are the inode's own fields rather than entries in a table.
+ *
+ * Leaving `*slot` alone when `alloc` is false is what makes a read of a sparse
+ * file cheap: it reports "no block" rather than creating one. */
+static int fill_slot(uint32_t *slot, struct wfs_inode *in, bool alloc,
+                     bool *dirty)
 {
-    if (index < WFS_DIRECT) {
-        if (in->direct[index] == 0) {
-            if (!alloc) {
-                *out = 0;
-                return 0;
-            }
-            uint32_t b = block_alloc();
-            if (!b)
-                return -W_ENOSPC;
-            in->direct[index] = b;
-            in->blocks++;
-            *dirty = true;
-        }
-        *out = in->direct[index];
+    if (*slot || !alloc)
         return 0;
-    }
 
-    index -= WFS_DIRECT;
-    if (index >= WFS_PTRS_PER_BLOCK)
-        return -W_EFBIG;
+    uint32_t b = block_alloc();
 
-    if (in->indirect == 0) {
-        if (!alloc) {
-            *out = 0;
-            return 0;
-        }
-        uint32_t b = block_alloc();
-        if (!b)
-            return -W_ENOSPC;
-        in->indirect = b;
-        in->blocks++;      /* the indirect block itself occupies space */
-        *dirty = true;
-    }
+    if (!b)
+        return -W_ENOSPC;
 
+    *slot = b;
+    in->blocks++;          /* a pointer block occupies space of its own */
+    *dirty = true;
+    return 0;
+}
+
+/* The block named by slot `index` of the pointer block at `table_block`,
+ * allocating it if asked.
+ *
+ * block_alloc zeroes what it hands out, so a pointer block that has just been
+ * created reads as all zeroes -- every slot in it saying "nothing here yet",
+ * which is exactly what it should say.  Nothing below would survive that not
+ * being true. */
+static int table_slot(uint32_t table_block, uint32_t index, bool alloc,
+                      uint32_t *out, struct wfs_inode *in, bool *dirty)
+{
     uint32_t table[WFS_PTRS_PER_BLOCK];
-    if (!block_read(in->indirect, table))
+
+    if (!block_read(table_block, table))
         return -W_EIO;
 
     if (table[index] == 0) {
@@ -266,18 +261,104 @@ static int bmap(struct wfs_inode *in, uint32_t index, bool alloc,
             *out = 0;
             return 0;
         }
+
         uint32_t b = block_alloc();
+
         if (!b)
             return -W_ENOSPC;
+
         table[index] = b;
         in->blocks++;
         *dirty = true;
-        if (!block_write(in->indirect, table))
+
+        if (!block_write(table_block, table))
             return -W_EIO;
     }
 
     *out = table[index];
     return 0;
+}
+
+/* Translate a file-relative block index to a disk block, optionally
+ * allocating.  `*dirty` is set when the inode itself changed.
+ *
+ * Three tiers: the pointers in the inode, then a block of pointers, then a
+ * block of blocks of pointers.  The last of those is what takes a file past a
+ * quarter of a megabyte, and it is reached in two steps -- one to find the
+ * middle block, one to find the data block inside it.
+ *
+ * The two steps are sequential rather than nested, so only one kilobyte of
+ * pointer table is on the stack at a time. */
+static int bmap(struct wfs_inode *in, uint32_t index, bool alloc,
+                uint32_t *out, bool *dirty)
+{
+    if (index < WFS_DIRECT) {
+        int r = fill_slot(&in->direct[index], in, alloc, dirty);
+
+        if (r < 0)
+            return r;
+        *out = in->direct[index];
+        return 0;
+    }
+    index -= WFS_DIRECT;
+
+    /* ---- one level: a block of block numbers ---- */
+    if (index < WFS_PTRS_PER_BLOCK) {
+        int r = fill_slot(&in->indirect, in, alloc, dirty);
+
+        if (r < 0)
+            return r;
+        if (!in->indirect) {
+            *out = 0;
+            return 0;
+        }
+        return table_slot(in->indirect, index, alloc, out, in, dirty);
+    }
+    index -= WFS_PTRS_PER_BLOCK;
+
+    /* ---- two levels ---- */
+    if (index >= WFS_DOUBLE_BLOCKS)
+        return -W_EFBIG;
+
+    int r = fill_slot(&in->double_indirect, in, alloc, dirty);
+
+    if (r < 0)
+        return r;
+    if (!in->double_indirect) {
+        *out = 0;
+        return 0;
+    }
+
+    uint32_t middle = 0;
+
+    r = table_slot(in->double_indirect, index / WFS_PTRS_PER_BLOCK, alloc,
+                   &middle, in, dirty);
+    if (r < 0)
+        return r;
+    if (!middle) {
+        *out = 0;
+        return 0;
+    }
+
+    return table_slot(middle, index % WFS_PTRS_PER_BLOCK, alloc, out, in,
+                      dirty);
+}
+
+/* Free every block a pointer block names, but not the pointer block itself --
+ * the caller frees that, because at the second level it is also an entry in
+ * the table above it and has to be cleared there first. */
+static void free_table(uint32_t table_block)
+{
+    uint32_t table[WFS_PTRS_PER_BLOCK];
+
+    if (!table_block)
+        return;
+    if (!block_read(table_block, table))
+        return;
+
+    for (uint32_t i = 0; i < WFS_PTRS_PER_BLOCK; i++)
+        if (table[i])
+            block_free(table[i]);
 }
 
 int wfs_truncate(uint32_t ino)
@@ -295,14 +376,27 @@ int wfs_truncate(uint32_t ino)
     }
 
     if (in.indirect) {
-        uint32_t table[WFS_PTRS_PER_BLOCK];
-        if (block_read(in.indirect, table)) {
-            for (uint32_t i = 0; i < WFS_PTRS_PER_BLOCK; i++)
-                if (table[i])
-                    block_free(table[i]);
-        }
+        free_table(in.indirect);
         block_free(in.indirect);
         in.indirect = 0;
+    }
+
+    /* The double-indirect tree, a middle block at a time.  Each middle block
+     * is freed as soon as its entries are, so only one is held at once --
+     * and freeing the outer block last means a failure part-way through
+     * leaves blocks allocated rather than pointed at by nothing. */
+    if (in.double_indirect) {
+        uint32_t outer[WFS_PTRS_PER_BLOCK];
+
+        if (block_read(in.double_indirect, outer)) {
+            for (uint32_t i = 0; i < WFS_PTRS_PER_BLOCK; i++)
+                if (outer[i]) {
+                    free_table(outer[i]);
+                    block_free(outer[i]);
+                }
+        }
+        block_free(in.double_indirect);
+        in.double_indirect = 0;
     }
 
     in.size   = 0;
@@ -856,8 +950,16 @@ static bool superblock_ok(void)
 
     memcpy(&sb, buf, sizeof(sb));
 
+    /* Each older version put the block pointers somewhere else in the inode,
+     * so reading one here would find file contents where block numbers are
+     * expected.  Saying so plainly beats mounting it and returning rubbish. */
     if (sb.magic == WFS_MAGIC_V1) {
         kputs("wfs    : this volume predates file times (WFS1); "
+              "rebuild the image with make\n");
+        return false;
+    }
+    if (sb.magic == WFS_MAGIC_V2) {
+        kputs("wfs    : this volume predates large files (WFS2); "
               "rebuild the image with make\n");
         return false;
     }
