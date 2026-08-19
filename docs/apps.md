@@ -32,6 +32,7 @@ which is the price of having no shared libraries.
 | [`curl`](#curl) | fetch a URL and print it |
 | [`wget`](#wget) | download a URL to a file |
 | [`lynx`](#lynx) | browse the web as text |
+| [`wifi`](#wifi) | find wireless networks and join one |
 | [`shutdown`](#shutdown) | power the machine off |
 | [`reboot`](#reboot) | restart it |
 | [`uptime`](#uptime) | how long the machine has been running |
@@ -565,9 +566,9 @@ here:
 | fish | a C++ runtime, `fork`/`exec` job control, `termios`, PCRE |
 | thunar | GTK, GLib, GIO and gvfs, an icon theme, a MIME database, a mouse |
 
-WOS has a 30-call kernel API, no `fork`, no signals, no `termios`, no dynamic
-linking, and a 267 KiB limit on any single file. Building the real thing would
-mean writing a POSIX layer several times the size of the whole system.
+WOS has a 30-call kernel API, no `fork`, no signals, no `termios` and no
+dynamic linking. Building the real thing would mean writing a POSIX layer
+several times the size of the whole system.
 
 What is here instead: each program does what the original is *for*, using the
 same key bindings and the same output shapes where they apply, so the muscle
@@ -2685,6 +2686,96 @@ a great many pages is what you came for. A link to an `https://` page reports
 that WOS cannot fetch it.
 
 **Exit status:** 0.
+
+---
+
+# wifi
+
+```
+wifi [status]                  what the adapter is doing
+wifi scan                      what is in range
+wifi connect <network>         join an open network
+wifi connect <network> <key>   join a protected one
+wifi connect <network> -       ask for the passphrase without showing it
+wifi disconnect                leave the current network
+```
+
+Find wireless networks and join one, including a **WPA2** network with a
+passphrase.
+
+> **The adapter driver is unfinished.** The 802.11 layer, the WPA2 handshake
+> and this command are written and tested, but the driver for the wireless
+> adapter itself was never run against real hardware. On a machine with a
+> wireless adapter, `wifi` will find it, load and parse its firmware, and then
+> report that it cannot command it; on a machine without one it says so.
+> [`docs/wireless.md`](wireless.md) is straight about how far it got, why, and
+> where to pick it up.
+>
+> **The two sessions below are therefore the intended form of the output, not
+> a transcript** — unlike the screenshots in the README, nothing has produced
+> them yet. They are here because the shape of what a command prints is worth
+> agreeing on before the thing under it works.
+
+`scan` sweeps the channels and lists what it heard, strongest first:
+
+```
+wos:/home$ wifi scan
+Scanning...
+
+NETWORK                          CH     SECURITY SIGNAL
+kitchen                          6      WPA2     ###. -58 dBm
+kitchen-guest                    6      open     ###. -59 dBm
+BTHub-2G                         11     WPA2     ##.. -71 dBm
+oldrouter                        1      WEP      #... -84 dBm  (not supported)
+```
+
+Several access points broadcasting one name collapse into a single entry —
+they are one network to anyone choosing which to join — and the ones WOS cannot
+join are marked, so nobody spends a minute finding out the hard way.
+
+`connect` runs the whole sequence: find the network, authenticate, associate,
+prove the passphrase, and ask for an address by DHCP. Expect a few seconds, and
+longer on a protected network — turning a passphrase into a key is thousands of
+hashes, deliberately, so that guessing passphrases from a captured handshake is
+slow.
+
+```
+wos:/home$ wifi connect kitchen -
+Passphrase:
+Connecting to kitchen...
+
+State      connected
+Network    kitchen (WPA2)
+Access pt  a4:2b:8c:11:9f:03  channel 6
+Signal     ###. -58 dBm
+Address    192.168.1.47  gateway 192.168.1.1
+Resolver   192.168.1.1  (from the network)
+```
+
+A passphrase of `-` is read from the terminal without being echoed, so it never
+appears in the shell's history. It is wiped from memory in both the command and
+the kernel as soon as the key is derived from it. A passphrase may also be
+given as 64 hex digits, which is the key itself rather than a passphrase.
+
+**Who may:** anyone can `scan` while the machine is not connected — seeing
+what networks exist tells you nothing you could not learn by standing in the
+room with a phone. Only **root** can `connect` or `disconnect`: it changes
+where every program's traffic goes, and the passphrase is a credential. Root
+is also needed to scan *while connected*, because a sweep takes the radio off
+the channel it is holding and drops the link for everybody.
+
+**When it fails**, the reason is in words rather than a number. A wrong
+passphrase is reported as such, with the caveat that the protocol cannot
+actually distinguish it from an access point that stopped answering — there is
+no "wrong password" message in WPA2, only silence.
+
+**Exit status:** 0 on success, 1 on failure, 2 for a usage error.
+
+What *is* exercised on every run of the test suite is the whole path from the
+command to the kernel and back — status, scan, connect, disconnect, the usage
+message, the refusal of an unknown subcommand, and the rule about who may do
+what — on a machine with no wireless adapter, which is what QEMU is and what
+most machines running WOS are. See the `wifi` scenario in `tools/check.py`.
 
 ---
 

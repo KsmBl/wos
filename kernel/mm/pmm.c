@@ -344,6 +344,63 @@ uint64_t pmm_alloc_frame_low(void)
     return alloc_scan(0, limit, &next_hint_low);
 }
 
+/* A run of frames next to each other in physical memory, which is what a
+ * device doing DMA needs: the adapter is handed one address and walks forward
+ * from it, knowing nothing of page tables.
+ *
+ * The scan is deliberately simple -- walk from the bottom, and on hitting a
+ * used frame start again after it.  Nothing here allocates often enough for
+ * that to matter: rings and firmware buffers are claimed once when a driver
+ * starts and held until it stops.
+ *
+ * `align_frames` is a power-of-two frame count the run must start on; the
+ * adapter's rings must be aligned to their own size, which the bare allocator
+ * has no way to promise. */
+uint64_t pmm_alloc_contiguous(uint64_t count, uint64_t align_frames)
+{
+    uint64_t limit = LOW_MEMORY_LIMIT / PAGE_SIZE;
+
+    if (!count)
+        return 0;
+    if (align_frames < 1)
+        align_frames = 1;
+    if (limit > total_frames)
+        limit = total_frames;
+
+    /* Frame 0 is never handed out -- a null return means failure, and an
+     * allocation at physical zero would be indistinguishable from it. */
+    for (uint64_t start = ALIGN_UP(1, align_frames);
+         start + count <= limit;
+         start = ALIGN_UP(start + 1, align_frames)) {
+        uint64_t i;
+
+        for (i = 0; i < count; i++)
+            if (bitmap_test(start + i))
+                break;
+
+        if (i < count) {
+            /* Resume past the frame that blocked us rather than one frame
+             * on, which turns a long occupied stretch into one step. */
+            start = start + i;
+            continue;
+        }
+
+        for (i = 0; i < count; i++)
+            bitmap_set(start + i);
+        used_frames += count;
+
+        return start * PAGE_SIZE;
+    }
+
+    return 0;
+}
+
+void pmm_free_contiguous(uint64_t phys, uint64_t count)
+{
+    for (uint64_t i = 0; i < count; i++)
+        pmm_free_frame(phys + i * PAGE_SIZE);
+}
+
 void pmm_free_frame(uint64_t phys)
 {
     uint64_t frame = phys / PAGE_SIZE;

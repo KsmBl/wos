@@ -26,9 +26,26 @@ void     pci_write32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t off,
 /* Scan every bus/slot/function for a device with this vendor and device id. */
 pci_device_t pci_find(uint16_t vendor, uint16_t device);
 
+/* The same, for a driver that supports several device ids -- the first device
+ * whose vendor matches and whose id is any of `devices`.
+ *
+ * This exists because a scan is not cheap.  Every slot on every bus is probed
+ * with a pair of port accesses, and on an emulated machine each one of those
+ * leaves the virtual processor: sixty-five thousand slots is most of a second.
+ * A driver that called pci_find once per id it supports would pay that over
+ * and over, which is exactly how the wireless driver put eight seconds into
+ * the boot before this was noticed. */
+pci_device_t pci_find_any(uint16_t vendor, const uint16_t *devices, int count);
+
 /* The same, by class/subclass/interface -- how a host controller is found,
  * since every vendor's has its own device id but the class code is what says
  * the registers are where the specification puts them. */
+/* Match any programming interface.  Some classes spell real differences in
+ * that byte -- an IDE controller puts the mode of each channel there, and
+ * whether it can bus-master -- so a driver that cares about the class but not
+ * the variant would otherwise have to guess every value the byte can take. */
+#define PCI_PROG_IF_ANY 0xFF
+
 pci_device_t pci_find_class(uint8_t class_code, uint8_t subclass, uint8_t prog_if);
 
 /* The same, picking between several devices of one kind.  Returns a device

@@ -328,6 +328,26 @@ void wtcp_close(int handle)
     wsyscall1(WSYS_TCP_CLOSE, handle);
 }
 
+int wwifi_scan(wnetwork_t *out, int max)
+{
+    return (int)wsyscall2(WSYS_WIFI_SCAN, (long)out, max);
+}
+
+int wwifi_connect(const char *ssid, const char *password)
+{
+    return (int)wsyscall2(WSYS_WIFI_CONNECT, (long)ssid, (long)password);
+}
+
+int wwifi_disconnect(void)
+{
+    return (int)wsyscall0(WSYS_WIFI_DISCONNECT);
+}
+
+int wwifi_status(wwifi_status_t *out)
+{
+    return (int)wsyscall1(WSYS_WIFI_STATUS, (long)out);
+}
+
 int wtime_get(wtime_t *out)
 {
     return (int)wsyscall1(WSYS_TIME_GET, (long)out);
