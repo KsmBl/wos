@@ -1,8 +1,14 @@
 /* Syscall dispatch.
  *
- * Entered through int 0x80 with the call number in eax and up to five
- * arguments in ebx, ecx, edx, esi, edi.  The result goes back in eax; failures
- * are the negated W_E* code, so user space checks `if (r < 0)`.
+ * Entered with the call number in rax and up to three arguments in rdi, rsi
+ * and rdx -- the ordinary SysV registers, so a wrapper needs no shuffling.
+ * The result goes back in rax; failures are the negated W_E* code, so user
+ * space checks `if (r < 0)`.
+ *
+ * There are two ways in and they arrive here identically.  int 0x80 comes
+ * through the IDT like any interrupt; the syscall instruction comes through
+ * sysentry.S, which builds the same frame by hand.  Nothing below this line
+ * can tell which was used, and nothing needs to.
  *
  * Every pointer that arrives from ring 3 is checked against the calling
  * process's page tables before the kernel touches it.  Ring 3 cannot reach

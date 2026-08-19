@@ -6,12 +6,14 @@
  */
 
 #include "types.h"
+#include "wosconfig.h"
 #include "multiboot.h"
 #include "kprintf.h"
 #include "vga.h"
 #include "fbcon.h"
 #include "serial.h"
 #include "gdt.h"
+#include "sysentry.h"
 #include "isr.h"
 #include "pic.h"
 #include "pit.h"
@@ -160,6 +162,11 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
     idt_init();
     traps_init();
     kputs("idt    : 48 vectors + syscall gate installed\n");
+
+    /* The shorter way into the kernel, where the processor has one.  int 0x80
+     * stays installed either way, so nothing depends on this succeeding. */
+    if (sysentry_init_cpu())
+        kputs("cpu    : syscall/sysret enabled\n");
 
     pic_mask_all();
     pic_remap(IRQ_BASE, IRQ_BASE + 8);

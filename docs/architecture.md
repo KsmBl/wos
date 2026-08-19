@@ -525,9 +525,31 @@ protocol has none — which is exactly why `wl_fixed_t` is an integer.
 
 ## Syscalls
 
-`int 0x80`, with the call number in `rax` and arguments in the System V
-registers `rdi`, `rsi` and `rdx`. The result comes back in `rax`; failures are
-the negated error code.
+The call number goes in `rax` and the arguments in the System V registers
+`rdi`, `rsi` and `rdx`. The result comes back in `rax`; failures are the
+negated error code.
+
+There are two ways in and they arrive at the same place. `int 0x80` is the
+original and still works, which is what keeps a binary built against it
+running. The `syscall` instruction is the one `lib/wkernel` now uses: it skips
+the descriptor lookup, the privilege check and the stack load from the TSS that
+a software interrupt costs, and does none of them because there is nothing to
+look up — CS and SS come from an MSR and so does the entry point.
+
+The price is that `syscall` does not switch stacks, so `kernel/arch/sysentry.S`
+does it by hand. It reaches this processor's kernel stack through `GS`, which
+`SWAPGS` points at a per-processor block for exactly as long as it takes to
+make the switch and then puts back. Leaving it swapped for the length of the
+call would mean every interrupt and exception had to agree to swap it too — a
+thread can be preempted mid-syscall and another resumed in its place, and `GS`
+belongs to the processor rather than the thread. Five instructions with
+interrupts masked avoids the whole question.
+
+Once the stack is switched, the stub builds by hand the same frame the
+interrupt stubs build, so nothing downstream can tell which road was taken.
+The return is by `SYSRET` when the frame still describes a plain return to ring
+3, and by `IRETQ` when it does not — an `exec` that replaced the program, or a
+resumed thread that arrived some other way.
 
 There is no `pusha` in long mode, so the interrupt stub pushes all fifteen
 general registers by hand. In exchange the CPU always pushes `rsp` and `ss` on

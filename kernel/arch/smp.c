@@ -7,6 +7,7 @@
 #include "lapic.h"
 #include "cpu.h"
 #include "gdt.h"
+#include "sysentry.h"
 #include "isr.h"
 #include "pit.h"
 #include "pmm.h"
