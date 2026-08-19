@@ -33,6 +33,49 @@ static void check(bool ok, const char *what)
         failures++;
 }
 
+/* The property whose absence froze the machine.
+ *
+ * Every timeout in the kernel used to be measured in timer interrupts, and an
+ * interrupt has to be delivered before it can be counted.  A processor holding
+ * the kernel lock stops the tick from being counted at all -- the handler that
+ * counts it wants the same lock -- so any deadline waited on from behind that
+ * lock was waiting for something the waiter was itself preventing.  Four
+ * processors and a real disk turned that into a machine that stopped dead with
+ * every core alive and none of them moving.
+ *
+ * Interrupts off is the same condition in miniature and needs no second
+ * processor to arrange, which is what makes it testable here: the tick cannot
+ * advance because the handler cannot run, and a clock that depends on the
+ * handler cannot advance either.  So the two are checked against each other.
+ * time_now_ms must move, because it reads the cycle counter and nothing has to
+ * be delivered for that; pit_uptime_ms must not, because it counts interrupts
+ * and none can arrive.
+ *
+ * If a future change points time_now_ms back at the tick count, the first of
+ * these fails at the next boot rather than a year later on somebody's laptop. */
+static void test_clock_survives_interrupts_off(void)
+{
+    bool     were_on   = interrupts_off();
+    uint64_t tsc_start = time_now_ms();
+    uint32_t pit_start = pit_uptime_ms();
+    uint64_t tsc_now   = tsc_start;
+
+    /* Long enough to cross a millisecond on any plausible processor, and
+     * bounded so a machine where the clock really is stopped leaves the test
+     * rather than the test hanging the boot. */
+    for (int i = 0; i < 20000000 && tsc_now == tsc_start; i++)
+        tsc_now = time_now_ms();
+
+    uint32_t pit_now = pit_uptime_ms();
+
+    interrupts_restore(were_on);
+
+    check(tsc_now > tsc_start,
+          "the clock still advances with interrupts disabled");
+    check(pit_now == pit_start,
+          "the interrupt tick does not -- which is why it cannot be waited on");
+}
+
 void selftest_interrupts(void)
 {
     kputs("\n-- interrupt self-test --\n");
@@ -48,6 +91,8 @@ void selftest_interrupts(void)
     kprintf("  timer produced %u ticks in ~500 ms (expected ~%u)\n",
             elapsed, PIT_HZ / 2);
     check(elapsed > 0, "timer interrupts are arriving");
+
+    test_clock_survives_interrupts_off();
 
     if (failures)
         panic("%u interrupt self-test failure(s)", failures);
