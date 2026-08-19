@@ -291,6 +291,47 @@ running thread, the idle thread, the current address space, the GDT and TSS, and
 the busy/idle tick counters — which is what makes [`htop`](apps.md#htop)'s meter
 per core mean anything.
 
+### Never wait on a clock the lock stops
+
+One consequence of a single kernel lock is worth its own heading, because
+getting it wrong froze the machine solid and the reason was not visible from
+anywhere near the symptom.
+
+`pit_uptime_ms()` counts timer interrupts. The timer interrupt arrives on the
+boot processor, and its handler — like every other way into the kernel — takes
+the kernel lock. So the tick only advances when the lock is available.
+
+Now put a driver on another processor inside a syscall, holding that lock,
+waiting for something with `while (pit_uptime_ms() < deadline)`. The boot
+processor's timer fires, tries to take the lock, and spins. The tick never
+advances. The deadline never passes. The waiter never returns and never
+releases the lock. **Both processors are alive, neither can move, and the
+machine is dead** — with no fault, no message, and nothing to see.
+
+It cannot happen on one processor, because there the handler runs re-entrantly
+on the core that already holds the lock. So it needs real hardware with work
+scheduled on more than one core, which is exactly the machine least convenient
+to debug on. Booting from USB made it certain rather than likely: every disk
+read went through the same pattern in the xHCI driver.
+
+Two rules come out of it, and both are enforced in the code:
+
+- **A wait inside the kernel uses `time_now_ms()`**, which reads the
+  processor's cycle counter. Nothing has to be delivered or acknowledged for
+  it to advance, so no lock can stop it. `pit_uptime_ms()` is for timestamps,
+  not deadlines.
+- **A long wait gives the lock up**, with `klock_pause()`. Holding the one
+  kernel lock for the seconds a firmware load or a DHCP request takes shuts
+  every other processor out of the kernel entirely, which is a freeze in all
+  but name even when it does eventually end.
+
+Giving the lock up has a consequence of its own: two threads can then be
+inside the network stack at once, which the lock used to prevent by accident.
+`net_claim()` / `net_release()` at the syscall boundary is what prevents it on
+purpose, and a thread waiting its turn there gives the lock up too — waiting
+for the stack while holding the lock its occupant needs would just be the same
+deadlock again, one layer up.
+
 ## Local sockets
 
 `kernel/fs/socket.c` adds a second kind of channel beside the pipe: named,

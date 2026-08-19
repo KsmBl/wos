@@ -804,8 +804,8 @@ static bool resolve(uint32_t ip, uint8_t *mac)
 
     for (int attempt = 0; attempt < 4; attempt++) {
         arp_send(1, broadcast, ip);
-        uint32_t deadline = pit_uptime_ms() + 250;
-        while (pit_uptime_ms() < deadline) {
+        uint64_t deadline = time_now_ms() + 250;
+        while (time_now_ms() < deadline) {
             net_poll();
             if (arp_lookup(ip, mac))
                 return true;
@@ -1034,8 +1034,8 @@ int net_ping(uint32_t dst, uint16_t id, uint16_t seq, uint32_t timeout_ms,
     if (!ip_send(dst, IP_ICMP, icmp, sizeof(icmp)))
         return -W_EHOSTUNREACH;
 
-    uint32_t deadline = pit_uptime_ms() + timeout_ms;
-    while (pit_uptime_ms() < deadline) {
+    uint64_t deadline = time_now_ms() + timeout_ms;
+    while (time_now_ms() < deadline) {
         net_poll();
         if (ping_got) {
             *rtt_us = (uint32_t)((rdtsc() - t0) / tsc_per_us);
@@ -1078,8 +1078,8 @@ int net_resolve(const char *host, uint32_t *ip)
     dns_done = false;
     for (int attempt = 0; attempt < 4; attempt++) {
         udp_send(cfg_dns, 5353, 53, query, (uint32_t)at);
-        uint32_t deadline = pit_uptime_ms() + 500;
-        while (pit_uptime_ms() < deadline) {
+        uint64_t deadline = time_now_ms() + 500;
+        while (time_now_ms() < deadline) {
             net_poll();
             if (dns_done) {
                 *ip = dns_answer;
@@ -1119,8 +1119,8 @@ int net_tcp_open(uint32_t ip, uint16_t port)
         tcp_send(c, TF_SYN, NULL, 0);
         c->snd_nxt = isn + 1;               /* SYN consumes a sequence */
 
-        uint32_t deadline = pit_uptime_ms() + 500;
-        while (pit_uptime_ms() < deadline) {
+        uint64_t deadline = time_now_ms() + 500;
+        while (time_now_ms() < deadline) {
             net_poll();
             if (c->state == S_ESTABLISHED) {
                 return h;
@@ -1155,8 +1155,8 @@ int net_tcp_send(int h, const void *data, uint32_t len)
             tcp_send(c, TF_PSH | TF_ACK, (const uint8_t *)data + sent, chunk);
             c->snd_nxt = seg_seq + chunk;
 
-            uint32_t deadline = pit_uptime_ms() + 500;
-            while (pit_uptime_ms() < deadline) {
+            uint64_t deadline = time_now_ms() + 500;
+            while (time_now_ms() < deadline) {
                 net_poll();
                 if (c->reset) return -W_ECONNRESET;
                 if ((int32_t)(c->snd_una - (seg_seq + chunk)) >= 0) { acked = true; break; }
@@ -1177,7 +1177,7 @@ int net_tcp_recv(int h, void *buf, uint32_t len)
     struct tcp_conn *c = &conns[h];
 
     /* Wait for data, the peer's FIN (end of file) or a reset. */
-    uint32_t deadline = pit_uptime_ms() + 10000;
+    uint64_t deadline = time_now_ms() + 10000;
     for (;;) {
         if (rx_count(c) > 0) {
             uint32_t n = rx_count(c);
@@ -1191,7 +1191,7 @@ int net_tcp_recv(int h, void *buf, uint32_t len)
         }
         if (c->rfin)   return 0;            /* end of file */
         if (c->reset)  return -W_ECONNRESET;
-        if (pit_uptime_ms() > deadline) return -W_ETIMEDOUT;
+        if (time_now_ms() > deadline) return -W_ETIMEDOUT;
         net_poll();
         io_wait();
     }
@@ -1208,8 +1208,8 @@ void net_tcp_close(int h)
         c->snd_nxt += 1;
         c->state = S_FIN_SENT;
 
-        uint32_t deadline = pit_uptime_ms() + 1000;
-        while (pit_uptime_ms() < deadline && c->state != S_DONE) {
+        uint64_t deadline = time_now_ms() + 1000;
+        while (time_now_ms() < deadline && c->state != S_DONE) {
             net_poll();
             io_wait();
         }
