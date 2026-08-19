@@ -80,7 +80,7 @@ CFLAGS := -m64 -std=gnu11 -ffreestanding -O2 -g \
           -fno-pie -fno-pic -fno-stack-protector -fno-builtin \
           -fno-asynchronous-unwind-tables -fno-omit-frame-pointer \
           -mcmodel=small -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
-          -DWOS_KERNEL -DKHEAP_MB=$(KHEAP_MB) -Ikernel/include -Iinclude -I$(BUILD)/include
+          -DWOS_KERNEL -DKHEAP_MB=$(KHEAP_MB) -Ikernel/include -Ikernel/drivers/iwlwifi -Iinclude -I$(BUILD)/include
 ifeq ($(SELFTEST),0)
 CFLAGS += -DWOS_NO_SELFTEST
 endif
@@ -424,7 +424,7 @@ APP_SRC    := $(shell find app -type f 2>/dev/null)
 disk: $(DISK)
 
 $(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(LIBW) $(LIBC) $(ROOTFS_SRC) \
-         $(APP_SRC) tools/appmakefile.sh $(DISK_STAMP)
+         $(APP_SRC) tools/appmakefile.sh tools/copyfw.sh $(DISK_STAMP)
 	@rm -rf $(ROOTFS)
 	@mkdir -p $(ROOTFS)
 	@cp -r rootfs/. $(ROOTFS)/
@@ -476,6 +476,11 @@ $(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(LIBW) $(LIBC) $(ROOTFS_SRC) \
 	@# It looks here before /include.
 	@mkdir -p $(ROOTFS)/lib/wcc/include
 	@cp app/wcc/include/*.h $(ROOTFS)/lib/wcc/include/
+	@# The wireless adapter's firmware, 1.45 MiB, taken from the build machine.
+	@# It is not in this repository: it is Intel's, redistributable but not
+	@# ours to keep in a source tree.  A machine without it builds an image
+	@# without it, and the driver says so rather than failing.
+	@tools/copyfw.sh $(ROOTFS)
 	$(MKWFS) $@ $(DISK_MB) $(ROOTFS)
 
 QEMU := qemu-system-x86_64

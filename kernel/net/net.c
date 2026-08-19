@@ -1,7 +1,10 @@
 /* A minimal IPv4 stack for ping. See net.h. */
 
 #include "net.h"
+#include "wosconfig.h"
+#include "netdev.h"
 #include "rtl8139.h"
+#include "wifi.h"
 #include "cpu.h"
 #include "pit.h"
 #include "smp.h"
@@ -10,13 +13,25 @@
 #include "kprintf.h"
 #include "wabi.h"
 
-/* SLIRP's defaults: QEMU hands the guest 10.0.2.15, with the virtual gateway
- * at 10.0.2.2, which answers ARP and ICMP.  These match `-netdev user`. */
-#define OUR_IP     NET_IP(10, 0, 2, 15)
-#define NETMASK    NET_IP(255, 255, 255, 0)
-#define GATEWAY    NET_IP(10, 0, 2, 2)
+/* The addresses in use.  They start as SLIRP's defaults -- QEMU hands the
+ * guest 10.0.2.15, with the virtual gateway at 10.0.2.2 and a forwarding
+ * resolver at 10.0.2.3, all of which match `-netdev user` -- because that is
+ * the network the emulated RTL8139 is always on, and booting straight into a
+ * working configuration there costs nothing.
+ *
+ * They are variables rather than constants because a real network does not
+ * hand out its addresses in a header file.  A wireless link that has just
+ * joined an access point knows none of these, and finds them out by asking:
+ * see net_dhcp() at the bottom. */
+static uint32_t cfg_ip      = NET_IP(10, 0, 2, 15);
+static uint32_t cfg_netmask = NET_IP(255, 255, 255, 0);
+static uint32_t cfg_gateway = NET_IP(10, 0, 2, 2);
+static uint32_t cfg_dns     = NET_IP(10, 0, 2, 3);
 
-#define DNS_SERVER NET_IP(10, 0, 2, 3)   /* SLIRP's forwarding resolver */
+/* Whether those came from a DHCP server rather than from the defaults above,
+ * which is worth reporting because the two failure modes look identical from
+ * a shell prompt and have nothing else in common. */
+static bool cfg_from_dhcp;
 
 #define ETH_ARP    0x0806
 #define ETH_IPV4   0x0800
@@ -214,7 +229,7 @@ static void eth_send(const uint8_t *dst, uint16_t type,
         len = sizeof(frame) - sizeof(*eh);
     memcpy(frame + sizeof(*eh), payload, len);
 
-    rtl8139_send(frame, sizeof(*eh) + len);
+    netdev_send(frame, sizeof(*eh) + len);
 }
 
 static void arp_send(uint16_t oper, const uint8_t *target_mac, uint32_t target_ip)
@@ -228,7 +243,7 @@ static void arp_send(uint16_t oper, const uint8_t *target_mac, uint32_t target_i
     a.plen = 4;
     a.oper = htons(oper);
     memcpy(a.sha, our_mac, 6);
-    a.spa = OUR_IP;
+    a.spa = cfg_ip;
     memcpy(a.tha, target_mac, 6);
     a.tpa = target_ip;
 
@@ -240,7 +255,7 @@ static void arp_input(const struct arp_pkt *a)
 {
     if (a->oper == htons(2))
         arp_store(a->spa, a->sha);
-    else if (a->oper == htons(1) && a->tpa == OUR_IP) {
+    else if (a->oper == htons(1) && a->tpa == cfg_ip) {
         arp_store(a->spa, a->sha);          /* learn while we are at it */
         arp_send(2, a->sha, a->spa);
     }
@@ -281,7 +296,7 @@ static bool parse_dotted(const char *s, uint32_t *out)
 
 static bool ip_send(uint32_t dst, uint8_t proto, const void *payload, uint32_t len)
 {
-    uint32_t nexthop = ((dst & NETMASK) == (OUR_IP & NETMASK)) ? dst : GATEWAY;
+    uint32_t nexthop = ((dst & cfg_netmask) == (cfg_ip & cfg_netmask)) ? dst : cfg_gateway;
     uint8_t mac[6];
     if (!resolve(nexthop, mac))
         return false;
@@ -299,7 +314,7 @@ static bool ip_send(uint32_t dst, uint8_t proto, const void *payload, uint32_t l
     ip->id        = htons(++ip_id);
     ip->ttl       = 64;
     ip->proto     = proto;
-    ip->src       = OUR_IP;
+    ip->src       = cfg_ip;
     ip->dst       = dst;
     ip->checksum  = checksum(ip, sizeof(*ip));
     memcpy(pkt + sizeof(*ip), payload, len);
@@ -323,6 +338,208 @@ static bool udp_send(uint32_t dst, uint16_t sport, uint16_t dport,
     memcpy(buf + sizeof(*u), data, len);
 
     return ip_send(dst, IP_UDP, buf, sizeof(*u) + len);
+}
+
+/* ------------------------------------------------------------------ *
+ *  DHCP
+ *
+ *  An address on a real network has to be asked for.  The exchange is four
+ *  messages -- we broadcast a DISCOVER, a server OFFERs, we REQUEST the
+ *  address it offered, the server ACKs -- and the reason it is four rather
+ *  than two is that a network may hold several servers, and the REQUEST names
+ *  which one's offer was taken so the rest can withdraw theirs.
+ *
+ *  All of it goes out as an Ethernet broadcast with a source address of
+ *  0.0.0.0, because until this finishes we have no address to send from and
+ *  no way to ARP for anything.  That is why these do not use ip_send.
+ * ------------------------------------------------------------------ */
+
+#define DHCP_SERVER_PORT 67
+#define DHCP_CLIENT_PORT 68
+
+#define DHCP_DISCOVER 1
+#define DHCP_OFFER    2
+#define DHCP_REQUEST  3
+#define DHCP_ACK      5
+#define DHCP_NAK      6
+
+#define DHCP_OPT_NETMASK   1
+#define DHCP_OPT_ROUTER    3
+#define DHCP_OPT_DNS       6
+#define DHCP_OPT_REQUESTED 50
+#define DHCP_OPT_LEASE     51
+#define DHCP_OPT_TYPE      53
+#define DHCP_OPT_SERVER_ID 54
+#define DHCP_OPT_PARAMS    55
+#define DHCP_OPT_END       255
+
+struct __attribute__((packed)) dhcp_msg {
+    uint8_t  op, htype, hlen, hops;
+    uint32_t xid;
+    uint16_t secs, flags;
+    uint32_t ciaddr, yiaddr, siaddr, giaddr;
+    uint8_t  chaddr[16];
+    uint8_t  sname[64];
+    uint8_t  file[128];
+    uint32_t cookie;
+    uint8_t  options[312];
+};
+
+/* What the exchange has learned so far.  It lives here rather than on the
+ * stack of net_dhcp because the replies arrive through net_poll, which knows
+ * nothing of whoever is waiting for them. */
+static struct {
+    volatile bool offered, acked, refused;
+    uint32_t xid;
+    uint32_t offered_ip, server_id;
+    uint32_t netmask, gateway, dns, lease_secs;
+} dhcp;
+
+/* Send one message, Ethernet broadcast, from nowhere to everywhere. */
+static void dhcp_send(const struct dhcp_msg *msg, uint32_t opt_len)
+{
+    uint8_t  pkt[sizeof(struct ip_hdr) + sizeof(struct udp_hdr) + sizeof(*msg)];
+    uint32_t body = (uint32_t)(sizeof(*msg) - sizeof(msg->options)) + opt_len;
+    uint32_t udp_len = (uint32_t)sizeof(struct udp_hdr) + body;
+    uint32_t total   = (uint32_t)sizeof(struct ip_hdr) + udp_len;
+
+    struct ip_hdr  *ip = (struct ip_hdr *)pkt;
+    struct udp_hdr *u  = (struct udp_hdr *)(pkt + sizeof(*ip));
+
+    memset(ip, 0, sizeof(*ip));
+    ip->ver_ihl   = 0x45;
+    ip->total_len = htons((uint16_t)total);
+    ip->ttl       = 64;
+    ip->proto     = IP_UDP;
+    ip->src       = 0;                       /* we have no address yet */
+    ip->dst       = 0xFFFFFFFF;
+    ip->checksum  = checksum(ip, sizeof(*ip));
+
+    u->sport    = htons(DHCP_CLIENT_PORT);
+    u->dport    = htons(DHCP_SERVER_PORT);
+    u->length   = htons((uint16_t)udp_len);
+    u->checksum = 0;                         /* optional under IPv4 */
+
+    memcpy(pkt + sizeof(*ip) + sizeof(*u), msg, body);
+    eth_send(broadcast, ETH_IPV4, pkt, total);
+}
+
+/* Fill in the parts of a message that are the same every time. */
+static uint32_t dhcp_begin(struct dhcp_msg *msg, uint8_t type)
+{
+    memset(msg, 0, sizeof(*msg));
+
+    msg->op    = 1;                          /* a request from a client */
+    msg->htype = 1;                          /* over Ethernet           */
+    msg->hlen  = 6;
+    msg->xid   = dhcp.xid;
+    /* Ask for the reply as a broadcast.  A unicast reply would be addressed
+     * to an IP we have not configured yet, and while a well-behaved server
+     * sends it to our hardware address anyway, not all of them do. */
+    msg->flags  = htons(0x8000);
+    msg->cookie = htonl(0x63825363);
+    memcpy(msg->chaddr, our_mac, 6);
+
+    uint32_t at = 0;
+
+    msg->options[at++] = DHCP_OPT_TYPE;
+    msg->options[at++] = 1;
+    msg->options[at++] = type;
+
+    return at;
+}
+
+/* Walk the option block, which is a sequence of type/length/value triples
+ * ending at 255.  A malformed one must not walk off the end: these arrive
+ * from the network, and the only thing known about them is their size. */
+static void dhcp_parse_options(const uint8_t *opts, uint32_t len, uint8_t *type)
+{
+    uint32_t at = 0;
+
+    *type = 0;
+
+    while (at < len) {
+        uint8_t opt = opts[at++];
+
+        if (opt == DHCP_OPT_END)
+            break;
+        if (opt == 0)
+            continue;                        /* padding */
+        if (at >= len)
+            break;
+
+        uint8_t opt_len = opts[at++];
+
+        if (at + opt_len > len)
+            break;
+
+        const uint8_t *value = opts + at;
+
+        switch (opt) {
+        case DHCP_OPT_TYPE:
+            if (opt_len >= 1)
+                *type = value[0];
+            break;
+        case DHCP_OPT_NETMASK:
+            if (opt_len >= 4)
+                memcpy(&dhcp.netmask, value, 4);
+            break;
+        case DHCP_OPT_ROUTER:
+            if (opt_len >= 4)
+                memcpy(&dhcp.gateway, value, 4);
+            break;
+        case DHCP_OPT_DNS:
+            /* A server may list several; the first is enough for a resolver
+             * that only ever asks one question at a time. */
+            if (opt_len >= 4)
+                memcpy(&dhcp.dns, value, 4);
+            break;
+        case DHCP_OPT_SERVER_ID:
+            if (opt_len >= 4)
+                memcpy(&dhcp.server_id, value, 4);
+            break;
+        case DHCP_OPT_LEASE:
+            if (opt_len >= 4) {
+                uint32_t secs;
+
+                memcpy(&secs, value, 4);
+                dhcp.lease_secs = ntohl(secs);
+            }
+            break;
+        default:
+            break;
+        }
+
+        at += opt_len;
+    }
+}
+
+static void dhcp_input(const uint8_t *data, uint32_t len)
+{
+    const struct dhcp_msg *msg = (const struct dhcp_msg *)data;
+    uint32_t fixed = (uint32_t)(sizeof(*msg) - sizeof(msg->options));
+    uint8_t  type;
+
+    if (len < fixed)
+        return;
+    /* A reply to somebody else's exchange, or a stale one from ours. */
+    if (msg->xid != dhcp.xid || msg->cookie != htonl(0x63825363))
+        return;
+
+    dhcp_parse_options(msg->options, len - fixed, &type);
+
+    if (type == DHCP_OFFER) {
+        dhcp.offered_ip = msg->yiaddr;
+        dhcp.offered    = true;
+    } else if (type == DHCP_ACK) {
+        dhcp.offered_ip = msg->yiaddr;
+        dhcp.acked      = true;
+    } else if (type == DHCP_NAK) {
+        /* The server declined the address we asked for -- usually a lease
+         * that expired while we were elsewhere.  Starting over is the whole
+         * remedy, and the caller does that by calling again. */
+        dhcp.refused = true;
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -445,7 +662,7 @@ static void tcp_send(struct tcp_conn *c, uint8_t flags,
     uint32_t win = rx_free(c);
     t->window = htons((uint16_t)(win > 0xFFFF ? 0xFFFF : win));
     if (dlen) memcpy(seg + sizeof(*t), data, dlen);
-    t->checksum = tcp_checksum(OUR_IP, c->rip, seg, sizeof(*t) + dlen);
+    t->checksum = tcp_checksum(cfg_ip, c->rip, seg, sizeof(*t) + dlen);
 
     ip_send(c->rip, IP_TCP, seg, sizeof(*t) + dlen);
 }
@@ -528,8 +745,18 @@ static void net_poll(void)
      * (the timer only schedules; nothing here holds a lock). */
     sti();
 
+    /* And let the other processors into the kernel while we are here.
+     *
+     * Every network call polls the card from inside a syscall, and a syscall
+     * holds the one kernel lock.  Polling for seconds with it held stops every
+     * other processor from taking a fault, servicing an interrupt or finishing
+     * a call of its own -- so a single ping would freeze the rest of the
+     * machine for as long as it ran, and a wait that never ended would freeze
+     * it for good. */
+    klock_pause();
+
     uint8_t buf[1600];
-    uint32_t len = rtl8139_poll(buf, sizeof(buf));
+    uint32_t len = netdev_poll(buf, sizeof(buf));
     if (len < sizeof(struct eth_hdr))
         return;
 
@@ -560,6 +787,8 @@ static void net_poll(void)
         struct udp_hdr *u = (struct udp_hdr *)(buf + off);
         if (ntohs(u->sport) == 53)
             dns_input(buf + off + sizeof(*u), (int)(plen - sizeof(*u)));
+        else if (ntohs(u->dport) == DHCP_CLIENT_PORT)
+            dhcp_input(buf + off + sizeof(*u), plen - (uint32_t)sizeof(*u));
     } else if (ip->proto == IP_TCP && plen >= sizeof(struct tcp_hdr)) {
         struct tcp_hdr *t = (struct tcp_hdr *)(buf + off);
         uint32_t thl = (uint32_t)(t->data_off >> 4) * 4u;
@@ -594,22 +823,191 @@ void net_init(void)
 {
     memset(arp_cache, 0, sizeof(arp_cache));
 
-    if (!rtl8139_init()) {
-        kputs("net    : no rtl8139 card found\n");
+    /* Start every adapter there is.  Each registers itself if its hardware is
+     * present, and the first to do so becomes the one the stack sends
+     * through -- wired before wireless, because a machine with a cable in it
+     * should use the cable. */
+#if CONFIG_RTL8139
+    rtl8139_init();
+#endif
+#if CONFIG_IWLWIFI
+    wifi_init();
+#endif
+
+    net_bind(netdev_default());
+}
+
+void net_bind(netdev_t *dev)
+{
+    if (!dev) {
+        ready = false;
+        kputs("net    : no network adapter found\n");
         return;
     }
 
-    memcpy(our_mac, rtl8139_mac(), 6);
+    netdev_set_default(dev);
+    memcpy(our_mac, dev->mac, 6);
+
+    /* The address cache belongs to the network we were on, not to us: the
+     * same address behind a different access point is a different machine. */
+    memset(arp_cache, 0, sizeof(arp_cache));
+
     calibrate_tsc();
     ready = true;
 
-    kprintf("net    : ip 10.0.2.15, gateway 10.0.2.2 (%lu MHz tsc)\n",
-            (unsigned long)tsc_per_us);
+    kprintf("net    : %s is up, ip %u.%u.%u.%u gateway %u.%u.%u.%u\n",
+            dev->name,
+            cfg_ip & 0xFF, (cfg_ip >> 8) & 0xFF,
+            (cfg_ip >> 16) & 0xFF, (cfg_ip >> 24) & 0xFF,
+            cfg_gateway & 0xFF, (cfg_gateway >> 8) & 0xFF,
+            (cfg_gateway >> 16) & 0xFF, (cfg_gateway >> 24) & 0xFF);
+}
+
+void net_set_config(uint32_t ip, uint32_t mask, uint32_t gateway, uint32_t dns)
+{
+    cfg_ip      = ip;
+    cfg_netmask = mask;
+    cfg_gateway = gateway;
+    if (dns)
+        cfg_dns = dns;
+
+    cfg_from_dhcp = false;
+    memset(arp_cache, 0, sizeof(arp_cache));
+}
+
+/* Run the exchange, twice over if the first attempt goes unanswered.  The
+ * whole thing is bounded: on a network with no server at all this returns
+ * -W_ETIMEDOUT after a few seconds rather than waiting for one to appear. */
+int net_dhcp(uint32_t timeout_ms)
+{
+    if (!ready)
+        return -W_ENODEV;
+
+    struct dhcp_msg msg;
+    uint32_t        opt;
+
+    memset(&dhcp, 0, sizeof(dhcp));
+    /* Any number will do as long as a second attempt does not reuse the
+     * first one's, so that a late reply to the first cannot be mistaken for
+     * an answer to the second. */
+    dhcp.xid = (uint32_t)rdtsc();
+
+    for (int attempt = 0; attempt < 2; attempt++) {
+        uint64_t deadline;
+
+        /* ---- DISCOVER, and wait for an OFFER ---- */
+        opt = dhcp_begin(&msg, DHCP_DISCOVER);
+        msg.options[opt++] = DHCP_OPT_PARAMS;
+        msg.options[opt++] = 3;
+        msg.options[opt++] = DHCP_OPT_NETMASK;
+        msg.options[opt++] = DHCP_OPT_ROUTER;
+        msg.options[opt++] = DHCP_OPT_DNS;
+        msg.options[opt++] = DHCP_OPT_END;
+        dhcp_send(&msg, opt);
+
+        deadline = time_now_ms() + timeout_ms / 2;
+        while (time_now_ms() < deadline && !dhcp.offered) {
+            net_poll();
+            io_wait();
+        }
+        if (!dhcp.offered) {
+            dhcp.xid++;
+            continue;
+        }
+
+        /* ---- REQUEST the offered address, and wait for the ACK ---- */
+        opt = dhcp_begin(&msg, DHCP_REQUEST);
+
+        msg.options[opt++] = DHCP_OPT_REQUESTED;
+        msg.options[opt++] = 4;
+        memcpy(msg.options + opt, &dhcp.offered_ip, 4);
+        opt += 4;
+
+        /* Naming the server whose offer we took is what lets every other
+         * server on the network take its own offer back. */
+        if (dhcp.server_id) {
+            msg.options[opt++] = DHCP_OPT_SERVER_ID;
+            msg.options[opt++] = 4;
+            memcpy(msg.options + opt, &dhcp.server_id, 4);
+            opt += 4;
+        }
+
+        msg.options[opt++] = DHCP_OPT_PARAMS;
+        msg.options[opt++] = 3;
+        msg.options[opt++] = DHCP_OPT_NETMASK;
+        msg.options[opt++] = DHCP_OPT_ROUTER;
+        msg.options[opt++] = DHCP_OPT_DNS;
+        msg.options[opt++] = DHCP_OPT_END;
+        dhcp_send(&msg, opt);
+
+        deadline = time_now_ms() + timeout_ms / 2;
+        while (time_now_ms() < deadline && !dhcp.acked && !dhcp.refused) {
+            net_poll();
+            io_wait();
+        }
+
+        if (dhcp.acked)
+            break;
+
+        dhcp.xid++;
+        dhcp.offered = dhcp.refused = false;
+    }
+
+    if (!dhcp.acked)
+        return -W_ETIMEDOUT;
+
+    cfg_ip = dhcp.offered_ip;
+
+    /* A server is allowed to leave the mask out, and some do on networks
+     * where it is obvious.  Guessing from the leading octets is what every
+     * other client falls back to. */
+    if (dhcp.netmask)
+        cfg_netmask = dhcp.netmask;
+    else if ((cfg_ip & 0xFF) < 128)
+        cfg_netmask = NET_IP(255, 0, 0, 0);
+    else if ((cfg_ip & 0xFF) < 192)
+        cfg_netmask = NET_IP(255, 255, 0, 0);
+    else
+        cfg_netmask = NET_IP(255, 255, 255, 0);
+
+    if (dhcp.gateway)
+        cfg_gateway = dhcp.gateway;
+    if (dhcp.dns)
+        cfg_dns = dhcp.dns;
+
+    cfg_from_dhcp = true;
+    memset(arp_cache, 0, sizeof(arp_cache));
+
+    kprintf("net    : dhcp gave %u.%u.%u.%u/%u, gateway %u.%u.%u.%u, "
+            "dns %u.%u.%u.%u\n",
+            cfg_ip & 0xFF, (cfg_ip >> 8) & 0xFF,
+            (cfg_ip >> 16) & 0xFF, (cfg_ip >> 24) & 0xFF,
+            net_prefix_length(),
+            cfg_gateway & 0xFF, (cfg_gateway >> 8) & 0xFF,
+            (cfg_gateway >> 16) & 0xFF, (cfg_gateway >> 24) & 0xFF,
+            cfg_dns & 0xFF, (cfg_dns >> 8) & 0xFF,
+            (cfg_dns >> 16) & 0xFF, (cfg_dns >> 24) & 0xFF);
+
+    return 0;
 }
 
 bool net_ready(void) { return ready; }
-uint32_t net_local_ip(void)   { return OUR_IP; }
-uint32_t net_gateway_ip(void) { return GATEWAY; }
+uint32_t net_local_ip(void)   { return cfg_ip; }
+uint32_t net_gateway_ip(void) { return cfg_gateway; }
+uint32_t net_netmask(void)    { return cfg_netmask; }
+uint32_t net_dns_ip(void)     { return cfg_dns; }
+bool     net_dhcp_configured(void) { return cfg_from_dhcp; }
+
+/* The mask as a prefix length, which is how everything prints it now. */
+unsigned net_prefix_length(void)
+{
+    unsigned bits = 0;
+
+    for (int i = 0; i < 32; i++)
+        if (cfg_netmask & (1u << i))
+            bits++;
+    return bits;
+}
 
 int net_ping(uint32_t dst, uint16_t id, uint16_t seq, uint32_t timeout_ms,
              uint32_t *rtt_us)
@@ -679,7 +1077,7 @@ int net_resolve(const char *host, uint32_t *ip)
 
     dns_done = false;
     for (int attempt = 0; attempt < 4; attempt++) {
-        udp_send(DNS_SERVER, 5353, 53, query, (uint32_t)at);
+        udp_send(cfg_dns, 5353, 53, query, (uint32_t)at);
         uint32_t deadline = pit_uptime_ms() + 500;
         while (pit_uptime_ms() < deadline) {
             net_poll();

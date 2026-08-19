@@ -19,6 +19,9 @@
 #include "socket.h"
 #include "pipe.h"
 #include "string.h"
+#include "crypto.h"
+#include "net.h"
+#include "wabi.h"
 
 static uint32_t failures;
 
@@ -758,6 +761,190 @@ void selftest_processes(void)
     if (failures)
         panic("%u process self-test failure(s)", failures);
     kputs("-- process self-test passed --\n");
+}
+
+/* Compare a result against a vector written as hex, which is how every
+ * specification prints them -- keeping them in that form here means a vector
+ * can be checked against the document it came from by eye. */
+static bool matches_hex(const uint8_t *got, const char *hex)
+{
+    for (int i = 0; hex[i * 2]; i++) {
+        uint8_t want = 0;
+
+        for (int nibble = 0; nibble < 2; nibble++) {
+            char c = hex[i * 2 + nibble];
+            uint8_t v = (c >= 'a') ? (uint8_t)(c - 'a' + 10) : (uint8_t)(c - '0');
+
+            want = (uint8_t)((want << 4) | v);
+        }
+        if (got[i] != want)
+            return false;
+    }
+    return true;
+}
+
+void selftest_crypto(void)
+{
+    uint8_t out[40];
+
+    kputs("\n-- cryptography self-test --\n");
+    failures = 0;
+
+    sha1("abc", 3, out);
+    check(matches_hex(out, "a9993e364706816aba3e25717850c26c9cd0d89d"),
+          "SHA-1 of \"abc\" (FIPS 180-2)");
+
+    {
+        uint8_t key[20];
+
+        memset(key, 0x0b, sizeof(key));
+        hmac_sha1(key, sizeof(key), "Hi There", 8, out);
+        check(matches_hex(out, "b617318655057264e28bc0b6fb378c8ef146be00"),
+              "HMAC-SHA1 case 1 (RFC 2202)");
+
+        sha1_prf(key, sizeof(key), "prefix", (const uint8_t *)"Hi There", 8, out, 20);
+        check(matches_hex(out, "bcd4c650b30b9684951829e0d75f9d54b862175e"),
+              "the 802.11 pseudo-random function");
+    }
+
+    /* The passphrase-to-master-key vector from the 802.11i annex.  This is
+     * the single most load-bearing number in the whole wireless path: get it
+     * wrong and every protected network refuses us. */
+    pbkdf2_sha1("password", (const uint8_t *)"IEEE", 4, 4096, out, 32);
+    check(matches_hex(out,
+          "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e"),
+          "WPA2 master key from a passphrase (802.11i)");
+
+    {
+        aes_ctx_t ctx;
+        uint8_t   key[16], block[16];
+
+        for (int i = 0; i < 16; i++) {
+            key[i]   = (uint8_t)i;
+            block[i] = (uint8_t)(i * 0x11);
+        }
+
+        aes_set_encrypt_key(&ctx, key, 16);
+        aes_encrypt_block(&ctx, block, out);
+        check(matches_hex(out, "69c4e0d86a7b0430d8cdb78070b4c55a"),
+              "AES-128 of the FIPS-197 example block");
+
+        aes_set_decrypt_key(&ctx, key, 16);
+        aes_decrypt_block(&ctx, out, out);
+        check(memcmp(out, block, 16) == 0, "AES-128 decryption undoes it");
+    }
+
+    {
+        /* RFC 3394 section 4.1, which is exactly the shape the group key
+         * arrives in during the third handshake message. */
+        uint8_t kek[16];
+        uint8_t wrapped[24] = {
+            0x1F, 0xA6, 0x8B, 0x0A, 0x81, 0x12, 0xB4, 0x47,
+            0xAE, 0xF3, 0x4B, 0xD8, 0xFB, 0x5A, 0x7B, 0x82,
+            0x9D, 0x3E, 0x86, 0x23, 0x71, 0xD2, 0xCF, 0xE5
+        };
+
+        for (int i = 0; i < 16; i++)
+            kek[i] = (uint8_t)i;
+
+        check(aes_unwrap_key(kek, 16, wrapped, 24, out) &&
+              matches_hex(out, "00112233445566778899aabbccddeeff"),
+              "AES key unwrap (RFC 3394)");
+
+        kek[0] ^= 1;
+        check(!aes_unwrap_key(kek, 16, wrapped, 24, out),
+              "key unwrap refuses a wrong key rather than returning rubbish");
+    }
+
+    {
+        /* RFC 3610 packet vector 1: a 13-byte nonce and an 8-byte tag, the
+         * same parameters CCMP uses on every protected data frame. */
+        uint8_t key[16] = {
+            0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,
+            0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF
+        };
+        uint8_t nonce[13] = {
+            0x00, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00,
+            0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5
+        };
+        uint8_t aad[8], payload[23], cipher[31], plain[23];
+
+        for (int i = 0; i < 8; i++)
+            aad[i] = (uint8_t)i;
+        for (int i = 0; i < 23; i++)
+            payload[i] = (uint8_t)(8 + i);
+
+        aes_ccm_encrypt(key, nonce, aad, 8, payload, 23, cipher);
+        check(matches_hex(cipher,
+              "588c979a61c663d2f066d0c2c0f989806d5f6b61dac38417e8d12cfdf926e0"),
+              "AES-CCM ciphertext and tag (RFC 3610)");
+
+        check(aes_ccm_decrypt(key, nonce, aad, 8, cipher, 31, plain) &&
+              memcmp(plain, payload, 23) == 0,
+              "AES-CCM decryption recovers the payload");
+
+        cipher[3] ^= 0x40;
+        check(!aes_ccm_decrypt(key, nonce, aad, 8, cipher, 31, plain),
+              "AES-CCM rejects a frame whose bits were changed");
+    }
+
+    if (failures)
+        panic("%u cryptography self-test failure(s)", failures);
+    kputs("-- cryptography self-test passed --\n");
+}
+
+void selftest_network(void)
+{
+    if (!net_ready()) {
+        /* A machine with no card is not a failure; it is most machines. */
+        kputs("\n-- network self-test skipped: no adapter --\n");
+        return;
+    }
+
+    kputs("\n-- network self-test --\n");
+    failures = 0;
+
+    /* Ask the network for an address.
+     *
+     * This is the only part of the wireless work that can be exercised
+     * without a wireless adapter, and it is worth exercising: DHCP is what a
+     * link joined by `wifi connect` uses to become usable, and until now it
+     * had no way to be run at all.  QEMU's user-mode network has a server on
+     * it that answers, so booting under QEMU tests the real exchange against
+     * a real server -- four messages, option parsing and all.
+     *
+     * The address it hands out is the one the stack already had, so nothing
+     * is disturbed by asking. */
+    uint32_t before = net_local_ip();
+    int      r = net_dhcp(4000);
+
+    if (r == -W_ETIMEDOUT) {
+        /* Nothing answered.  On a machine whose network has no server that
+         * is the right answer and not a fault, so it is reported rather than
+         * failed -- the point of the check is that the exchange runs and
+         * comes back, not that a server exists to run it with. */
+        kputs("  [skip] no DHCP server answered; the addresses are unchanged\n");
+    } else {
+        check(r == 0, "the DHCP exchange completed");
+        check(net_dhcp_configured(), "the addresses came from the server");
+
+        uint32_t ip = net_local_ip();
+
+        check(ip != 0, "the server gave us an address");
+        check(net_prefix_length() > 0 && net_prefix_length() <= 32,
+              "the netmask it came with is a sensible one");
+        check(net_gateway_ip() != 0, "and a gateway to reach the rest by");
+
+        kprintf("  address %u.%u.%u.%u/%u, was %u.%u.%u.%u\n",
+                ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF,
+                (ip >> 24) & 0xFF, net_prefix_length(),
+                before & 0xFF, (before >> 8) & 0xFF,
+                (before >> 16) & 0xFF, (before >> 24) & 0xFF);
+    }
+
+    if (failures)
+        panic("%u network self-test failure(s)", failures);
+    kputs("-- network self-test passed --\n");
 }
 
 void selftest_page_fault(void)

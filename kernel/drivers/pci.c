@@ -87,6 +87,30 @@ pci_device_t pci_find_class(uint8_t class_code, uint8_t subclass, uint8_t prog_i
     return pci_find_class_index(class_code, subclass, prog_if, 0);
 }
 
+pci_device_t pci_find_any(uint16_t vendor, const uint16_t *devices, int count)
+{
+    pci_device_t none = { 0 };
+
+    for (int bus = 0; bus < 256; bus++)
+        for (int slot = 0; slot < 32; slot++)
+            for (int func = 0; func < 8; func++) {
+                uint32_t id = pci_read32((uint8_t)bus, (uint8_t)slot,
+                                         (uint8_t)func, 0x00);
+                uint16_t v = (uint16_t)(id & 0xFFFF);
+                uint16_t d = (uint16_t)(id >> 16);
+
+                if (v == 0xFFFF || v != vendor)
+                    continue;
+
+                for (int i = 0; i < count; i++)
+                    if (d == devices[i])
+                        return describe((uint8_t)bus, (uint8_t)slot,
+                                        (uint8_t)func);
+            }
+
+    return none;
+}
+
 pci_device_t pci_find(uint16_t vendor, uint16_t device)
 {
     pci_device_t dev = { 0 };

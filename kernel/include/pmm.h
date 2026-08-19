@@ -26,6 +26,20 @@ uint64_t pmm_alloc_frame(void);
  * be able to touch through the identity map (page directories and tables). */
 uint64_t pmm_alloc_frame_low(void);
 
+/* Allocate `count` frames next to each other in physical memory, starting on
+ * a multiple of `align_frames` frames, below LOW_MEMORY_LIMIT so the result is
+ * reachable through the identity map.  Returns the physical address of the
+ * first, or 0 if no such run is free.
+ *
+ * This is what a device doing DMA needs: it is given one address and walks
+ * forward from it with no notion of page tables, so the frames behind that
+ * address have to really be adjacent. */
+uint64_t pmm_alloc_contiguous(uint64_t count, uint64_t align_frames);
+
+/* Hand back a run from pmm_alloc_contiguous.  `count` must be what was asked
+ * for -- the allocator keeps no record of run lengths. */
+void pmm_free_contiguous(uint64_t phys, uint64_t count);
+
 void pmm_free_frame(uint64_t phys);
 
 /* Reserve an explicit physical range, e.g. a module the bootloader loaded. */
