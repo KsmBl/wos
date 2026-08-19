@@ -51,6 +51,26 @@ ROOT=$(cd "$(dirname "$SELF")/.." && pwd)
 ISO="$ROOT/build/wos.iso"
 IMG="$ROOT/build/wos.img"
 MKWFS="$ROOT/build/mkwfs"
+
+# The volume magic, read from the header that defines it rather than written
+# out here.
+#
+# It used to be spelled "WFS1" in three places in this script, and stayed that
+# way through two format changes -- so every check below passed a volume that
+# no longer existed and failed every volume that did.  A verification step
+# that goes stale silently is worse than no verification step, because it
+# fails on correct output and sends you looking in the wrong place.  Taking the
+# value from include/wfs.h means the next format change cannot do this again.
+wfs_magic() {
+    local hex
+    hex=$(sed -n 's/^#define WFS_MAGIC  *0x\([0-9A-Fa-f]\{8\}\)u\?.*/\1/p' \
+          "$ROOT/include/wfs.h" | head -1)
+    [[ -n $hex ]] || die "cannot find WFS_MAGIC in include/wfs.h"
+
+    # Stored little-endian, so the bytes come out in reverse order.
+    printf '%b' "\\x${hex:6:2}\\x${hex:4:2}\\x${hex:2:2}\\x${hex:0:2}"
+}
+
 ROOTFS="$ROOT/build/root"
 KERNEL="$ROOT/build/kernel.elf"
 EFIAPP="$ROOT/build/BOOTX64.EFI"
@@ -78,6 +98,10 @@ FALLBACK_MB=64
 die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 info() { printf '\033[1m%s\033[0m\n' "$*"; }
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*"; }
+
+# Worked out here rather than beside the other paths above, because it can
+# fail and reporting a failure needs die(), which is defined just above.
+WFS_MAGIC_STR="$(wfs_magic)"
 
 # The comment header is the manual: print it back, minus the leading hashes.
 usage() { awk 'NR>2 && /^#/ { sub(/^# ?/, ""); print; next } NR>2 { exit }' "$SELF"; exit 0; }
@@ -275,7 +299,7 @@ img)
     dd if="$IMG" of="$DEVICE" bs=4M conv=fsync status=progress
     settle
     magic=$(dd if="$DEVICE" bs=4 count=1 status=none | tr -d '\0')
-    [[ $magic == WFS1 ]] || die "verification failed: no WFS superblock at LBA 0"
+    [[ $magic == "$WFS_MAGIC_STR" ]] || die "verification failed: no $WFS_MAGIC_STR superblock at LBA 0 (found ${magic:-nothing})"
     info "-- verified: WFS superblock at LBA 0"
     ;;
 
@@ -381,9 +405,9 @@ EOF
     [[ -f $mnt/boot/grub/i386-pc/normal.mod ]] || \
         die "GRUB's BIOS modules are missing from the stick"
     magic=$(dd if="$mnt/boot/wos.img" bs=4 count=1 status=none | tr -d '\0')
-    [[ $magic == WFS1 ]] || die "wos.img on the stick is not a WFS volume"
+    [[ $magic == "$WFS_MAGIC_STR" ]] || die "wos.img on the stick is not a $WFS_MAGIC_STR volume (found ${magic:-nothing})"
     magic=$(dd if="$datapart" bs=4 count=1 status=none | tr -d '\0')
-    [[ $magic == WFS1 ]] || die "$datapart is not a WFS volume"
+    [[ $magic == "$WFS_MAGIC_STR" ]] || die "$datapart is not a $WFS_MAGIC_STR volume (found ${magic:-nothing})"
     # 0x80 in the first partition entry: the active flag some BIOSes require.
     boot_flag=$(dd if="$DEVICE" bs=1 skip=446 count=1 status=none | od -An -tx1 | tr -d ' ')
     [[ $boot_flag == 80 ]] || warn "partition 1 is not marked active (flag $boot_flag)"

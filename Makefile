@@ -350,8 +350,10 @@ $(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(LIBW) $(LIBC) $(ROOTFS_SRC) \
 	@mkdir -p $(ROOTFS)/ramdisk
 	@# Stripped on the way in, the same way the kernel is.  Debug information
 	@# is for the build tree, where it is still there for gdb; on the disk it
-	@# is dead weight that the 267 KiB per-file ceiling eventually refuses --
-	@# sway is 88 KiB of program and 300 KiB with its symbols attached.
+	@# is dead weight -- sway is 88 KiB of program and 300 KiB with its
+	@# symbols attached.  It used to be dead weight the 267 KiB per-file
+	@# ceiling eventually refused; the ceiling is 64 MiB now, and stripping is
+	@# worth doing on its own terms rather than to make things fit.
 	@# Each application's source arrives with a Makefile that rebuilds it,
 	@# written by tools/appmakefile.sh rather than by hand -- fifty-two
 	@# hand-written ones are fifty-two chances for one to drift.  It is
@@ -365,7 +367,9 @@ $(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(LIBW) $(LIBC) $(ROOTFS_SRC) \
 	        > $(ROOTFS)/app/$$a/sourcecode/Makefile; \
 	done
 	@# /kernel gets the stripped binary and the source it came from. Stripped
-	@# because the debug build is close to the 267 KiB per-file ceiling.
+	@# of debug information only: the symbol table is worth keeping for
+	@# anything reading the binary on the machine itself, and since WFS grew a
+	@# double-indirect block there is no longer a size reason to drop it.
 	@mkdir -p $(ROOTFS)/kernel/sourcecode
 	@objcopy --strip-debug $(KERNEL) $(ROOTFS)/kernel/kernel.elf
 	@find kernel include -name '*.c' -o -name '*.h' -o -name '*.S' \
@@ -375,9 +379,8 @@ $(DISK): $(MKWFS) $(KERNEL) $(APP_BINS) $(LIBW) $(LIBC) $(ROOTFS_SRC) \
 	@# only if something on the disk has heard of it, and until these two
 	@# directories exist nothing has.
 	@#
-	@# Stripped for the same reason the binaries are, and more urgently: the
-	@# archive is 347 KiB with its debug information and 117 KiB without, and
-	@# WFS holds 267 KiB in one file.
+	@# Stripped for the same reason the binaries are: the archive is 347 KiB
+	@# with its debug information and 117 KiB without.
 	@mkdir -p $(ROOTFS)/lib $(ROOTFS)/include
 	@objcopy --strip-debug $(LIBW) $(ROOTFS)/lib/libwkernel.a
 	@objcopy --strip-debug $(LIBC) $(ROOTFS)/lib/libc.a

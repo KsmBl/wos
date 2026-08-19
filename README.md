@@ -110,7 +110,10 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 - **`/ramdisk`**, a filesystem held in memory that grows and shrinks with what
   is in it, over a disk that holds everything else.
 - **WFS**, a filesystem on a real disk image — reads and writes persist across
-  reboots, and the disk figures come from its block bitmap.
+  reboots, and the disk figures come from its block bitmap. A file reaches
+  64 MiB through ten direct blocks, an indirect block and a double-indirect
+  one; the ceiling was 267 KiB until the wireless firmware showed that to be
+  a limit in the wrong place.
 - **wkernel**, the documented application API: file and directory I/O, memory
   and disk statistics, process control, `printf`, `malloc`.
 - **Windows whose contents follow them**: a tiling compositor changes a

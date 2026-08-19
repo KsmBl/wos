@@ -48,11 +48,14 @@ same field in its nodes, so the two filesystems answer the same question the
 same way, and `vfs_stat()` carries it out into `wstat_t.mtime`.
 
 The field had to come out of the direct block pointers — the inode is 64 bytes
-so that sixteen fit in a block, and it was exactly full — so a file now reaches
-267 KiB rather than 268. That moved everything after it, which is why the volume
-magic went from `WFS1` to `WFS2`: an older image is refused at mount with a line
-saying to rebuild it, rather than read with its block numbers one field out of
-place. `docs/architecture.md` says so.
+so that sixteen fit in a block, and it was exactly full — so a file reached
+267 KiB rather than 268. That moved everything after it, which is why the
+volume magic went from `WFS1` to `WFS2`: an older image is refused at mount
+with a line saying to rebuild it, rather than read with its block numbers one
+field out of place. `docs/architecture.md` says so.
+
+(The same trade happened again later, for a double-indirect block that took the
+largest file from 267 KiB to 64 MiB, and the magic to `WFS3`.)
 
 Two things fell out. `ls -l` shows dates. And `touch` on a file that already
 exists does what its name says, through a new `wutime()` — a file with no
@@ -96,8 +99,11 @@ library's. The `rootfs` rules in the `Makefile` put them there, and no new code
 was needed.
 
 One thing that had to be learnt rather than assumed: `libwkernel.a` is 347 KiB
-with its debug information and WFS holds 267 KiB in one file, so the archive is
-stripped on the way in exactly as the binaries are. It is 117 KiB after that.
+with its debug information, and WFS held 267 KiB in one file at the time, so
+the archive is stripped on the way in exactly as the binaries are. It is
+117 KiB after that. WFS holds 64 MiB in a file now, but the archive is still
+stripped — a third of a megabyte of debug information is dead weight on the
+disk whether or not it would fit.
 
 **Done:** `ls /include` and `ls /lib` on the machine, in
 `make check ARGS=toolchain`.

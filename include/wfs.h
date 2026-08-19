@@ -27,13 +27,19 @@
 #include <stdint.h>
 #endif
 
-/* "WFS2".  The 1 was the same layout without a modification time in the inode.
- * The field had to come out of the direct block pointers, which moved
- * everything after them, so a version 1 volume cannot be read here at all --
- * the magic says so plainly rather than letting the driver find file contents
- * where the block numbers used to be. */
-#define WFS_MAGIC        0x32534657u   /* "WFS2" */
-#define WFS_MAGIC_V1     0x31534657u   /* "WFS1", recognised only to say so */
+/* "WFS3".  Each version has taken a field out of the direct block pointers,
+ * which moves everything after them, so an older volume cannot be read here at
+ * all -- the magic says so plainly rather than letting the driver find file
+ * contents where the block numbers used to be.
+ *
+ *   WFS1  no modification time in the inode
+ *   WFS2  mtime added, where the twelfth direct pointer had been
+ *   WFS3  a double-indirect pointer, where the eleventh direct pointer had
+ *         been, taking the largest file from 267 KiB to 64 MiB
+ */
+#define WFS_MAGIC        0x33534657u   /* "WFS3" */
+#define WFS_MAGIC_V2     0x32534657u   /* "WFS2", recognised only to say so */
+#define WFS_MAGIC_V1     0x31534657u   /* "WFS1", likewise                  */
 #define WFS_BLOCK_SIZE   1024u
 #define WFS_SECTOR_SIZE  512u
 #define WFS_SECTORS_PER_BLOCK (WFS_BLOCK_SIZE / WFS_SECTOR_SIZE)
@@ -45,17 +51,32 @@
 #define WFS_INODE_SIZE   64u
 #define WFS_INODES_PER_BLOCK (WFS_BLOCK_SIZE / WFS_INODE_SIZE)
 
-/* Block pointers held directly in the inode, plus one single-indirect block.
- * That gives 11 KiB + 256 KiB = 267 KiB per file, comfortably more than any
- * program or source file this system stores.
+/* Block pointers held directly in the inode, then one single-indirect block,
+ * then one double-indirect block -- a block of pointers to blocks of pointers.
+ * That gives 10 KiB + 256 KiB + 64 MiB, or a little over 64 MiB per file.
  *
- * Eleven rather than the twelve a Unix inode traditionally has, because the
- * inode is 64 bytes and was exactly full: the modification time is where the
- * twelfth pointer was.  The kilobyte it costs is the cheapest thing in the
- * structure -- the largest file on the disk is the kernel, at about 216 KiB. */
-#define WFS_DIRECT       11u
+ * Ten rather than the twelve a Unix inode traditionally has, because the inode
+ * is 64 bytes and has always been exactly full: the modification time is where
+ * the twelfth pointer was, and the double-indirect pointer is where the
+ * eleventh was.
+ *
+ * The two kilobytes that costs are the cheapest thing in the structure, and
+ * the ceiling it lifts had become a real constraint rather than a theoretical
+ * one.  267 KiB was chosen when the largest file here was the kernel at about
+ * 216 KiB; since then the kernel has grown past it, and the wireless adapter's
+ * firmware is 1.45 MiB and had to be stored in six pieces.  A limit that
+ * forces the things stored to be cut up is a limit in the wrong place. */
+#define WFS_DIRECT       10u
 #define WFS_PTRS_PER_BLOCK (WFS_BLOCK_SIZE / 4u)
-#define WFS_MAX_FILE_SIZE ((WFS_DIRECT + WFS_PTRS_PER_BLOCK) * WFS_BLOCK_SIZE)
+
+/* Blocks reachable through the double-indirect pointer.  Written as a 64-bit
+ * constant because 256 * 256 * 1024 is 64 MiB and the intermediate products
+ * are the kind of thing that quietly overflows a 32-bit int. */
+#define WFS_DOUBLE_BLOCKS ((uint64_t)WFS_PTRS_PER_BLOCK * WFS_PTRS_PER_BLOCK)
+
+#define WFS_MAX_FILE_SIZE \
+    ((uint32_t)((WFS_DIRECT + WFS_PTRS_PER_BLOCK + WFS_DOUBLE_BLOCKS) * \
+                (uint64_t)WFS_BLOCK_SIZE))
 
 /* Inode types. These match W_FT_* in wabi.h. */
 #define WFS_TYPE_FREE 0
@@ -85,18 +106,18 @@ struct wfs_superblock {
  *
  * `mtime` is seconds since 1970, from the CMOS clock, and is what tells a make
  * whether a target is older than what it was built from.  Thirty-two bits of
- * seconds run out in 2106, which is long enough for a filesystem whose largest
- * file is a quarter of a megabyte.  Zero means "never written", which is what a
- * volume made by a tool that did not know about the field would say -- and what
- * the root directory says until something is written in it. */
+ * seconds run out in 2106.  Zero means "never written", which is what a volume
+ * made by a tool that did not know about the field would say -- and what the
+ * root directory says until something is written in it. */
 struct wfs_inode {
-    uint16_t type;                     /* WFS_TYPE_*                       */
-    uint16_t links;                    /* directory entries pointing here  */
-    uint32_t size;                     /* length in bytes                  */
-    uint32_t blocks;                   /* data blocks plus the indirect one */
+    uint16_t type;                     /* WFS_TYPE_*                        */
+    uint16_t links;                    /* directory entries pointing here   */
+    uint32_t size;                     /* length in bytes                   */
+    uint32_t blocks;                   /* data blocks, and the pointer ones */
     uint32_t mtime;                    /* last modified, seconds since 1970 */
     uint32_t direct[WFS_DIRECT];
-    uint32_t indirect;
+    uint32_t indirect;                 /* a block of block numbers          */
+    uint32_t double_indirect;          /* a block of those                  */
 };
 
 /* Exactly 32 bytes; 32 fit in a block. A zero inode marks a free slot. */

@@ -101,7 +101,25 @@ static uint32_t inode_alloc(uint16_t type)
     return 0;
 }
 
-/* File-relative block index to disk block, allocating as needed. */
+/* The block named by slot `index` of the pointer block at `table_block`,
+ * allocating it if it is not there.  block_alloc hands back zeroed blocks, so
+ * a pointer block that has just been made reads as all zeroes. */
+static uint32_t table_slot(uint32_t table_block, uint32_t index,
+                           struct wfs_inode *in)
+{
+    uint32_t *table = (uint32_t *)block_ptr(table_block);
+
+    if (!table[index]) {
+        table[index] = block_alloc();
+        in->blocks++;
+    }
+    return table[index];
+}
+
+/* File-relative block index to disk block, allocating as needed.
+ *
+ * The same three tiers the kernel walks in wfs.c, and for the same reason:
+ * whatever this writes, the kernel has to be able to read. */
 static uint32_t bmap(uint32_t ino, uint32_t index)
 {
     struct wfs_inode *in = &inodes[ino];
@@ -113,22 +131,29 @@ static uint32_t bmap(uint32_t ino, uint32_t index)
         }
         return in->direct[index];
     }
-
     index -= WFS_DIRECT;
-    if (index >= WFS_PTRS_PER_BLOCK)
+
+    if (index < WFS_PTRS_PER_BLOCK) {
+        if (!in->indirect) {
+            in->indirect = block_alloc();
+            in->blocks++;
+        }
+        return table_slot(in->indirect, index, in);
+    }
+    index -= WFS_PTRS_PER_BLOCK;
+
+    if (index >= WFS_DOUBLE_BLOCKS)
         die("file exceeds the maximum WFS file size");
 
-    if (!in->indirect) {
-        in->indirect = block_alloc();
+    if (!in->double_indirect) {
+        in->double_indirect = block_alloc();
         in->blocks++;
     }
 
-    uint32_t *table = (uint32_t *)block_ptr(in->indirect);
-    if (!table[index]) {
-        table[index] = block_alloc();
-        in->blocks++;
-    }
-    return table[index];
+    uint32_t middle = table_slot(in->double_indirect,
+                                 index / WFS_PTRS_PER_BLOCK, in);
+
+    return table_slot(middle, index % WFS_PTRS_PER_BLOCK, in);
 }
 
 static void file_write(uint32_t ino, uint32_t offset, const void *buf,
