@@ -10,7 +10,51 @@
 #include "fbcon.h"
 #include "serial.h"
 #include "string.h"
+#include "spinlock.h"
+#include "smp.h"
 #include "io.h"
+
+/* One printing processor at a time.
+ *
+ * Output goes out a character at a time, so without this two processors
+ * printing at once interleave letter by letter and neither message can be
+ * read.  That is tolerable for boot chatter and useless exactly when it
+ * matters: the messages most likely to be printed by several processors at
+ * once are the ones about a machine in trouble.
+ *
+ * Two things keep this from becoming its own kind of hang.  A processor that
+ * already holds it does not wait for itself -- a fault inside a print, or a
+ * panic, would otherwise stop the machine in the one place that was trying to
+ * explain why.  And the wait is bounded: a processor that has waited long
+ * enough gives up and prints anyway, because interleaved output is worse than
+ * tidy output and far better than silence.
+ */
+static spinlock_t   console_lock = SPINLOCK_INIT("console");
+static volatile int console_owner = -1;
+
+static bool console_claim(void)
+{
+    int me = smp_cpu_index();
+
+    if (__atomic_load_n(&console_owner, __ATOMIC_RELAXED) == me)
+        return false;                  /* already ours; do not take it twice */
+
+    for (int i = 0; i < 20000000; i++)
+        if (spin_trylock(&console_lock)) {
+            __atomic_store_n(&console_owner, me, __ATOMIC_RELAXED);
+            return true;
+        }
+
+    return false;                      /* gave up; the message still goes out */
+}
+
+static void console_release(bool took)
+{
+    if (!took)
+        return;
+    __atomic_store_n(&console_owner, -1, __ATOMIC_RELAXED);
+    spin_unlock(&console_lock);
+}
 
 void kputc(char c)
 {
@@ -25,8 +69,12 @@ void kputc(char c)
 
 void kputs(const char *s)
 {
+    bool took = console_claim();
+
     while (*s)
         kputc(*s++);
+
+    console_release(took);
 }
 
 /* Emit `s`, padded to `width` with `pad` on the left. */
@@ -232,9 +280,13 @@ void kvprintf(const char *fmt, va_list ap)
 void kprintf(const char *fmt, ...)
 {
     va_list ap;
+    bool    took = console_claim();
+
     va_start(ap, fmt);
     kvprintf(fmt, ap);
     va_end(ap);
+
+    console_release(took);
 }
 
 void panic(const char *fmt, ...)
