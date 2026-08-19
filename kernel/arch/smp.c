@@ -75,6 +75,34 @@ bool klock_held_here(void)
     return __atomic_load_n(&klock.owner, __ATOMIC_RELAXED) == smp_cpu_index();
 }
 
+/* Where the lock was taken, kept beside it so a stall can be described.
+ *
+ * Written by the holder just after it wins the lock and read by whoever is
+ * waiting, which is a race in the strict sense -- the strings can be a moment
+ * out of date.  That is the right trade here: a message describing a machine
+ * that has already stopped does not need to be atomic, it needs to exist, and
+ * paying for a second lock to protect the first one's diagnostics would be
+ * absurd. */
+static const char *klock_file;
+static int         klock_line;
+
+void klock_holder(int *cpu, const char **file, int *line, const char **process)
+{
+    int owner = __atomic_load_n(&klock.owner, __ATOMIC_RELAXED);
+
+    if (cpu)  *cpu  = owner;
+    if (file) *file = klock_file;
+    if (line) *line = klock_line;
+
+    if (process) {
+        *process = NULL;
+
+        smpcpu_t *c = smp_cpu(owner);
+        if (c && c->current && c->current->proc)
+            *process = c->current->proc->name;
+    }
+}
+
 /* Take the kernel lock, and say something if that takes absurdly long.
  *
  * A processor waiting here forever is what a deadlock looks like from the
@@ -90,25 +118,57 @@ bool klock_held_here(void)
  *
  * It does not fix anything and does not pretend to.  It is the difference
  * between a machine that stops and a machine that stops and tells you where. */
-void klock_acquire(void)
+void klock_acquire_at(const char *file, int line)
 {
     int me = smp_cpu_index();
 
     if (!spin_trylock(&klock)) {
-        uint64_t start = time_now_ms();
-        bool     warned = false;
+        uint64_t start   = time_now_ms();
+        uint64_t reported = 0;
 
         while (!spin_trylock(&klock)) {
-            if (!warned && time_now_ms() - start > 5000) {
-                warned = true;
-                kprintf("\nsmp    : cpu%d has waited 5 s for the kernel lock, "
-                        "held by cpu%d -- something is stuck\n",
-                        me, __atomic_load_n(&klock.owner, __ATOMIC_RELAXED));
+            uint64_t waited = time_now_ms() - start;
+
+            /* Once at five seconds, and every ten after that.
+             *
+             * Saying it once was enough to prove the machine had stopped and
+             * not enough to work on it: whoever is looking at the screen
+             * usually arrives after the message has scrolled away, or was not
+             * watching when it appeared.  A line that keeps coming back is the
+             * difference between a machine that looks dead and one that is
+             * telling you what it is doing. */
+            if (waited > 5000 &&
+                (reported == 0 || waited - reported > 10000)) {
+                int         owner;
+                const char *held_file, *process;
+                int         held_line;
+
+                klock_holder(&owner, &held_file, &held_line, &process);
+
+                /* One call, deliberately.  Every processor that is waiting
+                 * prints this at about the same moment, and the console is
+                 * only serialised per call -- so a report built out of several
+                 * would arrive with another processor's fragments spliced into
+                 * the middle of it.  The unknowns get filler text rather than
+                 * their own printf. */
+                kprintf("\nsmp    : cpu%d has waited %us for the kernel lock "
+                        "(wanted at %s:%d)\n"
+                        "         held by cpu%d, taken at %s:%d, running %s"
+                        " -- something is stuck\n",
+                        me, (unsigned)(waited / 1000), file, line,
+                        owner,
+                        held_file ? held_file : "an unrecorded place",
+                        held_line,
+                        process ? process : "a kernel thread");
+
+                reported = waited;
             }
             cpu_relax();
         }
     }
 
+    klock_file = file;
+    klock_line = line;
     __atomic_store_n(&klock.owner, me, __ATOMIC_RELAXED);
 }
 
