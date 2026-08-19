@@ -30,6 +30,7 @@
 #include "keyboard.h"
 #include "vga.h"
 #include "net.h"
+#include "wifi.h"
 #include "rtc.h"
 #include "user.h"
 #include "string.h"
@@ -883,6 +884,137 @@ static int64_t sys_ping(uint64_t dst, uint64_t seq, uint64_t timeout_ms)
 }
 
 /* Resolve a host name to a network-order address, returned through `ip_out`. */
+/* ------------------------------------------------------------------ *
+ *  Wireless
+ * ------------------------------------------------------------------ */
+
+/* Copy the kernel's idea of a network into the shape user programs see.  The
+ * two are deliberately separate types: the kernel's carries things -- the
+ * exact SSID length, a flag for each capability -- that the interface should
+ * be free to stop carrying without breaking every program. */
+static void wifi_export(wnetwork_t *out, const wifi_network_t *net)
+{
+    memset(out, 0, sizeof(*out));
+
+    memcpy(out->ssid, net->ssid, W_WIFI_SSID_MAX);
+    out->ssid[W_WIFI_SSID_MAX] = '\0';
+    out->ssid_len = net->ssid_len;
+    memcpy(out->bssid, net->bssid, 6);
+    out->channel    = net->channel;
+    out->signal_dbm = net->signal_dbm;
+    out->security   = (unsigned char)net->security;
+
+    if (net->hidden)
+        out->flags |= W_WIFI_HIDDEN;
+    if (net->ccmp)
+        out->flags |= W_WIFI_CCMP;
+}
+
+/* Scanning is the one wireless operation any account may ask for: seeing what
+ * networks exist tells you nothing you could not learn by standing in the room
+ * with a phone.
+ *
+ * With one exception.  A scan sweeps every channel, which takes the radio off
+ * the one it is holding -- so scanning while connected drops the link, and
+ * nothing here puts it back.  That makes it something one user could do to
+ * everybody else's traffic, so while there is a connection it belongs to root
+ * along with the rest of the network. */
+static int64_t sys_wifi_scan(uint64_t out, uint64_t max)
+{
+    if (max > W_WIFI_SCAN_MAX)
+        max = W_WIFI_SCAN_MAX;
+    if (!max)
+        return 0;
+    if (!user_range_ok((void *)out, max * sizeof(wnetwork_t), true))
+        return -W_EFAULT;
+
+    if (wifi_state() == WIFI_STATE_CONNECTED &&
+        proc_current()->uid != W_ROOT_UID)
+        return -W_EPERM;
+
+    wifi_network_t found[W_WIFI_SCAN_MAX];
+    int n = wifi_scan(found, (int)max, 6000);
+
+    if (n < 0)
+        return n;
+
+    wnetwork_t *dst = (wnetwork_t *)out;
+
+    for (int i = 0; i < n; i++)
+        wifi_export(&dst[i], &found[i]);
+
+    return n;
+}
+
+/* Joining a network is not.  It changes where every program's traffic goes,
+ * and the passphrase it takes is a credential -- so it is root's to do, the
+ * same as the other things that reconfigure the machine underneath everyone
+ * using it. */
+static int64_t sys_wifi_connect(uint64_t ssid, uint64_t password)
+{
+    if (proc_current()->uid != W_ROOT_UID)
+        return -W_EPERM;
+
+    char ssid_buf[W_WIFI_SSID_MAX + 1];
+    char pass_buf[W_WIFI_PASSPHRASE_MAX + 1];
+
+    int r = copy_string_from_user((const char *)ssid, ssid_buf, sizeof(ssid_buf));
+
+    if (r < 0)
+        return r;
+
+    pass_buf[0] = '\0';
+    if (password) {
+        r = copy_string_from_user((const char *)password, pass_buf,
+                                  sizeof(pass_buf));
+        if (r < 0)
+            return r;
+    }
+
+    r = wifi_connect(ssid_buf, pass_buf, 15000);
+
+    /* The passphrase does not stay in kernel memory a moment longer than the
+     * call that carried it.  It is on a kernel stack that will be reused by
+     * whatever runs next, and the master key derived from it is kept
+     * instead. */
+    memset(pass_buf, 0, sizeof(pass_buf));
+
+    return r;
+}
+
+static int64_t sys_wifi_disconnect(void)
+{
+    if (proc_current()->uid != W_ROOT_UID)
+        return -W_EPERM;
+
+    return wifi_disconnect();
+}
+
+static int64_t sys_wifi_status(uint64_t out)
+{
+    if (!user_range_ok((void *)out, sizeof(wwifi_status_t), true))
+        return -W_EFAULT;
+
+    wwifi_status_t *st = (wwifi_status_t *)out;
+
+    memset(st, 0, sizeof(*st));
+    st->state = (int)wifi_state();
+
+    const wifi_network_t *net = wifi_current();
+
+    if (net)
+        wifi_export(&st->network, net);
+
+    st->ip        = net_local_ip();
+    st->netmask   = net_netmask();
+    st->gateway   = net_gateway_ip();
+    st->dns       = net_dns_ip();
+    st->from_dhcp = net_dhcp_configured() ? 1 : 0;
+
+    strlcpy(st->error, wifi_last_error(), sizeof(st->error));
+    return 0;
+}
+
 static int64_t sys_resolve(uint64_t host, uint64_t ip_out)
 {
     char namebuf[256];
@@ -1259,6 +1391,22 @@ static void syscall_handler(regs_t *regs)
     case WSYS_LSEEK:     r = sys_lseek(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_STAT:      r = sys_stat(regs->rdi, regs->rsi); break;
     case WSYS_UTIME:     r = sys_utime(regs->rdi); break;
+    case WSYS_WIFI_SCAN:
+        net_claim();
+        r = sys_wifi_scan(regs->rdi, regs->rsi);
+        net_release();
+        break;
+    case WSYS_WIFI_CONNECT:
+        net_claim();
+        r = sys_wifi_connect(regs->rdi, regs->rsi);
+        net_release();
+        break;
+    case WSYS_WIFI_DISCONNECT:
+        net_claim();
+        r = sys_wifi_disconnect();
+        net_release();
+        break;
+    case WSYS_WIFI_STATUS: r = sys_wifi_status(regs->rdi); break;
     case WSYS_UNLINK:    r = sys_unlink(regs->rdi); break;
     case WSYS_MKDIR:     r = sys_mkdir(regs->rdi); break;
     case WSYS_RMDIR:     r = sys_rmdir(regs->rdi); break;
@@ -1294,12 +1442,40 @@ static void syscall_handler(regs_t *regs)
     case WSYS_SETMODE:   r = sys_setmode(regs->rdi, regs->rsi); break;
     case WSYS_GETSHELL:  r = sys_getshell(regs->rdi, regs->rsi, regs->rdx); break;
     case WSYS_SETSHELL:  r = sys_setshell(regs->rdi, regs->rsi); break;
-    case WSYS_PING:      r = sys_ping(regs->rdi, regs->rsi, regs->rdx); break;
-    case WSYS_RESOLVE:   r = sys_resolve(regs->rdi, regs->rsi); break;
-    case WSYS_TCP_OPEN:  r = sys_tcp_open(regs->rdi, regs->rsi); break;
-    case WSYS_TCP_SEND:  r = sys_tcp_send(regs->rdi, regs->rsi, regs->rdx); break;
-    case WSYS_TCP_RECV:  r = sys_tcp_recv(regs->rdi, regs->rsi, regs->rdx); break;
-    case WSYS_TCP_CLOSE: r = sys_tcp_close(regs->rdi); break;
+    /* Everything that touches the network takes the stack for the length of
+     * the call.  It is one set of buffers and one connection table, and a
+     * network call now gives the kernel lock up while it waits -- so without
+     * this, two of them could be inside it at once. */
+    case WSYS_PING:
+        net_claim();
+        r = sys_ping(regs->rdi, regs->rsi, regs->rdx);
+        net_release();
+        break;
+    case WSYS_RESOLVE:
+        net_claim();
+        r = sys_resolve(regs->rdi, regs->rsi);
+        net_release();
+        break;
+    case WSYS_TCP_OPEN:
+        net_claim();
+        r = sys_tcp_open(regs->rdi, regs->rsi);
+        net_release();
+        break;
+    case WSYS_TCP_SEND:
+        net_claim();
+        r = sys_tcp_send(regs->rdi, regs->rsi, regs->rdx);
+        net_release();
+        break;
+    case WSYS_TCP_RECV:
+        net_claim();
+        r = sys_tcp_recv(regs->rdi, regs->rsi, regs->rdx);
+        net_release();
+        break;
+    case WSYS_TCP_CLOSE:
+        net_claim();
+        r = sys_tcp_close(regs->rdi);
+        net_release();
+        break;
     case WSYS_TIME_GET:  r = sys_time_get(regs->rdi); break;
     case WSYS_TIME_SET:  r = sys_time_set(regs->rdi); break;
     case WSYS_DISKLIST:  r = sys_disklist(regs->rdi, regs->rsi); break;

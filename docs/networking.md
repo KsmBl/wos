@@ -7,6 +7,29 @@ IPv4, ICMP (for [`ping`](apps.md#ping)), UDP (for DNS), and a client
 There is no TLS, no server side, and no general socket API; it is a client that
 reaches out, not a host that listens.
 
+Wireless is documented separately, in [wireless.md](wireless.md): 802.11 and
+WPA2 are a large enough subject to deserve their own page, and everything on
+this one applies over a wireless link unchanged.
+
+## Adapters
+
+Until there were two, the stack called the RTL8139 by name. Now
+`kernel/include/netdev.h` defines what the stack needs from an adapter — a
+hardware address, a way to send an Ethernet frame, a way to take a received
+one, and whether the link is up — and each driver registers one of those.
+
+The seam is deliberately at **Ethernet frames**. A wireless adapter does not
+send Ethernet frames; it sends 802.11 frames with a different header, three or
+four addresses instead of two, and its own encryption. All of that is the
+wireless driver's business, and what it presents upwards is Ethernet. So ARP,
+IPv4, TCP and everything over them work across a wireless link without knowing
+one is there.
+
+The first adapter to register becomes the one the stack sends through, and
+drivers are started wired-first — a machine with a cable in it should use the
+cable. `net_bind()` moves the stack to another one, which is what joining a
+wireless network does.
+
 ## The card: RTL8139
 
 QEMU's `-device rtl8139` is the card, chosen because it is about the simplest
@@ -53,14 +76,26 @@ deadline would wait forever — the bug that first made TCP hang.
 
 ## Configuration
 
-Static, matching QEMU's user-mode (SLIRP) network, which is what `-netdev user`
-hands out:
+The addresses start as QEMU's user-mode (SLIRP) defaults, which is what
+`-netdev user` hands out and the network the emulated card is always on:
 
 | | |
 |---|---|
 | address | `10.0.2.15` |
 | netmask | `255.255.255.0` |
 | gateway | `10.0.2.2` |
+| resolver | `10.0.2.3` |
+
+They are no longer constants. `net_dhcp()` runs the four-message exchange —
+broadcast a DISCOVER, take an offer, REQUEST it, adopt what the acknowledgement
+carries — and replaces them. It is not run at boot, because the wired card's
+network is known and a boot should not wait on a server that is not there; it
+is run when a wireless link comes up, which has just joined a network it knows
+nothing about. `net_set_config()` sets them by hand.
+
+All of this goes out as an Ethernet broadcast from `0.0.0.0`: until the
+exchange finishes there is no address to send from and nothing to ARP with,
+which is why the DHCP code does not use the normal send path.
 
 SLIRP's virtual gateway at `10.0.2.2` answers ARP and ICMP directly, so it is
 the address that always replies. Real addresses beyond it (say `8.8.8.8`) route
@@ -108,6 +143,9 @@ response into one buffer — the shared engine behind `curl`, `wget` and `lynx`.
 - **A minimal TCP.** No congestion control, no window scaling, no selective
   ACK, and out-of-order segments are dropped rather than buffered. Correct and
   enough for request/response over a low-loss path; not a stack for a server.
-- **No DHCP** (the address is hard-coded to SLIRP's), **no IPv6**, one card.
-- The driver **polls**, so nothing happens on the network unless a program is
+- **No IPv6.** IPv4 only, everywhere.
+- **DHCP asks once.** The lease is taken and never renewed, so a network that
+  hands out short leases will eventually stop routing for us. Nothing here
+  notices; reconnecting fixes it.
+- The drivers **poll**, so nothing happens on the network unless a program is
   actively waiting on it.

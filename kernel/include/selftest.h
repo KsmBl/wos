@@ -21,6 +21,8 @@ static inline void selftest_filesystem(void) { }
 static inline void selftest_ramdisk(void)    { }
 static inline void selftest_sockets(void)    { }
 static inline void selftest_processes(void)  { }
+static inline void selftest_crypto(void)     { }
+static inline void selftest_network(void)    { }
 
 #else
 
@@ -45,6 +47,24 @@ void selftest_sockets(void);
  * status, preemption between two processes, and that a faulting process is
  * killed without taking the system down. */
 void selftest_processes(void);
+
+/* The cryptography the wireless supplicant rests on, against the vectors
+ * published with each algorithm: SHA-1, HMAC, PBKDF2, AES, RFC 3394 key
+ * unwrap and CCM, plus the two WPA2 master keys the 802.11i annex gives.
+ *
+ * These are worth a boot's time because a wrong digest here does not crash
+ * anything -- it produces a handshake an access point declines without ever
+ * saying why, which is close to undebuggable from the far end. */
+void selftest_crypto(void);
+
+/* Ask the network for an address by DHCP, and check what comes back.
+ *
+ * This is the one piece of the wireless work that a machine with no wireless
+ * adapter can still exercise, and the emulated network has a server on it
+ * that answers -- so booting under QEMU runs the real four-message exchange
+ * against a real server.  A network with no server is reported and skipped,
+ * not failed. */
+void selftest_network(void);
 
 /* Deliberately dereference a null pointer to show the page-fault handler
  * working.  Panics by design; only call it as the last thing in a boot. */

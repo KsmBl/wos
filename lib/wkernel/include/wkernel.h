@@ -1318,6 +1318,91 @@ int wping(unsigned int ip, int seq, int timeout_ms);
 int wresolve(const char *host, unsigned int *ip);
 
 /**
+ * @defgroup wifi Wireless networking
+ *
+ * Scanning for wireless networks and joining one. The `wifi` command is built
+ * on these four calls and does nothing they do not.
+ * @{
+ */
+
+/**
+ * Sweep the channels and report what is out there.
+ *
+ * Fills @p out with at most @p max networks, strongest first. Several access
+ * points broadcasting one name collapse into a single entry -- they are one
+ * network to anyone choosing which to join.
+ *
+ * This takes several seconds: the adapter must sit on each channel long
+ * enough to hear a beacon, and there are many channels.
+ *
+ * Any account may scan while the machine is not connected. While it *is*
+ * connected this needs root: a sweep takes the radio off the channel it is
+ * holding, which drops the link for everybody, and nothing puts it back.
+ *
+ * @param out Array of at least @p max entries.
+ * @param max How many to write; more than `W_WIFI_SCAN_MAX` is capped.
+ * @return How many were written, or a negative error: `-W_ENODEV` if the
+ *         machine has no wireless adapter, `-W_EPERM` for a non-root scan
+ *         while connected.
+ */
+int wwifi_scan(wnetwork_t *out, int max);
+
+/**
+ * Join a wireless network, and get an address on it.
+ *
+ * Runs the whole sequence -- find the network, authenticate, associate, prove
+ * the passphrase, ask for an address by DHCP -- and does not return until the
+ * link is up or the attempt has failed. Expect it to take a few seconds, and
+ * longer on a protected network: turning a passphrase into a key is thousands
+ * of hashes, deliberately.
+ *
+ * On success every program's traffic goes over this link from here on.
+ *
+ * Only root may call this: it reconfigures the machine underneath everyone
+ * using it, and the passphrase is a credential.
+ *
+ * @param ssid     The network's name.
+ * @param password The passphrase, or NULL for an open network. Either 8 to 63
+ *                 characters, or exactly 64 hex digits for a key given
+ *                 directly.
+ * @return 0, or a negative error:
+ *         `-W_EPERM` not root,
+ *         `-W_ENODEV` no wireless adapter,
+ *         `-W_ENOENT` no network of that name is in range,
+ *         `-W_EINVAL` a passphrase was needed and not given, or is malformed,
+ *         `-W_EACCES` the access point rejected us -- in practice the
+ *                     passphrase was wrong, which is all the protocol says,
+ *         `-W_ENOTSUP` the network uses something this system does not
+ *                     implement (WEP, TKIP, or WPA3's handshake),
+ *         `-W_ETIMEDOUT` the access point stopped answering.
+ *
+ * wwifi_status() carries a sentence explaining the failure in words, which is
+ * worth showing rather than the number.
+ */
+int wwifi_connect(const char *ssid, const char *password);
+
+/**
+ * Leave the current network, telling the access point rather than going
+ * quiet, and hand the stack back to a wired adapter if there is one.
+ *
+ * Only root may call this.
+ *
+ * @return 0, `-W_EPERM`, or `-W_ENODEV`.
+ */
+int wwifi_disconnect(void);
+
+/**
+ * What the wireless adapter is doing, the network it is on, and the addresses
+ * in force -- everything a status display needs, in one call.
+ *
+ * @return 0, or `-W_EFAULT` for a bad pointer. A machine with no adapter is
+ *         not an error: the state comes back as `W_WIFI_STATE_ABSENT`.
+ */
+int wwifi_status(wwifi_status_t *out);
+
+/** @} */
+
+/**
  * Open a TCP connection to `ip` (network order) on `port`.
  *
  * Blocks through the handshake. WOS's TCP is a small client only -- no

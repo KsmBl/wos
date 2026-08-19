@@ -151,6 +151,18 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   in I/O space and in the embedded controller. That is what the battery's
   charge comes back from: `_BST`, called rather than guessed at. See
   [`docs/architecture.md`](docs/architecture.md).
+- **Networking**: an IPv4 stack — Ethernet, ARP, IPv4, ICMP, UDP, DNS, a
+  client TCP and a DHCP client — behind `ping`, `curl`, `wget` and `lynx`, over
+  an RTL8139. See [`docs/networking.md`](docs/networking.md).
+- **Wireless**: 802.11 scanning and joining, with the full **WPA2** handshake —
+  the passphrase becomes a key by PBKDF2, four EAPOL messages prove both ends
+  derived the same one, and the group key arrives wrapped with AES. The
+  cryptography under it (SHA-1, HMAC, PBKDF2, AES, RFC 3394, CCM) is checked
+  by the boot self-test against the vectors published with each algorithm. The
+  `wifi`
+  command scans, connects and reports. The **adapter driver is unfinished** and
+  says so; [`docs/wireless.md`](docs/wireless.md) is straight about how far it
+  got and where to pick it up.
 - **Services**: programs the machine runs rather than a person does, described
   by unit files in `/services` and managed with `systemctl` — list, start,
   stop, enable, disable.
@@ -198,6 +210,42 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   in the spirit of the originals — see [`docs/apps.md`](docs/apps.md) for what
   the upstream versions would need that WOS does not have.
 
+## What is not original to this project
+
+Everything in WOS is written from scratch except the following, which is
+recorded here rather than left to be discovered in a source file.
+
+**The Intel wireless driver's register definitions and power-up sequence**
+(`kernel/drivers/iwlwifi/`) are derived from the `iwlwifi` driver in the Linux
+kernel — chiefly `iwl-fh.h`, `iwl-prph.h` and `pcie/gen1_2/trans.c`.
+
+> Copyright (C) 2005-2014, 2018-2026 Intel Corporation
+> Copyright (C) 2013-2015 Intel Mobile Communications GmbH
+> Copyright (C) 2015-2017 Intel Deutschland GmbH
+
+Those files are dual licensed, `GPL-2.0 OR BSD-3-Clause`. WOS takes the
+**BSD-3-Clause** option, which requires the notice above to be kept and asks
+nothing else of the rest of this project.
+
+To be exact about what was taken: register addresses, bit values, and the
+order in which the device is claimed, powered up and given its firmware. Some
+of it was written from memory first and then corrected against that source;
+some of it — the processor-reset release, the section-load notification, the
+operating-system-alive handshake — came straight from it. A register address
+is a fact about a piece of silicon, but these particular facts were read out
+of somebody else's file, and that is worth saying plainly.
+
+The firmware the adapter runs is Intel's, is redistributable but not ours, and
+is **not** in this repository; the build takes it from the machine doing the
+building. See [`docs/wireless.md`](docs/wireless.md).
+
+Nothing else here is derived from another operating system. The 802.11 layer,
+the WPA2 supplicant, the cryptography, the IP stack, the filesystem, the
+compiler and the desktop are this project's own — the cryptography is written
+from the published algorithm descriptions and checked against the test vectors
+that come with them, which is a different thing from being copied from an
+implementation of them.
+
 ## Documentation
 
 - [`docs/wkernel-api.md`](docs/wkernel-api.md) — every application-facing function,
@@ -208,6 +256,10 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
   fish, vim, htop, fastfetch, and the desktop: sway, wlterm, swaymsg
 - [`docs/console.md`](docs/console.md) — raw input mode and the ANSI escape
   sequences full-screen programs use
+- [`docs/networking.md`](docs/networking.md) — the IPv4 stack: ARP, ICMP, UDP,
+  DNS, a client TCP, and DHCP
+- [`docs/wireless.md`](docs/wireless.md) — 802.11, the WPA2 handshake and the
+  `wifi` command; and an honest account of how far the adapter driver got
 - [`docs/architecture.md`](docs/architecture.md) — how the kernel fits together
 - [`docs/usb.md`](docs/usb.md) — putting WOS on a USB stick and booting it on
   real hardware
@@ -222,7 +274,8 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 
 ## Testing
 
-The kernel runs self-tests on every boot — frame accounting, heap
+The kernel runs self-tests on every boot — frame accounting, the WPA2
+cryptography against its published vectors, heap
 split/coalesce, address-space teardown, filesystem read/write/delete, and
 spawning ring-3 processes — because an OS has no test runner to fall back on.
 `/home/boots.txt` counts boots, which is the standing proof that writes reach

@@ -51,6 +51,7 @@
 #define W_ENOSYS        38   /* no such syscall                    */
 #define W_ENOTEMPTY     39   /* directory not empty                */
 #define W_EFBIG         27   /* file too large for this filesystem */
+#define W_ENOTSUP       95   /* the device or protocol cannot do it */
 #define W_ECONNRESET   104   /* connection reset by the peer       */
 #define W_ETIMEDOUT    110   /* operation timed out                */
 #define W_ECONNREFUSED 111   /* connection refused                 */
@@ -670,7 +671,71 @@ typedef struct {
 #define WSYS_KILL       78
 #define WSYS_REBOOT     79
 #define WSYS_UTIME      80
-#define WSYS_MAX        81
+#define WSYS_WIFI_SCAN  81
+#define WSYS_WIFI_CONNECT 82
+#define WSYS_WIFI_DISCONNECT 83
+#define WSYS_WIFI_STATUS 84
+#define WSYS_MAX        85
+
+/* ------------------------------------------------------------------ *
+ *  Wireless networking
+ * ------------------------------------------------------------------ */
+
+/* An SSID is at most 32 bytes and is not required to be text.  The kernel
+ * stores it with a terminator appended so it can be printed. */
+#define W_WIFI_SSID_MAX 32
+
+/* The most networks a single scan will report. */
+#define W_WIFI_SCAN_MAX 48
+
+/* The longest passphrase WPA2 allows.  Sixty-four characters is not a
+ * passphrase but the key itself written in hex, which is also accepted. */
+#define W_WIFI_PASSPHRASE_MAX 64
+
+/* What a network is protected with. */
+#define W_WIFI_SECURITY_OPEN 0
+#define W_WIFI_SECURITY_WEP  1
+#define W_WIFI_SECURITY_WPA  2
+#define W_WIFI_SECURITY_WPA2 3
+#define W_WIFI_SECURITY_WPA3 4
+
+/* Flags in wnetwork_t.flags. */
+#define W_WIFI_HIDDEN 0x01   /* the beacon does not carry the name         */
+#define W_WIFI_CCMP   0x02   /* offers the cipher this system implements   */
+
+/* What the adapter is doing. */
+#define W_WIFI_STATE_ABSENT    0   /* there is no wireless adapter          */
+#define W_WIFI_STATE_IDLE      1
+#define W_WIFI_STATE_SCANNING  2
+#define W_WIFI_STATE_JOINING   3
+#define W_WIFI_STATE_HANDSHAKE 4
+#define W_WIFI_STATE_CONNECTED 5
+
+/* One network, as a scan reports it. */
+typedef struct {
+    char          ssid[W_WIFI_SSID_MAX + 1];
+    unsigned char ssid_len;
+    unsigned char bssid[6];       /* the access point's hardware address  */
+    unsigned char channel;
+    signed char   signal_dbm;     /* negative; nearer zero is stronger    */
+    unsigned char security;       /* one of W_WIFI_SECURITY_*             */
+    unsigned char flags;          /* W_WIFI_HIDDEN, W_WIFI_CCMP           */
+} wnetwork_t;
+
+/* Everything a status display needs, in one call. */
+typedef struct {
+    int           state;          /* one of W_WIFI_STATE_*                */
+    wnetwork_t    network;        /* the one joined; blank if none        */
+
+    /* The addresses in force.  Network-order, like every other address in
+     * this interface. */
+    unsigned int  ip, netmask, gateway, dns;
+    unsigned char from_dhcp;      /* whether a server gave them           */
+
+    /* Why the last attempt to connect failed, in words.  Empty if none
+     * has. */
+    char          error[96];
+} wwifi_status_t;
 
 /* Console modes for wconsole_raw() / WSYS_CONSOLE. */
 #define W_CONSOLE_CANONICAL 0

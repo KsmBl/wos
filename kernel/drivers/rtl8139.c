@@ -1,6 +1,7 @@
 /* Realtek RTL8139 driver. See rtl8139.h. */
 
 #include "rtl8139.h"
+#include "netdev.h"
 #include "pci.h"
 #include "io.h"
 #include "kheap.h"
@@ -47,6 +48,20 @@ static uint32_t rx_offset;                 /* our read cursor into the ring */
 
 static uint8_t *tx_buf[TX_SLOTS];
 static int      tx_cur;
+
+static int      rtl8139_send(netdev_t *dev, const void *frame, uint32_t len);
+static uint32_t rtl8139_poll(netdev_t *dev, void *out, uint32_t cap);
+
+/* Static, because the registry keeps the pointer rather than a copy. */
+static netdev_t netdev = {
+    .name     = "eth0",
+    .wireless = false,
+    .send     = rtl8139_send,
+    .poll     = rtl8139_poll,
+    /* No link_up: this card's carrier detect is not worth reading when the
+     * only machine it appears on is an emulated one whose cable is always
+     * plugged in.  A missing link_up means "assume up". */
+};
 
 static inline uint32_t phys_of(const void *p)
 {
@@ -96,15 +111,19 @@ bool rtl8139_init(void)
 
     outb(io_base + REG_CR, CR_RE | CR_TE);
 
-    kprintf("net    : rtl8139 at io 0x%x, mac %x:%x:%x:%x:%x:%x\n",
-            io_base, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    kprintf("net    : rtl8139 at io 0x%x\n", io_base);
+
+    memcpy(netdev.mac, mac, 6);
+    netdev_register(&netdev);
     return true;
 }
 
 const uint8_t *rtl8139_mac(void) { return mac; }
 
-int rtl8139_send(const void *frame, uint32_t len)
+static int rtl8139_send(netdev_t *dev, const void *frame, uint32_t len)
 {
+    (void)dev;
+
     if (len > TX_BUF_SIZE)
         return -1;
     if (len < 60)
@@ -128,8 +147,10 @@ int rtl8139_send(const void *frame, uint32_t len)
     return -1;
 }
 
-uint32_t rtl8139_poll(void *out, uint32_t cap)
+static uint32_t rtl8139_poll(netdev_t *dev, void *out, uint32_t cap)
 {
+    (void)dev;
+
     if (inb(io_base + REG_CR) & CR_BUFE)
         return 0;                           /* ring empty */
 
