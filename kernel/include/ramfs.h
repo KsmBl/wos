@@ -37,7 +37,7 @@ int  ramfs_unlink(const char *path);
 int  ramfs_rename(const char *from, const char *to);
 int  ramfs_truncate(uint32_t ino);
 int  ramfs_utime(uint32_t ino, uint32_t mtime);
-int  ramfs_readdir(uint32_t ino, uint32_t index, wdirent_t *out);
+int  ramfs_readdir(uint32_t ino, uint32_t *cursor, wdirent_t *out);
 
 /* What it is holding, and what it could still grow into. */
 void ramfs_statfs(wdiskinfo_t *out);

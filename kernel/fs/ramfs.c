@@ -506,7 +506,16 @@ int ramfs_utime(uint32_t ino, uint32_t mtime)
     return 0;
 }
 
-int ramfs_readdir(uint32_t ino, uint32_t index, wdirent_t *out)
+/* Read one directory entry, and move the cursor past it.
+ *
+ * The cursor is an ordinal here rather than the byte offset wfs uses -- there
+ * are no bytes to offset into, only a list -- and the walk is still from the
+ * head each time.  That is a pointer chase through memory the machine already
+ * has, which is a different thing entirely from wfs rereading a device, and
+ * not worth holding a node pointer across calls for: the list can be added to
+ * or unlinked between two of them, and a stale pointer would be far worse than
+ * a short walk. */
+int ramfs_readdir(uint32_t ino, uint32_t *cursor, wdirent_t *out)
 {
     ramfs_node_t *n = node_of(ino);
     if (!n)
@@ -518,10 +527,11 @@ int ramfs_readdir(uint32_t ino, uint32_t index, wdirent_t *out)
      * per entry, and nothing promises an order anyway. */
     uint32_t i = 0;
     for (ramfs_node_t *c = n->children; c; c = c->next, i++)
-        if (i == index) {
+        if (i == *cursor) {
             out->ino  = c->ino;
             out->type = c->type == WFS_TYPE_DIR ? W_FT_DIR : W_FT_FILE;
             strlcpy(out->name, c->name, sizeof(out->name));
+            (*cursor)++;
             return 1;
         }
 

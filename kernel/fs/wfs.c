@@ -616,7 +616,22 @@ static bool dir_is_empty(uint32_t dir_ino)
     return true;
 }
 
-int wfs_readdir(uint32_t ino, uint32_t index, wdirent_t *out)
+/* Read one directory entry, and move the cursor past it.
+ *
+ * `cursor` is a byte offset into the directory, and it is what makes listing a
+ * directory cost what it should.  This used to take the ordinal of the wanted
+ * entry and count from the start of the directory to reach it, which meant a
+ * caller walking a directory the only way it can -- entry 0, entry 1, entry 2
+ * -- rescanned everything it had already seen on every call.  Listing N
+ * entries read N*N/2 of them, and every one of those reads was a block off a
+ * device.  On a directory the size of /bin that is thousands of transfers to
+ * print a list that fits on one screen.
+ *
+ * Carrying the offset forward instead makes the walk what it looks like: one
+ * pass, each entry read once.  The caller keeps the cursor and hands it back,
+ * which is what it was already doing -- it just holds a position now rather
+ * than a count. */
+int wfs_readdir(uint32_t ino, uint32_t *cursor, wdirent_t *out)
 {
     struct wfs_inode dir;
     int r = wfs_read_inode(ino, &dir);
@@ -626,24 +641,33 @@ int wfs_readdir(uint32_t ino, uint32_t index, wdirent_t *out)
         return -W_ENOTDIR;
 
     struct wfs_dirent ent;
-    uint32_t seen = 0;
 
-    for (uint32_t off = 0; off < dir.size; off += WFS_DIRENT_SIZE) {
+    /* Entries are fixed width, so a byte offset is a valid place to resume
+     * from; a cursor landing mid-entry could only come from a seek on a
+     * directory, and rounding it down is kinder than reading rubbish. */
+    for (uint32_t off = *cursor - (*cursor % WFS_DIRENT_SIZE);
+         off < dir.size; off += WFS_DIRENT_SIZE) {
+
         if (wfs_read(ino, off, &ent, sizeof(ent)) <= 0)
             break;
+
+        /* A deleted entry leaves its slot behind.  Skipping it here rather
+         * than reporting it is why the cursor is a position in the directory
+         * and not a count of what has been returned. */
         if (ent.ino == WFS_INVALID_INO)
             continue;
 
-        if (seen == index) {
-            struct wfs_inode target;
-            out->ino  = ent.ino;
-            out->type = (wfs_read_inode(ent.ino, &target) == 0)
-                          ? target.type : W_FT_FILE;
-            strlcpy(out->name, ent.name, sizeof(out->name));
-            return 1;
-        }
-        seen++;
+        struct wfs_inode target;
+        out->ino  = ent.ino;
+        out->type = (wfs_read_inode(ent.ino, &target) == 0)
+                      ? target.type : W_FT_FILE;
+        strlcpy(out->name, ent.name, sizeof(out->name));
+
+        *cursor = off + WFS_DIRENT_SIZE;
+        return 1;
     }
+
+    *cursor = dir.size;
     return 0;
 }
 

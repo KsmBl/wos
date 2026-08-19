@@ -375,7 +375,7 @@ static void test_filesystem_dirs(void)
     if (wfs_lookup("/", &ino) != 0)
         return;
 
-    for (uint32_t i = 0; wfs_readdir(ino, i, &ent) == 1; i++)
+    for (uint32_t cursor = 0; wfs_readdir(ino, &cursor, &ent) == 1; )
         if (strcmp(ent.name, "home") == 0 && ent.type == W_FT_DIR)
             found_home = true;
 

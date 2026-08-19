@@ -65,7 +65,7 @@ int wfs_utime(uint32_t ino, uint32_t mtime);
 
 /* Read directory entry number `index` (0-based, skipping free slots).
  * Returns 1 when an entry was produced, 0 at the end of the directory. */
-int wfs_readdir(uint32_t ino, uint32_t index, wdirent_t *out);
+int wfs_readdir(uint32_t ino, uint32_t *cursor, wdirent_t *out);
 
 /* Fill in the volume's space and inode usage. */
 void wfs_statfs(wdiskinfo_t *out);
