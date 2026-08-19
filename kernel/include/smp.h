@@ -88,10 +88,21 @@ bool smp_is_bsp(void);
 bool klock_enter(void);
 void klock_leave(bool took);
 
-/* The unconditional pair, for the scheduler's handoff and the idle loop. */
-void klock_acquire(void);
+/* The unconditional pair, for the scheduler's handoff and the idle loop.
+ *
+ * klock_acquire is a macro so that a processor which ends up waiting can say
+ * where the lock was taken, not merely that it was.  "cpu0 holds it" is the
+ * start of a search; "cpu0 took it at net.c:512, in wget" is usually the end
+ * of one. */
+void klock_acquire_at(const char *file, int line);
+#define klock_acquire() klock_acquire_at(__FILE__, __LINE__)
+
 void klock_release(void);
 bool klock_held_here(void);
+
+/* Where the lock was last taken, and by which process, for anything that wants
+ * to report a machine that has stopped.  Either may be NULL. */
+void klock_holder(int *cpu, const char **file, int *line, const char **process);
 
 /* Give the kernel lock up for a moment in the middle of a long wait, so the
  * other processors are not shut out of the kernel for the whole of it.  Only
