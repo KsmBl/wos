@@ -86,4 +86,9 @@ bool fbcon_suspended(void);
 void fbcon_blit(const uint32_t *src, uint32_t src_stride_px,
                 int x, int y, int w, int h);
 
+/* True when the console scrolls by moving the card's view of a taller
+ * framebuffer rather than by repainting.  Reported at boot because the
+ * difference is large and silent otherwise. */
+bool fbcon_panning(void);
+
 #endif /* WOS_FBCON_H */

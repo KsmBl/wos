@@ -7,6 +7,7 @@
 #include "lapic.h"
 #include "cpu.h"
 #include "gdt.h"
+#include "sysentry.h"
 #include "isr.h"
 #include "pit.h"
 #include "pmm.h"
@@ -217,6 +218,16 @@ void smp_ap_entry(void)
 
     gdt_init_cpu(index);
     idt_load();
+
+    /* CR4 is per-processor, so the global-page bit has to be set here too --
+     * the kernel's entries are already marked, but this processor would
+     * otherwise ignore the marking and flush them like any other. */
+    paging_enable_global();
+
+    /* Likewise the SYSCALL MSRs: they are per-processor, and a core that never
+     * set them would take a fault the first time a thread on it tried the
+     * short way into the kernel. */
+    sysentry_init_cpu();
 
     cpus[index].online = true;
     __atomic_store_n(&ap_reported, 1, __ATOMIC_RELEASE);

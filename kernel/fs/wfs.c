@@ -50,16 +50,141 @@ static bool sectors_write(uint32_t lba, uint8_t count, const void *buf)
     }
 }
 
+/* ------------------------------------------------------------------ *
+ *  The block cache
+ *
+ *  Every read below went to the device, every time, and the same few blocks
+ *  went there over and over: reading one 64-byte inode meant fetching the
+ *  whole kilobyte holding it, and the next file in the same directory is
+ *  almost always an inode in the same block.  Walking a directory re-read the
+ *  directory.  Following an indirect block re-read the indirect block.
+ *
+ *  Sixty-four blocks is 64 KiB, which is nothing beside the heap and enough to
+ *  hold the inode blocks, the directory and the indirect blocks of whatever is
+ *  being worked on at the time -- which is where nearly all of the repetition
+ *  was.
+ *
+ *  It is write-through, on purpose.  The rest of this driver writes changes
+ *  straight back because there is no fsck here and a volume that loses its
+ *  free list on a hard reset is a broken volume; a cache that held writes back
+ *  would undo exactly that, and buy nothing a person would notice.  So a write
+ *  updates the copy here and goes to the device as it always did.
+ *
+ *  Coherency needs no thought: sectors_read and sectors_write are reached only
+ *  through the two functions below, so there is no path by which a block can
+ *  change on the device without this seeing it.  (The one exception is reading
+ *  the partition table at mount, which is not a block of this volume at all.)
+ * ------------------------------------------------------------------ */
+
+#define CACHE_BLOCKS 64
+
+static struct {
+    uint8_t  data[WFS_BLOCK_SIZE];
+    uint32_t block;
+    uint64_t stamp;       /* for picking a victim; 0 means empty */
+} cache[CACHE_BLOCKS];
+
+static uint64_t cache_clock;
+
+static void cache_reset(void)
+{
+    for (int i = 0; i < CACHE_BLOCKS; i++)
+        cache[i].stamp = 0;
+    cache_clock = 0;
+}
+
+/* The slot holding `block`, or NULL. */
+static int cache_find(uint32_t block)
+{
+    for (int i = 0; i < CACHE_BLOCKS; i++)
+        if (cache[i].stamp && cache[i].block == block)
+            return i;
+    return -1;
+}
+
+/* A free slot, or the least recently used one. */
+static int cache_victim(void)
+{
+    int      worst = 0;
+    uint64_t oldest = ~0ULL;
+
+    for (int i = 0; i < CACHE_BLOCKS; i++) {
+        if (!cache[i].stamp)
+            return i;
+        if (cache[i].stamp < oldest) {
+            oldest = cache[i].stamp;
+            worst  = i;
+        }
+    }
+    return worst;
+}
+
 static bool block_read(uint32_t block, void *buf)
 {
-    return sectors_read(partition_lba + block * WFS_SECTORS_PER_BLOCK,
-                        WFS_SECTORS_PER_BLOCK, buf);
+    int slot = cache_find(block);
+
+    if (slot < 0) {
+        slot = cache_victim();
+
+        if (!sectors_read(partition_lba + block * WFS_SECTORS_PER_BLOCK,
+                          WFS_SECTORS_PER_BLOCK, cache[slot].data)) {
+            /* Leave nothing behind that could be mistaken for the block. */
+            cache[slot].stamp = 0;
+            return false;
+        }
+        cache[slot].block = block;
+    }
+
+    cache[slot].stamp = ++cache_clock;
+    memcpy(buf, cache[slot].data, WFS_BLOCK_SIZE);
+    return true;
 }
+
+/* Read a run of consecutive blocks in one transfer, straight into the
+ * caller's buffer.
+ *
+ * A file read used to go a kilobyte at a time, which is one request to the
+ * device per block no matter how much was asked for.  On USB that is a full
+ * command/data/status round trip each; on ATA it is a fresh seek and a fresh
+ * interrupt.  Both devices will happily transfer far more per request, and a
+ * file's blocks are usually consecutive on the disk because that is the order
+ * they were allocated in, so most of those requests were being paid for
+ * nothing.
+ *
+ * The cache is bypassed on purpose.  Writes go through it to the device
+ * immediately, so the device is always the current copy and reading around it
+ * cannot go stale; and streaming a whole file through a sixty-four block cache
+ * would evict every inode and directory block in it to hold data nobody is
+ * going to ask for twice. */
+static bool blocks_read(uint32_t first, uint32_t count, void *buf)
+{
+    return sectors_read(partition_lba + first * WFS_SECTORS_PER_BLOCK,
+                        (uint8_t)(count * WFS_SECTORS_PER_BLOCK), buf);
+}
+
+/* The most blocks to gather into one request.  Two sectors per block, and the
+ * sector count the devices take is a byte, so this cannot go above 127. */
+#define READ_RUN_BLOCKS 64
 
 static bool block_write(uint32_t block, const void *buf)
 {
-    return sectors_write(partition_lba + block * WFS_SECTORS_PER_BLOCK,
-                         WFS_SECTORS_PER_BLOCK, buf);
+    int slot = cache_find(block);
+
+    if (slot < 0)
+        slot = cache_victim();
+
+    memcpy(cache[slot].data, buf, WFS_BLOCK_SIZE);
+    cache[slot].block = block;
+    cache[slot].stamp = ++cache_clock;
+
+    if (!sectors_write(partition_lba + block * WFS_SECTORS_PER_BLOCK,
+                       WFS_SECTORS_PER_BLOCK, buf)) {
+        /* The device and this copy no longer agree, and the device is the one
+         * that counts.  Drop it rather than serve it. */
+        cache[slot].stamp = 0;
+        return false;
+    }
+    return true;
 }
 
 static bool sync_superblock(void)
@@ -437,6 +562,32 @@ int wfs_read(uint32_t ino, uint32_t offset, void *buf, uint32_t len)
         if (r < 0)
             return r;
 
+        /* Starting on a block boundary with at least a whole block still to
+         * go: see how many blocks follow this one both in the file and on the
+         * disk, and take them all at once. */
+        if (inpos == 0 && block != 0 && len - done >= WFS_BLOCK_SIZE) {
+            uint32_t run = 1;
+
+            while (run < READ_RUN_BLOCKS &&
+                   (run + 1) * WFS_BLOCK_SIZE <= len - done) {
+                uint32_t next;
+                bool     ignored = false;
+
+                if (bmap(&in, index + run, false, &next, &ignored) < 0)
+                    break;
+                if (next != block + run)      /* a hole, or a jump */
+                    break;
+                run++;
+            }
+
+            if (run > 1) {
+                if (!blocks_read(block, run, dst + done))
+                    return -W_EIO;
+                done += run * WFS_BLOCK_SIZE;
+                continue;
+            }
+        }
+
         if (block == 0) {
             /* A hole reads as zeroes. */
             memset(dst + done, 0, chunk);
@@ -616,7 +767,22 @@ static bool dir_is_empty(uint32_t dir_ino)
     return true;
 }
 
-int wfs_readdir(uint32_t ino, uint32_t index, wdirent_t *out)
+/* Read one directory entry, and move the cursor past it.
+ *
+ * `cursor` is a byte offset into the directory, and it is what makes listing a
+ * directory cost what it should.  This used to take the ordinal of the wanted
+ * entry and count from the start of the directory to reach it, which meant a
+ * caller walking a directory the only way it can -- entry 0, entry 1, entry 2
+ * -- rescanned everything it had already seen on every call.  Listing N
+ * entries read N*N/2 of them, and every one of those reads was a block off a
+ * device.  On a directory the size of /bin that is thousands of transfers to
+ * print a list that fits on one screen.
+ *
+ * Carrying the offset forward instead makes the walk what it looks like: one
+ * pass, each entry read once.  The caller keeps the cursor and hands it back,
+ * which is what it was already doing -- it just holds a position now rather
+ * than a count. */
+int wfs_readdir(uint32_t ino, uint32_t *cursor, wdirent_t *out)
 {
     struct wfs_inode dir;
     int r = wfs_read_inode(ino, &dir);
@@ -626,24 +792,33 @@ int wfs_readdir(uint32_t ino, uint32_t index, wdirent_t *out)
         return -W_ENOTDIR;
 
     struct wfs_dirent ent;
-    uint32_t seen = 0;
 
-    for (uint32_t off = 0; off < dir.size; off += WFS_DIRENT_SIZE) {
+    /* Entries are fixed width, so a byte offset is a valid place to resume
+     * from; a cursor landing mid-entry could only come from a seek on a
+     * directory, and rounding it down is kinder than reading rubbish. */
+    for (uint32_t off = *cursor - (*cursor % WFS_DIRENT_SIZE);
+         off < dir.size; off += WFS_DIRENT_SIZE) {
+
         if (wfs_read(ino, off, &ent, sizeof(ent)) <= 0)
             break;
+
+        /* A deleted entry leaves its slot behind.  Skipping it here rather
+         * than reporting it is why the cursor is a position in the directory
+         * and not a count of what has been returned. */
         if (ent.ino == WFS_INVALID_INO)
             continue;
 
-        if (seen == index) {
-            struct wfs_inode target;
-            out->ino  = ent.ino;
-            out->type = (wfs_read_inode(ent.ino, &target) == 0)
-                          ? target.type : W_FT_FILE;
-            strlcpy(out->name, ent.name, sizeof(out->name));
-            return 1;
-        }
-        seen++;
+        struct wfs_inode target;
+        out->ino  = ent.ino;
+        out->type = (wfs_read_inode(ent.ino, &target) == 0)
+                      ? target.type : W_FT_FILE;
+        strlcpy(out->name, ent.name, sizeof(out->name));
+
+        *cursor = off + WFS_DIRENT_SIZE;
+        return 1;
     }
+
+    *cursor = dir.size;
     return 0;
 }
 
@@ -979,6 +1154,13 @@ static bool find_volume(wfs_source_t device)
     source        = device;
     partition_lba = 0;
 
+    /* Every cached block belongs to whatever volume was being probed a moment
+     * ago.  Blocks are numbered from the start of the volume, so the same
+     * number means a different sector as soon as the device or the partition
+     * offset changes, and a stale copy would be served as if it were this
+     * volume's. */
+    cache_reset();
+
     if (superblock_ok())
         return true;
 
@@ -1001,6 +1183,8 @@ static bool find_volume(wfs_source_t device)
             continue;
 
         partition_lba = start;
+        cache_reset();
+
         if (superblock_ok())
             return true;
     }

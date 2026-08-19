@@ -2,6 +2,7 @@
  * selftest.h, which then declares them away. */
 
 #include "selftest.h"
+#include "spinlock.h"
 
 #ifndef WOS_NO_SELFTEST
 
@@ -149,6 +150,20 @@ static void test_address_space(void)
     if (!as)
         panic("paging: cannot create an address space");
 
+    /* Interrupts off for the duration.
+     *
+     * What follows loads a second address space on a thread that has no
+     * process, and then reads through it.  A timer tick landing in the middle
+     * would run the scheduler, which puts every thread into the address space
+     * belonging to its process -- the kernel's, for this one -- and the
+     * mapping under test would be gone from under the very next instruction.
+     *
+     * That is the scheduler being right rather than wrong.  A kernel thread
+     * running on a borrowed address space is exactly what it should not be
+     * left doing, and the only reason this one may is that nothing is going to
+     * take it away in between. */
+    bool interrupts_were_on = interrupts_off();
+
     addrspace_t *kernel = paging_current();
     paging_switch(as);
 
@@ -173,6 +188,8 @@ static void test_address_space(void)
 
     paging_switch(kernel);
     paging_free_addrspace(as);
+
+    interrupts_restore(interrupts_were_on);
 
     check(pmm_free_bytes() == free_before,
           "tearing the address space down frees every frame it owned");
@@ -375,7 +392,7 @@ static void test_filesystem_dirs(void)
     if (wfs_lookup("/", &ino) != 0)
         return;
 
-    for (uint32_t i = 0; wfs_readdir(ino, i, &ent) == 1; i++)
+    for (uint32_t cursor = 0; wfs_readdir(ino, &cursor, &ent) == 1; )
         if (strcmp(ent.name, "home") == 0 && ent.type == W_FT_DIR)
             found_home = true;
 

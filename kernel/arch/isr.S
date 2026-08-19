@@ -69,7 +69,10 @@ int_common:
     pushq %r15
 
     /* Segment registers are vestigial in long mode and the CPU has already
-     * loaded the kernel's on entry, so there is nothing to switch here. */
+     * loaded the kernel's on entry, so there is nothing to switch here -- GS
+     * included.  sysentry.S borrows GS for the length of a stack switch and
+     * gives it straight back, precisely so that this path does not have to
+     * know anything about it. */
 
     movq %rsp, %rdi                  /* regs_t * as the first argument */
     call interrupt_dispatch

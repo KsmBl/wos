@@ -1,6 +1,7 @@
 /* GDT and TSS setup for x86-64. */
 
 #include "gdt.h"
+#include "sysentry.h"
 #include "smp.h"
 #include "string.h"
 
@@ -37,6 +38,11 @@ static uint64_t segment(uint8_t access, uint8_t flags)
 void tss_set_kernel_stack(uint64_t rsp0)
 {
     tss[smp_cpu_index()].rsp0 = rsp0;
+
+    /* The same stack, told to the other way in.  An interrupt gate takes it
+     * from the TSS; SYSCALL does not switch stacks at all and has to be handed
+     * it separately.  Both are set here so they cannot drift apart. */
+    sysentry_set_kernel_stack(rsp0);
 }
 
 void gdt_init(void)

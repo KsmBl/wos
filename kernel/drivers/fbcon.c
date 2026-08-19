@@ -79,6 +79,22 @@ static uint8_t cell_at[MAX_ROWS][MAX_COLS];   /* VGA attribute byte      */
 static char    shown_ch[MAX_ROWS][MAX_COLS];
 static uint8_t shown_at[MAX_ROWS][MAX_COLS];
 
+/* Panning.
+ *
+ * The card can be given a framebuffer taller than the screen and told which
+ * scanline to show first.  Scrolling is then a single register write instead
+ * of repainting every character that moved -- the picture stays where it is
+ * and the window slides down it.
+ *
+ * `virt_h` is how tall the buffer actually is, `pan_y` the scanline currently
+ * at the top of the screen.  When the window reaches the bottom there is
+ * nowhere further to slide, so it goes back to the top and the screen is
+ * repainted once; with twice the height that is one full repaint per screenful
+ * of scrolling instead of one per line. */
+static int      pan_y;
+static int      virt_h;
+static bool     panning;
+
 static int     cur_row, cur_col;
 static uint8_t attr = 0x07;          /* light grey on black             */
 static bool    wrap_pending;
@@ -111,14 +127,33 @@ static void dispi_write(uint16_t index, uint16_t value)
     outw(DISPI_DATA, value);
 }
 
+static uint16_t dispi_read(uint16_t index)
+{
+    outw(DISPI_INDEX, index);
+    return inw(DISPI_DATA);
+}
+
 static void dispi_set_res(int w, int h)
 {
+    /* Twice the screen, so long as the mapped aperture can hold it: that is
+     * the memory the pan slides across, and writing past what map_aperture()
+     * covered would land in the identity map behind it. */
+    int want = h * 2;
+    int room = (int)(fb_window / ((uint64_t)w * 4));
+
+    if (want > room)
+        want = room;
+    if (want > 0xFFFF)                /* the register is sixteen bits */
+        want = 0xFFFF;
+    if (want < h)
+        want = h;
+
     dispi_write(DISPI_ENABLE, 0);
     dispi_write(DISPI_XRES, (uint16_t)w);
     dispi_write(DISPI_YRES, (uint16_t)h);
     dispi_write(DISPI_BPP, 32);
     dispi_write(DISPI_VIRT_WIDTH, (uint16_t)w);
-    dispi_write(DISPI_VIRT_HEIGHT, (uint16_t)h);
+    dispi_write(DISPI_VIRT_HEIGHT, (uint16_t)want);
     dispi_write(DISPI_X_OFFSET, 0);
     dispi_write(DISPI_Y_OFFSET, 0);
     dispi_write(DISPI_ENABLE, DISPI_ENABLED | DISPI_LFB_ENABLED);
@@ -126,6 +161,20 @@ static void dispi_set_res(int w, int h)
     px_w = w;
     px_h = h;
     fb_stride = (uint32_t)w;          /* 32bpp, so pixels == virt width */
+
+    /* Read back rather than assume.  A card with less video memory than was
+     * asked for will quietly give a shorter buffer, and panning into memory it
+     * does not have would show the wrong thing at best.  Whatever it reports
+     * is what may be used; if that is only the screen, scrolling repaints as
+     * it always did. */
+    virt_h = (int)dispi_read(DISPI_VIRT_HEIGHT);
+    if (virt_h < h)
+        virt_h = h;
+    if ((uint64_t)virt_h * w * 4 > fb_window)
+        virt_h = (int)(fb_window / ((uint64_t)w * 4));
+
+    pan_y   = 0;
+    panning = virt_h >= h + FONT_H;
 }
 
 /* ------------------------------------------------------------------ *
@@ -143,13 +192,20 @@ static inline void flush_writes(void)
     __asm__ volatile("sfence" ::: "memory");
 }
 
+/* The start of a visible scanline.  Console coordinates are relative to the
+ * top of the screen; the buffer may be showing a window further down. */
+static inline volatile uint32_t *scanline(int y)
+{
+    return fb + (uint32_t)(pan_y + y) * fb_stride;
+}
+
 static void fill_rect(int x, int y, int w, int h, uint32_t rgb)
 {
     if (suspended)
         return;
 
     for (int yy = y; yy < y + h && yy < px_h; yy++) {
-        volatile uint32_t *line = fb + (uint32_t)yy * fb_stride + x;
+        volatile uint32_t *line = scanline(yy) + x;
         for (int xx = 0; xx < w && x + xx < px_w; xx++)
             line[xx] = rgb;
     }
@@ -172,11 +228,38 @@ static void draw_cell(int row, int col)
     int px = col * FONT_W;
     int py = row * FONT_H;
 
+    /* Two pixels per store where the alignment allows it.
+     *
+     * A cell is eight pixels across and sixteen down: a hundred and twenty
+     * eight stores, and this runs for every character that changes on the
+     * screen.  Pairing them halves the count, and pairs are what the write
+     * combining buffers want anyway -- they fill a cache line in half as many
+     * steps.
+     *
+     * A row starts at a multiple of eight pixels, so the only thing that can
+     * put it off an eight-byte boundary is an odd stride.  That is rare enough
+     * to be worth a check rather than a second code path everywhere. */
+    bool paired = ((fb_stride & 1) == 0) &&
+                  (((uintptr_t)fb & 7) == 0) && ((px & 1) == 0);
+
     for (int gy = 0; gy < FONT_H; gy++) {
-        volatile uint32_t *line = fb + (uint32_t)(py + gy) * fb_stride + px;
+        volatile uint32_t *line = scanline(py + gy) + px;
         uint8_t bits = glyph[gy];
-        for (int gx = 0; gx < FONT_W; gx++)
-            line[gx] = (bits & (0x80 >> gx)) ? fg : bg;
+
+        if (paired) {
+            volatile uint64_t *pair = (volatile uint64_t *)line;
+
+            for (int i = 0; i < FONT_W / 2; i++) {
+                uint64_t lo = (bits & (0x80 >> (i * 2)))     ? fg : bg;
+                uint64_t hi = (bits & (0x80 >> (i * 2 + 1))) ? fg : bg;
+
+                /* Little-endian: the low half is the leftmost pixel. */
+                pair[i] = lo | (hi << 32);
+            }
+        } else {
+            for (int gx = 0; gx < FONT_W; gx++)
+                line[gx] = (bits & (0x80 >> gx)) ? fg : bg;
+        }
     }
 
     shown_ch[row][col] = c;
@@ -222,6 +305,14 @@ static void draw_cursor(void)
 
 static void clear_all(void)
 {
+    /* Back to the top of the buffer before painting: the sweep below covers
+     * whatever is on screen, and starting from zero gives the longest run of
+     * cheap scrolls before the next full repaint. */
+    if (panning && !suspended && pan_y != 0) {
+        pan_y = 0;
+        dispi_write(DISPI_Y_OFFSET, 0);
+    }
+
     for (int r = 0; r < rows; r++)
         for (int c = 0; c < cols; c++) {
             cell_ch[r][c] = shown_ch[r][c] = ' ';
@@ -259,6 +350,46 @@ static void scroll(void)
     for (int c = 0; c < cols; c++) {
         cell_ch[rows - 1][c] = ' ';
         cell_at[rows - 1][c] = attr;
+    }
+
+    /* Slide the window down a line instead of moving anything.
+     *
+     * Not while the screen belongs to somebody else: the console is still
+     * tracking text but must not touch the card, and a process holding the
+     * framebuffer expects it at offset zero. */
+    if (panning && !suspended) {
+        if (pan_y + FONT_H + px_h <= virt_h) {
+            pan_y += FONT_H;
+            dispi_write(DISPI_Y_OFFSET, (uint16_t)pan_y);
+
+            /* No pixel moved -- the window did -- so what each row of the
+             * screen is showing slid up along with the text.  Saying so is the
+             * whole point: the comparison in redraw_changed() then finds only
+             * the row that has newly come into view, and one row is repainted
+             * instead of the screen. */
+            for (int r = 1; r < rows; r++)
+                for (int c = 0; c < cols; c++) {
+                    shown_ch[r - 1][c] = shown_ch[r][c];
+                    shown_at[r - 1][c] = shown_at[r][c];
+                }
+
+            /* That row holds whatever was last drawn there, which was a
+             * screenful ago and is not worth reasoning about. */
+            for (int c = 0; c < cols; c++)
+                shown_ch[rows - 1][c] = (char)0xFF;
+        } else {
+            /* The bottom of the buffer: back to the top, where nothing on the
+             * glass can be trusted and the screen is painted in full.  This is
+             * the cost the cheap scrolls are amortised against. */
+            pan_y = 0;
+            dispi_write(DISPI_Y_OFFSET, 0);
+
+            for (int r = 0; r < MAX_ROWS; r++)
+                for (int c = 0; c < MAX_COLS; c++)
+                    shown_ch[r][c] = (char)0xFF;
+
+            drawn_row = drawn_col = -1;
+        }
     }
 
     redraw_changed();
@@ -532,6 +663,16 @@ bool fbcon_geometry(int *w, int *h, uint32_t *stride_px)
 void fbcon_suspend(void)
 {
     suspended = true;
+
+    /* The screen is about to belong to a process, and a process draws at the
+     * top of the framebuffer -- through fbcon_blit(), or straight into the
+     * mapping it was handed, which carries no offset to apply.  So the window
+     * goes back to zero here, and stays there until the console takes the
+     * screen back and repaints everything anyway. */
+    if (panning && pan_y != 0) {
+        pan_y = 0;
+        dispi_write(DISPI_Y_OFFSET, 0);
+    }
 }
 
 void fbcon_resume(void)
@@ -665,6 +806,11 @@ bool fbcon_init_boot(const struct multiboot_info *mbi, int c, int r)
     fixed_mode = true;
     fbcon_set_mode(c, r);
     return true;
+}
+
+bool fbcon_panning(void)
+{
+    return panning;
 }
 
 void fbcon_resolution(int *w, int *h)

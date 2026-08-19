@@ -97,7 +97,8 @@ hello: I am resident in 88.0K (code 8.0K, data 8.0K, stack 64.0K)
 - An x86-64 kernel: a 32-bit Multiboot stub checks CPUID for long mode and
   jumps into 64-bit, then four-level paging with a per-process address space, a
   preemptive round-robin scheduler, ring-3 processes loaded from ELF64
-  binaries, and `int 0x80` syscalls with every user pointer validated.
+  binaries, and `syscall`/`sysret` entry (with the older `int 0x80` gate still
+  open) with every user pointer validated.
 - **Every processor**: the machine's cores are started at the end of the boot
   with an interrupt and a page of real-mode code that repeats the long mode
   entry, each getting a local APIC timer, a TSS and an idle thread of its own.

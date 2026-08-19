@@ -21,11 +21,9 @@
 
 #include "types.h"
 
-#define SEL_KCODE 0x08
-#define SEL_KDATA 0x10
-#define SEL_UDATA 0x1B      /* 0x18 | RPL 3 */
-#define SEL_UCODE 0x23      /* 0x20 | RPL 3 */
-#define SEL_TSS   0x28
+/* The selector values live in their own header so that sysentry.S can have
+ * them too. */
+#include "gdt_sel.h"
 
 /* The 64-bit TSS.  Hardware task switching is gone in long mode; what remains
  * is rsp0, the stack the CPU switches to when an interrupt arrives while

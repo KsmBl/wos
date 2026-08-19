@@ -74,7 +74,8 @@ pci_device_t pci_find_class_index(uint8_t class_code, uint8_t subclass,
 
                 if ((uint8_t)(klass >> 24) == class_code &&
                     (uint8_t)(klass >> 16) == subclass &&
-                    (uint8_t)(klass >> 8)  == prog_if &&
+                    (prog_if == PCI_PROG_IF_ANY ||
+                     (uint8_t)(klass >> 8) == prog_if) &&
                     seen++ == index)
                     return describe((uint8_t)bus, (uint8_t)slot, (uint8_t)func);
             }
@@ -197,6 +198,19 @@ void pci_power_on(const pci_device_t *dev)
 
         off = (uint8_t)((header >> 8) & 0xFC);
     }
+}
+
+uint16_t pci_bar_io(const pci_device_t *dev, int index)
+{
+    uint8_t  off = (uint8_t)(0x10 + index * 4);
+    uint32_t low = pci_read32(dev->bus, dev->slot, dev->func, off);
+
+    if (!(low & 1))                    /* a memory BAR, not I/O */
+        return 0;
+
+    /* Bit 0 says which kind it is and bit 1 is reserved; the port number is
+     * what is left. */
+    return (uint16_t)(low & ~0x3u);
 }
 
 uint64_t pci_bar_address(const pci_device_t *dev, int index)

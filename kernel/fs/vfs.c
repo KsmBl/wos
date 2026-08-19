@@ -185,9 +185,12 @@ static int fs_truncate(bool ram, uint32_t ino)
     return ram ? ramfs_truncate(ino) : wfs_truncate(ino);
 }
 
-static int fs_readdir(bool ram, uint32_t ino, uint32_t index, wdirent_t *out)
+/* `cursor` is opaque here and means different things to the two filesystems --
+ * a byte offset to wfs, an ordinal to ramfs.  The only thing this layer knows
+ * about it is that it started at zero and that each filesystem moves it on. */
+static int fs_readdir(bool ram, uint32_t ino, uint32_t *cursor, wdirent_t *out)
 {
-    return ram ? ramfs_readdir(ino, index, out) : wfs_readdir(ino, index, out);
+    return ram ? ramfs_readdir(ino, cursor, out) : wfs_readdir(ino, cursor, out);
 }
 
 static file_t *fd_get(struct process *p, int fd)
@@ -1115,10 +1118,9 @@ int vfs_readdir(struct process *p, int fd, wdirent_t *out)
     if (f->type != FD_DIR)
         return -W_ENOTDIR;
 
-    int r = fs_readdir(f->ram, f->ino, f->offset, out);
-    if (r == 1)
-        f->offset++;
-    return r;
+    /* The cursor is advanced by the filesystem, which is the only thing that
+     * knows what it means. */
+    return fs_readdir(f->ram, f->ino, &f->offset, out);
 }
 
 int vfs_chdir(struct process *p, const char *path)

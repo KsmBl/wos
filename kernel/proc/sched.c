@@ -6,6 +6,7 @@
  */
 
 #include "sched.h"
+#include "paging.h"
 #include "smp.h"
 #include "gdt.h"
 #include "isr.h"
@@ -156,8 +157,25 @@ void schedule(void)
      * ring 0 transition, so it has to follow the thread. */
     tss_set_kernel_stack(next->kernel_stack + next->kernel_stack_size);
 
-    if (next->proc && next->proc->space)
-        paging_switch(next->proc->space);
+    /* A thread with a process runs in that process's address space; a thread
+     * without one -- an idle thread, a kernel worker, the boot thread running
+     * the self-tests -- runs in the kernel's.
+     *
+     * Saying so explicitly matters.  This used to switch only when there was a
+     * process to switch to, which left a kernel thread running on whatever
+     * tables the last process happened to leave loaded.  Usually harmless,
+     * because a kernel thread mostly touches memory the identity map covers
+     * and every address space shares that.  Not always: the tables it
+     * inherited can be freed out from under it when that process is reaped,
+     * and anything that did care which space was loaded would find it silently
+     * changed underneath by a timer tick.
+     *
+     * With paging_switch() skipping a reload that would change nothing, the
+     * common case of one kernel thread following another costs nothing to
+     * state plainly. */
+    paging_switch(next->proc && next->proc->space
+                      ? next->proc->space
+                      : paging_kernel_space());
 
     /* The kernel is handed over here rather than carried across.
      *

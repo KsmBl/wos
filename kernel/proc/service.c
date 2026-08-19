@@ -306,10 +306,10 @@ void service_init(void)
     if (wfs_lookup(SERVICE_DIR, &dir) != 0)
         return;                       /* a system with no services is fine */
 
-    for (uint32_t i = 0; count < W_SERVICE_MAX; i++) {
+    for (uint32_t cursor = 0; count < W_SERVICE_MAX; ) {
         wdirent_t e;
 
-        if (wfs_readdir(dir, i, &e) != 1)
+        if (wfs_readdir(dir, &cursor, &e) != 1)
             break;
         if (e.type != W_FT_FILE || e.name[0] == '.')
             continue;
