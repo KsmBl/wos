@@ -27,6 +27,7 @@
 #include "string.h"
 #include "kprintf.h"
 #include "pit.h"
+#include "smp.h"
 
 /* Values, arguments and locals. */
 #define OP_ZERO        0x00
@@ -816,11 +817,22 @@ static aml_object_t *eval_extended(aml_stream_t *s, aml_ctx_t *ctx,
          * early, and busy-waiting on the tick counter is enough for the
          * hundred-microsecond settling a controller asks for. */
         uint64_t amount = integer_operand(s, ctx, failed);
-        uint32_t ticks  = (op == EXT_SLEEP) ? (uint32_t)(amount / 10)
-                                            : 0;
-        uint32_t until  = pit_ticks() + ticks + 1;
 
-        while (pit_ticks() < until)
+        /* Sleep counts milliseconds, Stall counts microseconds.  Stall is
+         * used for the hundred-microsecond settling a controller asks for,
+         * which rounds up to a millisecond here -- coarse, but erring towards
+         * waiting longer than asked is the safe direction. */
+        uint64_t ms = (op == EXT_SLEEP) ? amount : (amount + 999) / 1000;
+
+        /* The clock is the cycle counter for the reason given in pit.h: a
+         * tick-based wait here would be waiting on an interrupt that needs
+         * the lock this code is holding.  The lock itself is kept, because
+         * what runs either side of this sleep is firmware bytecode reaching
+         * into operation regions, and two processors doing that at once is
+         * not something to invite for the sake of latency. */
+        uint64_t until = time_now_ms() + ms;
+
+        while (time_now_ms() < until)
             __asm__ volatile("pause");
         return NULL;
     }

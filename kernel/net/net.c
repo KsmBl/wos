@@ -4,6 +4,7 @@
 #include "rtl8139.h"
 #include "cpu.h"
 #include "pit.h"
+#include "smp.h"
 #include "io.h"
 #include "string.h"
 #include "kprintf.h"
@@ -31,6 +32,25 @@
 #define TF_RST 0x04
 #define TF_PSH 0x08
 #define TF_ACK 0x10
+
+/* Whether a thread is inside the stack.  See net_claim in net.h. */
+static volatile int in_use;
+
+void net_claim(void)
+{
+    while (__atomic_test_and_set(&in_use, __ATOMIC_ACQUIRE)) {
+        /* Give the kernel lock up while waiting.  Holding it here would stop
+         * the thread that is already inside from ever finishing, and then
+         * neither of us would. */
+        if (!klock_pause())
+            break;      /* one processor: nothing else can be inside */
+    }
+}
+
+void net_release(void)
+{
+    __atomic_clear(&in_use, __ATOMIC_RELEASE);
+}
 
 static bool    ready;
 static uint8_t our_mac[6];
