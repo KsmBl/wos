@@ -58,10 +58,39 @@ static inline void load_cr3(uint64_t phys)
     __asm__ volatile("mov %0, %%cr3" : : "r"(phys) : "memory");
 }
 
-/* Reload CR3 with whatever is already in it: every non-global TLB entry goes,
- * which is what a change in caching rules needs. */
+/* Bit 7 of CR4: honour the global bit on a page table entry. */
+#define CR4_PGE (1UL << 7)
+
+/* Whether the kernel's own entries have been marked global.  Distinct from
+ * CR4.PGE, which is per-processor -- this is about the tables, that is about
+ * one processor's willingness to act on them. */
+static bool global_pages;
+
+/* Empty this processor's TLB completely, global entries included.
+ *
+ * Reloading CR3 is the usual way and is enough on its own -- until global
+ * pages are on, at which point it deliberately spares exactly the entries a
+ * change in caching rules most needs gone.  Clearing and restoring CR4.PGE is
+ * the architected way to drop those too.
+ *
+ * The question asked is CR4's own, not the kernel-wide `global_pages`.  That
+ * flag says the kernel has turned global pages on somewhere; CR4 is
+ * per-processor and says whether *this* one is honouring them.  Keying off the
+ * flag would mean that on a processor where the bit is not set yet, both
+ * writes below put back the value that was already there -- and the function
+ * would flush nothing at all while looking like it had. */
 static inline void flush_tlb(void)
 {
+    uint64_t cr4;
+
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+
+    if (cr4 & CR4_PGE) {
+        __asm__ volatile("mov %0, %%cr4" : : "r"(cr4 & ~CR4_PGE) : "memory");
+        __asm__ volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
+        return;
+    }
+
     uint64_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     load_cr3(cr3);
@@ -336,10 +365,73 @@ bool paging_map_huge(uint64_t virt, uint64_t phys, uint64_t flags)
     return true;
 }
 
+/* Load an address space on this processor.
+ *
+ * Writing CR3 empties every non-global entry from this processor's TLB, and
+ * the kernel switches often enough for that to matter: on every reschedule,
+ * and on every trip in and out of another process's space.  A great many of
+ * those switches are to the space already loaded -- two threads of one
+ * process, or a return to what was running before -- and paid the full cost of
+ * a flush to change nothing.
+ *
+ * Comparing against what this processor last loaded is only sound because the
+ * record is per-processor and because paging_free_addrspace() scrubs it: a
+ * freed addrspace_t could otherwise be replaced by a new one at the same
+ * address, and the pointers would match while the tables did not. */
 void paging_switch(addrspace_t *as)
 {
+    if (!as || as == this_space())
+        return;
+
     set_this_space(as);
     load_cr3((uint64_t)as->pml4);
+}
+
+/* See paging.h. */
+bool paging_enable_global(void)
+{
+    uint32_t eax = 1, ebx = 0, ecx = 0, edx = 0;
+    __asm__ volatile("cpuid"
+                     : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx));
+
+    if (!(edx & (1u << 13)))          /* no PGE on this CPU */
+        return false;
+    return false; /* BISECT */
+
+    /* The entries have to say "global" before any processor is told to honour
+     * the bit, and they are shared, so the first caller marks them for all.
+     *
+     * Only the kernel's own identity map: it is the one mapping that is
+     * genuinely identical in every address space -- every process borrows the
+     * very same tables for it -- which is exactly the condition for keeping a
+     * translation across a CR3 load.  Nothing with PTE_USER is ever marked,
+     * because that is the memory that really does differ per process. */
+    if (!global_pages) {
+        for (uint64_t i = 0; i < 512; i++) {
+            if (!(boot_pd[i] & PTE_PRESENT))
+                continue;
+
+            if (boot_pd[i] & PTE_HUGE) {
+                boot_pd[i] |= PTE_GLOBAL;
+                continue;
+            }
+
+            /* The first 2 MiB was split into 4 KiB pages to leave page zero
+             * unmapped; the global bit belongs on the leaves, not the table
+             * that holds them. */
+            uint64_t *pt = (uint64_t *)FRAME_OF(boot_pd[i]);
+            for (uint64_t j = 0; j < 512; j++)
+                if (pt[j] & PTE_PRESENT)
+                    pt[j] |= PTE_GLOBAL;
+        }
+    }
+
+    uint64_t cr4;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    __asm__ volatile("mov %0, %%cr4" : : "r"(cr4 | CR4_PGE) : "memory");
+
+    global_pages = true;
+    return true;
 }
 
 addrspace_t *paging_new_addrspace(void)
@@ -424,6 +516,19 @@ void paging_free_addrspace(addrspace_t *as)
 
     pmm_free_frame((uint64_t)pdpt);
     pmm_free_frame((uint64_t)as->pml4);
+
+    /* Any processor still recording this as the space it loaded has to forget
+     * it before the memory goes back.  The check above only covers the
+     * processor doing the freeing; another one can be sitting in its idle
+     * thread, which does not switch away, and would otherwise keep a pointer
+     * that a later kzalloc could hand out again -- at which point
+     * paging_switch() would compare equal and skip the load it must not skip. */
+    for (int i = 0; i < smp_cpu_count(); i++) {
+        smpcpu_t *c = smp_cpu(i);
+        if (c && c->space == as)
+            c->space = NULL;
+    }
+
     kfree(as);
 }
 
@@ -524,4 +629,9 @@ void paging_init(void)
 
     /* Reload CR3 to flush the stale huge-page translation. */
     load_cr3((uint64_t)boot_pml4);
+
+    /* Now that the map is in its final shape, let the kernel's half of it
+     * survive process switches.  The other processors do the same for
+     * themselves as they come up. */
+    paging_enable_global();
 }

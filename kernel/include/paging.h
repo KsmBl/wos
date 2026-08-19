@@ -26,6 +26,11 @@
 #define PTE_HUGE    0x080
 #define PTE_NX      (1UL << 63)
 
+/* Global: this translation is the same in every address space, so the CPU may
+ * keep it in the TLB across a CR3 load.  Only meaningful on a leaf entry, and
+ * only honoured once CR4.PGE is on -- see paging_enable_global(). */
+#define PTE_GLOBAL  (1UL << 8)
+
 /* Write-combining, for a device aperture that is written and never read.
  *
  * Only valid on a huge page, where bit 12 is the PAT bit -- in a 4 KiB entry
@@ -125,6 +130,12 @@ void *paging_map_device(uint64_t phys, uint64_t size);
  * it.  Returns false on a CPU with no PAT, where PTE_WC has to be left alone.
  * Safe to call before paging_init(); calling it twice does nothing. */
 bool paging_enable_write_combining(void);
+
+/* Turn on global pages for the calling processor, and (the first time) mark
+ * the kernel's identity map global.  Every processor must call this for
+ * itself: CR4 is per-processor.  Returns false on a CPU without PGE, where
+ * nothing is changed. */
+bool paging_enable_global(void);
 
 /* False until paging_init() has run. */
 bool paging_ready(void);
