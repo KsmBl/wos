@@ -74,11 +74,40 @@ bool klock_held_here(void)
     return __atomic_load_n(&klock.owner, __ATOMIC_RELAXED) == smp_cpu_index();
 }
 
+/* Take the kernel lock, and say something if that takes absurdly long.
+ *
+ * A processor waiting here forever is what a deadlock looks like from the
+ * inside, and the machine that froze this way gave no sign at all -- no fault,
+ * no message, every core alive and none of them moving.  There was nothing to
+ * read afterwards and nothing to see at the time.
+ *
+ * Five seconds is far longer than any legitimate hold: the longest thing the
+ * kernel does with this lock held is a firmware load, and that gives the lock
+ * up as it goes.  So a wait this long means something is stuck, and saying so
+ * once -- naming the processor that is stuck and the one holding it -- turns
+ * an unexplained hang into a starting point.
+ *
+ * It does not fix anything and does not pretend to.  It is the difference
+ * between a machine that stops and a machine that stops and tells you where. */
 void klock_acquire(void)
 {
     int me = smp_cpu_index();
 
-    spin_lock(&klock);
+    if (!spin_trylock(&klock)) {
+        uint64_t start = time_now_ms();
+        bool     warned = false;
+
+        while (!spin_trylock(&klock)) {
+            if (!warned && time_now_ms() - start > 5000) {
+                warned = true;
+                kprintf("\nsmp    : cpu%d has waited 5 s for the kernel lock, "
+                        "held by cpu%d -- something is stuck\n",
+                        me, __atomic_load_n(&klock.owner, __ATOMIC_RELAXED));
+            }
+            cpu_relax();
+        }
+    }
+
     __atomic_store_n(&klock.owner, me, __ATOMIC_RELAXED);
 }
 
@@ -112,6 +141,42 @@ void klock_leave(bool took)
 {
     if (took)
         klock_release();
+}
+
+/* Let go of the kernel lock for a moment, in the middle of a long wait.
+ *
+ * A driver waiting on hardware can be waiting for seconds -- a wireless
+ * handshake, a firmware load, an address from a DHCP server.  Holding the one
+ * kernel lock for that long stops every other processor from entering the
+ * kernel at all: they cannot take a fault, service an interrupt or finish a
+ * syscall, so the machine is as good as stopped even though nothing is
+ * broken.
+ *
+ * This gives the lock up and takes it straight back, which is enough: the
+ * processors queued behind it get their turn in between.  It is only safe
+ * where the caller can survive kernel state changing underneath it, which is
+ * why it is not called from anywhere except the polling loops of drivers that
+ * hold no other state while they wait.
+ *
+ * Returns false if this processor did not hold the lock, in which case
+ * nothing happened and nothing needed to. */
+bool klock_pause(void)
+{
+    if (cpu_count <= 1)
+        return false;
+    if (!klock_held_here())
+        return false;
+
+    klock_release();
+
+    /* A hint to the processor that this is a spin, and a window wide enough
+     * for another core to actually take the lock rather than lose the race
+     * back to us. */
+    for (int i = 0; i < 64; i++)
+        __asm__ volatile("pause");
+
+    klock_acquire();
+    return true;
 }
 
 /* ------------------------------------------------------------------ *

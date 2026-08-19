@@ -15,13 +15,62 @@
  * then reports that there is no device. */
 void net_init(void);
 
+/* Take the network stack, and give it back.
+ *
+ * Everything in here is one set of buffers, one address cache and one table of
+ * connections, and none of it is written for two threads at once.  The kernel
+ * lock used to guarantee that by itself -- one processor inside the kernel at
+ * a time -- but a network call now gives that lock up while it waits, so that
+ * a ping does not freeze the other processors for as long as it runs.  The
+ * moment it does that, two threads can be in here together.
+ *
+ * So this is the guarantee instead, taken at the syscall boundary where each
+ * network operation begins and ends.  A thread waiting its turn gives the
+ * kernel lock up while it waits, which is the whole point: waiting for the
+ * stack while holding the lock the thread inside needs is how a queue becomes
+ * a deadlock. */
+void net_claim(void);
+void net_release(void);
+
 /* True once a working card has been configured. */
 bool net_ready(void);
 
-/* This host's address and its gateway, as network-order values, for anything
- * that wants to print the configuration. */
+/* Point the stack at an adapter: make it the one frames go through, take its
+ * hardware address, and forget everything cached about the network we were on
+ * before.  net_init does this for whichever adapter registered first; the
+ * wireless layer does it again when a link comes up.
+ *
+ * Passing NULL marks the stack as having no adapter at all. */
+struct netdev;
+void net_bind(struct netdev *dev);
+
+/* This host's configuration, as network-order values, for anything that wants
+ * to print it. */
 uint32_t net_local_ip(void);
 uint32_t net_gateway_ip(void);
+uint32_t net_netmask(void);
+uint32_t net_dns_ip(void);
+
+/* The netmask as a prefix length -- 24 rather than 255.255.255.0. */
+unsigned net_prefix_length(void);
+
+/* Set the addresses by hand, for a network that hands out none. */
+void net_set_config(uint32_t ip, uint32_t mask, uint32_t gateway, uint32_t dns);
+
+/* Ask the network for an address: broadcast a DISCOVER, take the first offer,
+ * request it, and adopt what the acknowledgement carries.
+ *
+ * The emulated network the wired card lives on needs none of this -- its
+ * addresses are known and set at boot -- but a wireless link has just joined
+ * a network it knows nothing about, and this is how it finds out.
+ *
+ * Returns 0, -W_ENODEV with no adapter, or -W_ETIMEDOUT when nothing
+ * answered within `timeout_ms`. */
+int net_dhcp(uint32_t timeout_ms);
+
+/* Whether the current addresses came from a server or are the built-in
+ * defaults, which is worth being able to tell apart when nothing works. */
+bool net_dhcp_configured(void);
 
 /* Send one ICMP echo request to `dst` (network order) and wait up to
  * `timeout_ms` for the matching reply.
