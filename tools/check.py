@@ -508,6 +508,116 @@ def check_sockets(m):
     out = m.run("exit", settle=1.5)
 
 
+@scenario("network", "the network works, and using it does not stop the machine")
+def check_network(m):
+    # This scenario exists because of a freeze, and it is shaped like the
+    # freeze.  Every network call polls the card from inside a syscall, and a
+    # syscall holds the one kernel lock; the clock those polls waited on was
+    # advanced by an interrupt that needed the same lock.  A network call on
+    # any processor but the first therefore waited for a clock that could not
+    # tick, forever, with the whole machine stopped behind it.
+    #
+    # So what is checked here is not only that ping works, but that the
+    # machine is still alive afterwards -- and that it survives several
+    # network users at once, which is what makes the lock contend.
+    m.login_console()
+
+    out = m.run("ping -c 2 10.0.2.2", settle=6)
+    expect("bytes from" in out, "the gateway did not answer a ping: " + out)
+    expect("0% packet loss" in out or "2 received" in out,
+           "the pings did not all come back: " + out)
+
+    # Still responsive after a network call -- the freeze showed up here.
+    out = m.run("pwd")
+    expect("/" in out, "the shell stopped answering after a ping: " + out)
+
+    # A name lookup and a fetch, which are the longer waits.
+    out = m.run("wget -O /ramdisk/page.txt http://10.0.2.2/", settle=10)
+    expect("wget:" not in out or "saved" in out.lower() or "10.0.2.2" in out,
+           "wget did not run: " + out)
+
+    out = m.run("uptime")
+    expect("up" in out, "the machine stopped answering after wget: " + out)
+
+    # Several at once.  Each is a separate process making network calls, so
+    # they contend for the stack and for the kernel lock -- which is what the
+    # single-threaded assumption used to hide.
+    m.run("ping -c 3 10.0.2.2 &", settle=0.4)
+    m.run("ping -c 3 10.0.2.2 &", settle=0.4)
+    out = m.run("ping -c 3 10.0.2.2", settle=12)
+    expect("bytes from" in out,
+           "concurrent pings did not complete: " + out)
+
+    # And the machine is still there.
+    out = m.run("free -h", settle=3)
+    expect("Mem:" in out,
+           "the machine stopped answering after concurrent network use: " + out)
+
+    out = m.run("ps", settle=3)
+    expect("whell" in out or "ps" in out,
+           "the process list stopped working: " + out)
+
+
+@scenario("wifi", "the wireless commands work, and say so when there is no radio")
+def check_wifi(m):
+    # QEMU emulates no wireless adapter, and that is the point of this one.
+    # Every path through the wireless code has to survive a machine with no
+    # radio in it, and that is the machine most people running WOS have --
+    # so what is checked here is that each command reaches the kernel, gets a
+    # real answer back, and says something a person can act on.
+    m.login_console()
+
+    out = m.run("wifi")
+    expect("No wireless adapter" in out,
+           "wifi status did not report the missing adapter: " + out)
+
+    out = m.run("wifi scan", settle=3)
+    expect("adapter" in out.lower(),
+           "wifi scan did not explain why it found nothing: " + out)
+    # The failure must not be reported as an empty list of networks, which
+    # would send somebody looking for a network that was never searched for.
+    expect("No networks found" not in out,
+           "a missing adapter was reported as an empty scan: " + out)
+
+    out = m.run("wifi connect somenetwork hunter2", settle=3)
+    expect("adapter" in out.lower(),
+           "connect did not say there was no adapter: " + out)
+
+    out = m.run("wifi disconnect", settle=2)
+    expect("adapter" in out.lower() or "Disconnected" in out,
+           "disconnect said nothing useful: " + out)
+
+    out = m.run("wifi --help")
+    expect("usage: wifi" in out, "wifi has no usage message: " + out)
+
+    out = m.run("wifi wibble")
+    expect("no such command" in out,
+           "an unknown subcommand was not refused: " + out)
+
+    # Joining a network reconfigures the machine underneath everyone using
+    # it, so it belongs to root.  Scanning does not: seeing what networks
+    # exist tells you nothing you could not learn by standing in the room.
+    m.run("adduser wtester", settle=1.5)
+    m.mon.type("pw\n")
+    time.sleep(1)
+    m.mon.type("pw\n")
+    time.sleep(1.5)
+
+    out = m.run("su wtester", settle=2)
+    out = m.run("whoami")
+    expect("wtester" in out, "su did not become wtester: " + out)
+
+    out = m.run("wifi connect somenetwork hunter2", settle=3)
+    expect("only root" in out or "root" in out.lower(),
+           "a non-root user was not refused the connect: " + out)
+
+    out = m.run("wifi scan", settle=3)
+    expect("only root" not in out,
+           "scanning was refused to a normal user: " + out)
+
+    m.run("exit", settle=1.5)
+
+
 @scenario("desktop", "sway starts, and its settings can be changed and saved")
 def check_desktop(m):
     m.login_desktop()
