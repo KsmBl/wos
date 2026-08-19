@@ -31,6 +31,7 @@ More in [`docs/screenshots/`](docs/screenshots).
 ## Quick start
 
 ```sh
+make menuconfig  # choose the drivers, the programs and the settings
 make          # build the kernel, the apps, the bootable ISO and the disk image
 make run      # boot it in QEMU (VGA window, serial log on stdio; QEMU_CPUS=4)
 make log      # boot headless for a few seconds and dump the serial log

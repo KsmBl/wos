@@ -8,10 +8,13 @@
 #define WOS_MOUSE_H
 
 #include "types.h"
+#include "wosconfig.h"
 
 /* Find it, enable it, and take its interrupt.  Safe on a machine with no PS/2
  * controller and on one whose second port is empty; mouse_present() then stays
  * false and nothing else here does anything. */
+#if CONFIG_MOUSE
+
 void mouse_init(void);
 
 bool mouse_present(void);
@@ -37,5 +40,21 @@ void mouse_screen_size(int width, int height);
  * ends up in force is returned, so a caller can say what it got. */
 int mouse_set_speed(int percent);
 int mouse_speed(void);
+
+
+#else
+/* Without the driver: no pointer, and everything that asks says so rather
+ * than needing to know whether it is there. */
+static inline void mouse_init(void) { }
+static inline bool mouse_present(void) { return false; }
+static inline void mouse_position(int32_t *x, int32_t *y)
+{
+    if (x) *x = 0;
+    if (y) *y = 0;
+}
+static inline void mouse_screen_size(int width, int height) { (void)width; (void)height; }
+static inline int  mouse_set_speed(int percent) { (void)percent; return -1; }
+static inline int  mouse_speed(void) { return 0; }
+#endif /* CONFIG_MOUSE */
 
 #endif /* WOS_MOUSE_H */

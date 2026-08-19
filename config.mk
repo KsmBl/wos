@@ -16,7 +16,7 @@
 # Run the self-tests at boot: the four blocks of [ok  ] lines, which take a few
 # seconds and include a process that faults on purpose.  0 leaves them out of
 # the build entirely, so the kernel does not carry the code.
-SELFTEST ?= 0
+SELFTEST ?= 1
 
 # Size of the filesystem image, in MiB.  The installed system is about 4 MiB;
 # the rest is room to write into.
@@ -53,3 +53,13 @@ QEMU_MEM ?= 2048M
 # How long `make log` lets the machine run before capturing the serial log.
 # Long enough for the self-tests to finish and the shell to start.
 TIMEOUT ?= 12
+
+# Added by `make menuconfig`.
+SMP ?= y
+CONFIG_RTL8139 ?= y
+CONFIG_IWLWIFI ?= y
+CONFIG_XHCI ?= y
+CONFIG_ATA ?= y
+CONFIG_MOUSE ?= y
+CONFIG_BATTERY ?= y
+APPS_OFF ?=
