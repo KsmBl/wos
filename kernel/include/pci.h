@@ -57,6 +57,14 @@ pci_device_t pci_find_class_index(uint8_t class_code, uint8_t subclass,
  * BAR is two consecutive registers; `index` is the first of them. */
 uint64_t pci_bar_address(const pci_device_t *dev, int index);
 
+/* The I/O port a BAR names, or 0 if that BAR is a memory one.
+ *
+ * The counterpart to pci_bar_address, which answers 0 for an I/O BAR -- the
+ * two kinds are told apart by bit 0 and a caller always knows which it wants.
+ * An IDE controller keeps its bus-master registers in an I/O BAR, which is
+ * what this exists for. */
+uint16_t pci_bar_io(const pci_device_t *dev, int index);
+
 /* Turn on I/O space, memory space and bus mastering in the device's command
  * register.  A DMA-driven device needs the last of those; one whose registers
  * are memory mapped needs the second, and reads back all-ones without it. */

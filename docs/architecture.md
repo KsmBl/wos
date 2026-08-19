@@ -544,7 +544,7 @@ which the kernel would then dereference with full privilege.
 ```
  wfs_* ── the filesystem: inodes, directories, block allocation
    │
- ata_* ── polled PIO reads and writes of 512-byte sectors
+ ata_* ── bus-master DMA where the controller has it, polled PIO where not
    │
  qemu -drive file=build/wos.img
 ```
