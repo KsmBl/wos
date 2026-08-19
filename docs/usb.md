@@ -330,6 +330,23 @@ made scrolling take seconds on hardware and nothing at all under QEMU:
   is about a quarter of the screen, so a scroll went from 4 MiB read plus 4 MiB
   written to under 1 MiB written and nothing read.
 
+Most scrolls now write nothing at all. The card is asked for a framebuffer
+twice as tall as the screen and told which scanline to show first
+(`DISPI_VIRT_HEIGHT` and `DISPI_Y_OFFSET`), so scrolling a line is one register
+write and the picture never moves. What each row of the screen is showing slides
+up with the text, which leaves only the row that has newly come into view
+disagreeing with the character grid — so one row of glyphs is drawn instead of a
+screenful. When the window reaches the bottom of the buffer it goes back to the
+top and the screen is repainted once, which on a 1280×800 display is one full
+repaint per fifty lines rather than one per line.
+
+The card is asked, not assumed: `DISPI_VIRT_HEIGHT` is read back after it is
+written, because a card with less video memory than that will quietly give a
+shorter buffer, and the aperture the console mapped is a second ceiling. If
+neither leaves room for even one extra row, `panning` stays off and scrolling
+repaints exactly as described above. A framebuffer the bootloader set — UEFI,
+or GRUB's — has no such register to write, and always takes the repaint path.
+
 ## When the firmware will not boot the stick
 
 1. Check the stick really was written — `lsblk` should show one FAT32 partition

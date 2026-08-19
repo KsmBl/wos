@@ -244,8 +244,10 @@ void kmain(uint32_t magic, struct multiboot_info *mbi)
                 c, r, fbw, fbh);
     } else if (fbcon_init(80, 25)) {
         fbcon_resolution(&fbw, &fbh);
-        kprintf("video  : framebuffer console, 80x25 (%dx%d), 8x16 font\n",
-                fbw, fbh);
+        kprintf("video  : framebuffer console, 80x25 (%dx%d), 8x16 font, "
+                "%s\n", fbw, fbh,
+                fbcon_panning() ? "scrolling by panning"
+                                : "scrolling by repaint");
     } else if (fbcon_init_boot(mbi, 0, 0)) {   /* 0: fill the screen */
         int c, r;
         fbcon_size(&c, &r);
