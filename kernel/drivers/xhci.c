@@ -18,6 +18,7 @@
 #include "paging.h"
 #include "pmm.h"
 #include "pit.h"
+#include "smp.h"
 #include "string.h"
 #include "kprintf.h"
 
@@ -283,7 +284,12 @@ static trb_t *ring_push(ring_t *r, uint64_t parameter, uint32_t status,
  * Returns false on timeout. */
 static bool event_wait(trb_t *out, uint32_t ms)
 {
-    uint32_t deadline = pit_ticks() + (ms * PIT_HZ) / 1000 + 2;
+    /* From the cycle counter, not the tick count: this runs with the kernel
+     * lock held, and the tick is advanced by a handler that needs that same
+     * lock.  Waiting on it here waits for something this processor is itself
+     * holding up -- which froze the machine on every disk read from any
+     * processor but the first. */
+    uint64_t deadline = time_now_ms() + ms;
 
     for (;;) {
         trb_t *e = &event_trbs[event_index];
@@ -306,9 +312,18 @@ static bool event_wait(trb_t *out, uint32_t ms)
         if (rd32(op, OP_USBSTS) & USBSTS_HSE)
             return false;
 
-        if ((int32_t)(pit_ticks() - deadline) > 0)
+        if (time_now_ms() >= deadline)
             return false;
 
+        /* The kernel lock is deliberately *not* given up here.  It would
+         * make the machine more responsive during a disk read, and it would
+         * also let a second processor start its own transfer on top of this
+         * one: the rings, the slot and the endpoint state below are all one
+         * set, shared, and the lock is the only thing keeping two callers
+         * out of them.  Responsiveness is not worth a corrupted disk.
+         *
+         * The freeze this driver used to cause is fixed by the clock above,
+         * not by releasing anything. */
         __asm__ volatile("pause");
     }
 }

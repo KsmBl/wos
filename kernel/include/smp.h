@@ -93,4 +93,10 @@ void klock_acquire(void);
 void klock_release(void);
 bool klock_held_here(void);
 
+/* Give the kernel lock up for a moment in the middle of a long wait, so the
+ * other processors are not shut out of the kernel for the whole of it.  Only
+ * for the polling loops of drivers, which hold nothing else while they wait.
+ * See the comment on the definition. */
+bool klock_pause(void);
+
 #endif /* WOS_SMP_H */
