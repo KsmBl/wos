@@ -559,27 +559,69 @@ tool, so the two cannot drift apart):
 | inode table | 64-byte inodes, 16 per block |
 | data | file and directory contents |
 
-Blocks are 1 KiB. A file reaches 267 KiB through 11 direct blocks and one
-indirect block. Directories are files holding fixed 32-byte records, so
+Blocks are 1 KiB. A file reaches a little over **64 MiB** through 10 direct
+blocks, one indirect block, and one double-indirect block — a block of pointers
+to blocks of pointers. Directories are files holding fixed 32-byte records, so
 reading one needs no variable-length parsing, and `.` and `..` are real entries
 so path resolution has no special cases.
 
+The ceiling was 267 KiB until the double-indirect block was added, which is a
+story about the wrong limit in the wrong place: 267 KiB was chosen when the
+largest file on the disk was the kernel at about 216 KiB, and then the kernel
+grew past it and the wireless adapter's firmware arrived at 1.45 MiB. A limit
+that forces the things being stored to be cut into pieces is a limit worth
+moving. Only a file large enough to need it ever touches the second level, so
+nothing else in the filesystem changed shape.
+
+### Not asking the disk twice
+
+Three things stand between the filesystem and the device, and they exist
+because a block read is expensive in a way that is easy to forget when it looks
+like a function call — on a USB stick each one is a full command, data and
+status round trip.
+
+**A block cache**, sixty-four blocks of write-through LRU in front of the
+device. It is not there for file data but for the blocks that get read over and
+over: reading a 64-byte inode fetches the kilobyte holding it, and the next
+file in the same directory is almost always an inode in the same block.
+Write-through because the rest of the driver writes changes straight back —
+there is no fsck here, and a volume that loses its free list on a hard reset is
+a broken volume — so holding writes back would trade the one guarantee the
+filesystem makes for nothing anyone would notice.
+
+**Reads that cover more than one block.** A file's blocks are usually
+consecutive on the disk, because that is the order they were allocated in, so
+`wfs_read` looks ahead for a run of them and asks for the lot in one transfer,
+up to 64 KiB. That path deliberately goes around the cache: streaming a whole
+file through sixty-four blocks would evict every inode and directory block in
+it to hold data nobody will ask for twice.
+
+**A directory cursor.** `wfs_readdir` takes a byte offset now and returns the
+next one. It used to take the ordinal of the entry wanted and count from the
+start of the directory to reach it, which meant a caller walking a directory
+the only way it can — entry 0, entry 1, entry 2 — rescanned everything it had
+already seen on every call, and each of those rescans read blocks off the
+device. Listing N entries cost N²/2 of them. On a directory the size of `/bin`
+that was thousands of transfers to print a list that fits on one screen.
+
 An inode also carries `mtime`: when its contents last changed, in seconds since
-1970, read from the CMOS clock by whatever wrote it. Eleven direct blocks
-rather than the twelve a Unix inode traditionally has is where that field came
-from — the inode is 64 bytes so that sixteen fit in a block with nothing left
-over, and it was exactly full. The kilobyte of maximum file size it costs is
-the cheapest thing in the structure; the largest file on the disk is the kernel
-at about 216 KiB. It is what `wstat()` reports, what `ls -l` prints, and what
+1970, read from the CMOS clock by whatever wrote it. Ten direct blocks rather
+than the twelve a Unix inode traditionally has is where that field and the
+double-indirect pointer came from — the inode is 64 bytes so that sixteen fit
+in a block with nothing left over, and it has always been exactly full. The
+kilobyte of maximum file size each one costs is
+the cheapest thing in the structure, and the second bought a 64 MiB ceiling
+with it. `mtime` is what `wstat()` reports, what `ls -l` prints, and what
 `make` compares to decide whether a target is out of date.
 
-**This changed the on-disk layout**, so the magic went from `WFS1` to `WFS2`
-and an image built by an older `mkwfs` is refused at mount with a line in the
-boot log saying to rebuild it. It is not read with the field treated as zero,
-because the field is *before* the block pointers rather than after them: an old
-volume read by this driver would find file contents wherever a block number
-used to be. Rebuilding is `make` — the disk image is a build product, and
-nothing on a development machine outlives one.
+**Both changes moved the on-disk layout**, so the magic has gone `WFS1` →
+`WFS2` (mtime) → `WFS3` (the double-indirect pointer), and an image built by an
+older `mkwfs` is refused at mount with a line in the boot log saying to rebuild
+it. Neither is read with the new field treated as zero, because each field
+sits *before* the block pointers rather than after them: an old volume read by
+this driver would find file contents wherever a block number is expected.
+Rebuilding is `make` — the disk image is a build product, and nothing on a
+development machine outlives one.
 
 Bitmap and superblock changes are written straight back rather than cached:
 there is no fsck here, so a volume that loses its free list on a hard reset is
